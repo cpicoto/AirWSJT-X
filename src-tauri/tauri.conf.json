@@ -28,7 +28,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/airwsjtx_bridge"],
+    "externalBin": [
+      "binaries/airwsjtx_bridge",
+      "binaries/airwsjtx_bridge.bat"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
