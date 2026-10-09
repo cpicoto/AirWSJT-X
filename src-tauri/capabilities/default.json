@@ -9,7 +9,15 @@
     "shell:allow-stdin-write",
     {
       "identifier": "shell:allow-execute",
-      "allow": [{ "name": "airwsjtx_bridge", "sidecar": true }]
+      "allow": [
+        { "name": "airwsjtx_bridge", "sidecar": true },
+        { "name": "py", "cmd": "py" },
+        { "name": "python", "cmd": "python" },
+        {
+          "name": "python-local",
+          "cmd": "C:\\Users\\cpico\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+        }
+      ]
     }
   ]
 }
