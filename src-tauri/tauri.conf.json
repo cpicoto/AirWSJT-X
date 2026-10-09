@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "AirWSJT-X",
   "version": "0.1.0",
-  "identifier": "com.airwsjtx.app",
+  "identifier": "com.airwsjtx.radio",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -29,8 +29,7 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/airwsjtx_bridge",
-      "binaries/airwsjtx_bridge.bat"
+      "binaries/airwsjtx_bridge"
     ],
     "icon": [
       "icons/32x32.png",

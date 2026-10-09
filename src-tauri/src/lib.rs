@@ -28,9 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                if let Ok(icon) = tauri::image::Image::from_app_icon_resource(32) {
-                    let _ = window.set_icon(icon);
-                } else if let Some(icon) = app.default_window_icon().cloned() {
+                if let Some(icon) = app.default_window_icon().cloned() {
                     let _ = window.set_icon(icon);
                 }
             }
