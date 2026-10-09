@@ -254,12 +254,22 @@ class WSJTXListener:
 
     def _make_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        # SO_REUSEPORT is not available/reliable on all Windows builds.
+        # Best effort only; lack of support must not break WSJT-X listening.
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (AttributeError, OSError):
+            pass
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.settimeout(2.0)
         s.bind(("", self.port))
-        mreq = struct.pack("4sL", socket.inet_aton(self.multicast), socket.INADDR_ANY)
-        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        # Multicast join is optional for localhost-unicast WSJT-X setups.
+        # If join fails, keep socket alive for unicast traffic on the same port.
+        try:
+            mreq = struct.pack("4sL", socket.inet_aton(self.multicast), socket.INADDR_ANY)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        except OSError:
+            pass
         return s
 
     def _run(self) -> None:

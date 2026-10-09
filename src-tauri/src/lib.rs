@@ -27,17 +27,64 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(icon) = tauri::image::Image::from_app_icon_resource(32) {
+                    let _ = window.set_icon(icon);
+                } else if let Some(icon) = app.default_window_icon().cloned() {
+                    let _ = window.set_icon(icon);
+                }
+            }
+
             let sidecar_state = Arc::new(Mutex::new(SidecarState { tx: None }));
             let state_clone = sidecar_state.clone();
             app.manage(sidecar_state);
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let sidecar_cmd = handle
+                let sidecar_result = handle
                     .shell()
                     .sidecar("airwsjtx_bridge")
-                    .expect("failed to create sidecar command");
-                let (mut rx, child) = sidecar_cmd.spawn().expect("failed to spawn sidecar");
+                    .and_then(|cmd| cmd.spawn());
+
+                let (mut rx, child) = match sidecar_result {
+                    Ok(spawned) => spawned,
+                    Err(sidecar_err) => {
+                        eprintln!("failed to spawn packaged sidecar: {}", sidecar_err);
+
+                        let bridge_script = concat!(env!("CARGO_MANIFEST_DIR"), "\\..\\sidecar\\airwsjtx_bridge.py");
+                        let mut launched = None;
+
+                        let attempts: [(&str, &[&str]); 3] = [
+                            (
+                                "C:\\Users\\cpico\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+                                &[bridge_script],
+                            ),
+                            ("py", &["-3", bridge_script]),
+                            ("python", &[bridge_script]),
+                        ];
+
+                        for (program, args) in attempts {
+                            match handle.shell().command(program).args(args).spawn() {
+                                Ok(spawned) => {
+                                    launched = Some(spawned);
+                                    eprintln!("launched python bridge via {}", program);
+                                    break;
+                                }
+                                Err(err) => {
+                                    eprintln!("python bridge attempt failed ({}): {}", program, err);
+                                }
+                            }
+                        }
+
+                        match launched {
+                            Some(spawned) => spawned,
+                            None => {
+                                eprintln!("python sidecar fallback unavailable");
+                                return;
+                            }
+                        }
+                    }
+                };
 
                 {
                     let mut guard = state_clone.lock().await;
