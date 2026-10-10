@@ -244,6 +244,7 @@ export default function App() {
   const state = status?.state ?? "idle";
   const stateColor = STATE_COLOR[state] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
+<<<<<<< HEAD
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
   const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
   const txIndicatorTitle = wsjtxLive.transmitting
@@ -257,6 +258,9 @@ export default function App() {
     state === "ready" ||
     (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking"))
   );
+=======
+  const canStartQso = state === "ready" || (!autoLock && !!lockedPlane && MANUAL_OVERRIDE_STATES.has(state));
+>>>>>>> 37166b8 (Polish manual override naming and state tests)
 
   return (
     <div className="app">
