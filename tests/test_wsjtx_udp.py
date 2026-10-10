@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import struct
+import socket
+import threading
+import time
 import unittest
+from unittest.mock import patch
 
-from airwsjtx.wsjtx_udp import MSG_STATUS, WSJTX_MAGIC, WSJTXListener, WSJTXStatus, parse_status
+from airwsjtx.wsjtx_udp import MSG_HEARTBEAT, MSG_STATUS, WSJTX_MAGIC, WSJTXListener, WSJTXStatus, parse_status
 
 
 def _enc_str(value: str | None) -> bytes:
@@ -131,6 +135,94 @@ class WSJTXListenerFilterTests(unittest.TestCase):
         self.assertEqual(listener.get_rig_name_filter(), "Rig-B")
         self.assertEqual(disconnected, [True])
         self.assertTrue(listener._matches_source("Rig-B"))
+
+
+class _FakeSocket:
+    def __init__(self, packets: list[bytes], fail_first_bind: bool = False) -> None:
+        self._packets = packets[:]
+        self._fail_first_bind = fail_first_bind
+        self._bind_calls = 0
+        self.sent_to: list[tuple[bytes, tuple[str, int]]] = []
+
+    def setsockopt(self, *_args) -> None:
+        return
+
+    def settimeout(self, *_args) -> None:
+        return
+
+    def bind(self, addr: tuple[str, int]) -> None:
+        self._bind_calls += 1
+        if self._fail_first_bind and self._bind_calls == 1 and addr[0] == "":
+            raise OSError("address already in use")
+
+    def sendto(self, data: bytes, addr: tuple[str, int]) -> int:
+        self.sent_to.append((data, addr))
+        return len(data)
+
+    def recvfrom(self, _size: int) -> tuple[bytes, tuple[str, int]]:
+        if self._packets:
+            return self._packets.pop(0), ("127.0.0.1", 2237)
+        time.sleep(0.01)
+        raise socket.timeout()
+
+    def close(self) -> None:
+        return
+
+
+class WSJTXListenerLoopbackTests(unittest.TestCase):
+    def test_listener_survives_malformed_packet_and_processes_next_status(self) -> None:
+        main_socket = _FakeSocket([b"\x00\x01", _build_status_packet("Q65", 15)])
+        query_socket = _FakeSocket([])
+        connected_event = threading.Event()
+        connected_app_ids: list[str] = []
+
+        listener = WSJTXListener(
+            on_connected=lambda app_id: (connected_app_ids.append(app_id), connected_event.set()),
+            on_status=lambda _st: None,
+            socket_timeout_s=0.05,
+        )
+
+        with patch("airwsjtx.wsjtx_udp.socket.socket", side_effect=[main_socket, query_socket]):
+            listener.start()
+            self.assertTrue(connected_event.wait(1.5))
+            listener.stop()
+            time.sleep(0.05)
+
+        self.assertIn("WSJT-X", connected_app_ids)
+
+    def test_listener_falls_back_to_active_query_mode_when_port_busy(self) -> None:
+        # First packet is our own heartbeat echo and must be ignored; next is real WSJT-X status.
+        heartbeat_echo = b"".join(
+            [
+                struct.pack(">I", WSJTX_MAGIC),
+                struct.pack(">I", 2),
+                struct.pack(">I", MSG_HEARTBEAT),
+                _enc_str("AirWSJTX"),
+                struct.pack(">I", 2),
+                _enc_str("2.0"),
+                _enc_str(""),
+            ]
+        )
+        main_socket = _FakeSocket([heartbeat_echo, _build_status_packet("Q65", 15)], fail_first_bind=True)
+        connected_event = threading.Event()
+        connected_app_ids: list[str] = []
+
+        listener = WSJTXListener(
+            on_connected=lambda app_id: (connected_app_ids.append(app_id), connected_event.set()),
+            on_status=lambda _st: None,
+            socket_timeout_s=0.05,
+        )
+
+        with patch("airwsjtx.wsjtx_udp.socket.socket", return_value=main_socket):
+            listener.start()
+            self.assertTrue(connected_event.wait(1.5))
+            listener.stop()
+            time.sleep(0.05)
+
+        self.assertTrue(listener._active_query_mode)
+        self.assertIn("WSJT-X", connected_app_ids)
+        self.assertTrue(main_socket.sent_to)
+        self.assertTrue(all(dest == ("127.0.0.1", 2237) for _, dest in main_socket.sent_to))
 
 
 if __name__ == "__main__":

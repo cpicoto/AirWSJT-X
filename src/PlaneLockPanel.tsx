@@ -69,22 +69,16 @@ function AzElBadge({ label, az, el, rotAz, rotEl }:
     <div style={{
       padding: "6px 10px", borderRadius: 6, border: "1px solid #30363d",
       background: onTarget ? "rgba(63,185,80,0.08)" : "#0d1117",
-      minWidth: 110,
+      minWidth: 118,
     }}>
       <div style={{ fontSize: 10, color: "#8b949e", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontFamily: "monospace", fontSize: 13 }}>
+      <div style={{ fontFamily: "monospace", fontSize: 13, whiteSpace: "nowrap" }}>
         <span style={{ color: "#c9d1d9" }}>AZ </span>
         <span style={{ color: "#58a6ff", fontWeight: 700 }}>{az.toFixed(1)}°</span>
-        {rotAz != null && <span style={{ color: azErr! < 3 ? "#3fb950" : "#d29922", fontSize: 10, marginLeft: 4 }}>
-          Δ{azErr!.toFixed(1)}°
-        </span>}
       </div>
-      <div style={{ fontFamily: "monospace", fontSize: 13, marginTop: 2 }}>
+      <div style={{ fontFamily: "monospace", fontSize: 13, marginTop: 2, whiteSpace: "nowrap" }}>
         <span style={{ color: "#c9d1d9" }}>EL </span>
         <span style={{ color: "#58a6ff", fontWeight: 700 }}>{el.toFixed(1)}°</span>
-        {rotEl != null && <span style={{ color: elErr! < 3 ? "#3fb950" : "#d29922", fontSize: 10, marginLeft: 4 }}>
-          Δ{elErr!.toFixed(1)}°
-        </span>}
       </div>
       {onTarget && <div style={{ fontSize: 10, color: "#3fb950", marginTop: 3 }}>● On target</div>}
     </div>

@@ -159,18 +159,6 @@ function CompassRose({
       {/* Center hub */}
       <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
       <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
-
-      {/* Current bearing text */}
-      <text x={cx} y={cy + innerR * 0.62} textAnchor="middle" fontSize={22} fontWeight={700}
-        fill="#c9d1d9" fontFamily="monospace">
-        {current.toFixed(1)}°
-      </text>
-      {target !== null && (
-        <text x={cx} y={cy + innerR * 0.62 + 22} textAnchor="middle" fontSize={12}
-          fill="#d29922" fontFamily="monospace">
-          ▶ {target.toFixed(1)}°
-        </text>
-      )}
     </svg>
   );
 }
@@ -190,13 +178,13 @@ function ElevationArc({
   height?: number;
   onClick?: (el: number) => void;
 }) {
-  const cx = width / 2;
+  const cx = 18;
   const cy = height - 16;
-  const R = height - 24;
+  const R = Math.max(22, Math.min(width - 30, height - 24));
 
-  // 0° = left end, 90° = top centre
+  // Quarter dial: 0° = horizon (right), 90° = zenith (up)
   function elToXY(el: number, r: number) {
-    const rad = Math.PI - (el / 90) * Math.PI;
+    const rad = (el * Math.PI) / 180;
     return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
   }
 
@@ -234,9 +222,9 @@ function ElevationArc({
     if (!onClick) return;
     const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
     const dx = e.clientX - rect.left - cx;
-    const dy = e.clientY - rect.top - cy;
-    const angle = Math.atan2(-dy, -dx) * 180 / Math.PI; // 180° = left
-    const el = Math.max(0, Math.min(90, (180 - (angle + 180) % 360) * 90 / 180));
+    const dy = cy - (e.clientY - rect.top);
+    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+    const el = Math.max(0, Math.min(90, angle));
     onClick(Math.round(el));
   }
 
@@ -244,9 +232,9 @@ function ElevationArc({
     <svg width={width} height={height} style={{ cursor: onClick ? "crosshair" : "default" }}
       onClick={handleClick}>
       {/* Background arc */}
-      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 1 ${arcEnd.x} ${arcEnd.y}`}
+      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${arcEnd.x} ${arcEnd.y}`}
         fill="none" stroke="#1c2128" strokeWidth={20} strokeLinecap="round" />
-      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 1 ${arcEnd.x} ${arcEnd.y}`}
+      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${arcEnd.x} ${arcEnd.y}`}
         fill="none" stroke="#30363d" strokeWidth={1.5} />
 
       {/* Fill arc up to current elevation */}
@@ -254,7 +242,7 @@ function ElevationArc({
         const fillEnd = elToXY(Math.max(0.5, current), R);
         return (
           <path
-            d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 ${current > 45 ? 1 : 0} 1 ${fillEnd.x} ${fillEnd.y}`}
+            d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${fillEnd.x} ${fillEnd.y}`}
             fill="none" stroke="rgba(88,166,255,0.25)" strokeWidth={18} strokeLinecap="round"
           />
         );
@@ -284,16 +272,9 @@ function ElevationArc({
       <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
 
       {/* Labels */}
-      <text x={arcStart.x - 4} y={cy + 12} textAnchor="end" fontSize={10} fill="#8b949e">0°</text>
-      <text x={arcEnd.x + 4} y={cy + 12} textAnchor="start" fontSize={10} fill="#8b949e">90°</text>
+      <text x={arcStart.x} y={cy + 12} textAnchor="middle" fontSize={10} fill="#8b949e">0°</text>
+      <text x={arcEnd.x} y={arcEnd.y - 8} textAnchor="middle" fontSize={10} fill="#8b949e">90°</text>
 
-      {/* Current value */}
-      <text x={cx} y={cy - R * 0.4} textAnchor="middle" fontSize={20} fontWeight={700}
-        fill="#c9d1d9" fontFamily="monospace">{current.toFixed(1)}°</text>
-      {target !== null && (
-        <text x={cx} y={cy - R * 0.4 + 20} textAnchor="middle" fontSize={11}
-          fill="#d29922" fontFamily="monospace">▶ {target.toFixed(1)}°</text>
-      )}
     </svg>
   );
 }
@@ -345,11 +326,13 @@ export default function RotatorPanel({
   const azErr = targetAz !== null ? ((currentAz - targetAz + 540) % 360 - 180) : null;
   const elErr = targetEl !== null ? currentEl - targetEl : null;
 
-  const compassSize = 130;
-  const elevWidth = 130;
-  const elevHeight = 73;
+  const compassSize = 170;
+  const elevWidth = 170;
+  const elevHeight = 108;
 
   const isManualMode = mode === "manual";
+  const displayAz = targetAz ?? currentAz;
+  const displayEl = targetEl ?? currentEl;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -396,31 +379,43 @@ export default function RotatorPanel({
         </div>
       )}
 
+      <div style={{
+        display: "grid",
+        gap: 8,
+        padding: "8px 10px",
+        background: isManualMode ? "rgba(88,166,255,0.08)" : "rgba(255,255,255,0.02)",
+        borderRadius: 6,
+        border: isManualMode ? "1px solid #58a6ff44" : "1px solid #30363d",
+      }}>
+        <div>
+          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Rotator"}</div>
+        </div>
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          alignItems: "baseline",
+          rowGap: 2,
+          columnGap: 8,
+          fontFamily: "monospace",
+        }}>
+          <div style={{ fontSize: 11, color: "#8b949e" }}>AZ</div>
+          <div style={{ fontSize: 28, lineHeight: 1.05, fontWeight: 700, color: "#58a6ff" }}>{displayAz.toFixed(1)}°</div>
+          <div style={{ fontSize: 11, color: "#8b949e" }}>EL</div>
+          <div style={{ fontSize: 28, lineHeight: 1.05, fontWeight: 700, color: "#3fb950" }}>{displayEl.toFixed(1)}°</div>
+        </div>
+      </div>
+
       {isManualMode && (
         <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(88,166,255,0.08)", borderRadius: 6, border: "1px solid #58a6ff44" }}>
-            <div>
-              <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Manual"}</div>
-            </div>
-            <div style={{ textAlign: "right", fontFamily: "monospace" }}>
-              <div style={{ fontSize: 10, color: "#8b949e" }}>AZ</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#58a6ff" }}>{targetAz != null ? targetAz.toFixed(1) : currentAz.toFixed(1)}°</div>
-            </div>
-            <div style={{ textAlign: "right", fontFamily: "monospace" }}>
-              <div style={{ fontSize: 10, color: "#8b949e" }}>EL</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#3fb950" }}>{targetEl != null ? targetEl.toFixed(1) : currentEl.toFixed(1)}°</div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 12, justifyContent: "center", alignItems: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
-              <CompassRose current={currentAz} target={targetAz} size={150} onClick={isManualMode ? handleCompassClick : connected ? handleCompassClick : undefined} />
+              <CompassRose current={currentAz} target={targetAz} size={compassSize} onClick={isManualMode ? handleCompassClick : connected ? handleCompassClick : undefined} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Elevation</div>
-              <ElevationArc current={currentEl} target={targetEl} width={150} height={95} onClick={isManualMode ? handleElevationClick : connected ? handleElevationClick : undefined} />
+              <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight} onClick={isManualMode ? handleElevationClick : connected ? handleElevationClick : undefined} />
             </div>
           </div>
         </div>
@@ -429,7 +424,7 @@ export default function RotatorPanel({
       {!isManualMode && (
         <>
           {/* Dials row */}
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
 
             {/* Azimuth compass */}
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
@@ -438,11 +433,6 @@ export default function RotatorPanel({
               </div>
               <CompassRose current={currentAz} target={targetAz} size={compassSize}
                 onClick={connected ? handleCompassClick : undefined} />
-              {azErr !== null && (
-                <div style={{ fontSize: 12, color: Math.abs(azErr) < 2 ? "#3fb950" : "#d29922", fontFamily: "monospace" }}>
-                  Δ {azErr > 0 ? "+" : ""}{azErr.toFixed(1)}°
-                </div>
-              )}
             </div>
 
             {/* Elevation arc */}
@@ -452,13 +442,31 @@ export default function RotatorPanel({
               </div>
               <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight}
                 onClick={connected ? handleElevationClick : undefined} />
-              {elErr !== null && (
-                <div style={{ fontSize: 12, color: Math.abs(elErr) < 2 ? "#3fb950" : "#d29922", fontFamily: "monospace" }}>
-                  Δ {elErr > 0 ? "+" : ""}{elErr.toFixed(1)}°
-                </div>
-              )}
             </div>
           </div>
+
+          {(azErr !== null || elErr !== null) && (
+            <div style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              justifyContent: "center",
+              fontSize: 12,
+              fontFamily: "monospace",
+              color: "#8b949e",
+            }}>
+              {azErr !== null && (
+                <span style={{ color: Math.abs(azErr) < 2 ? "#3fb950" : "#d29922" }}>
+                  ΔAZ {azErr > 0 ? "+" : ""}{azErr.toFixed(1)}°
+                </span>
+              )}
+              {elErr !== null && (
+                <span style={{ color: Math.abs(elErr) < 2 ? "#3fb950" : "#d29922" }}>
+                  ΔEL {elErr > 0 ? "+" : ""}{elErr.toFixed(1)}°
+                </span>
+              )}
+            </div>
+          )}
         </>
       )}
 
