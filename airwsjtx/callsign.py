@@ -13,6 +13,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ DB_FRESHNESS_DAYS = 30
 _LOCAL_DB_CACHE: dict[str, StationInfo] = {}
 _LOCAL_DB_META: dict[str, Any] = {}
 _LOCAL_DB_LOADED = False
+_LOCAL_DB_LOCK = threading.Lock()
 
 
 def _data_dir() -> Path:
@@ -106,30 +108,31 @@ def _parse_db_entries(raw: object) -> dict[str, StationInfo]:
 
 def _load_local_db() -> None:
     global _LOCAL_DB_LOADED, _LOCAL_DB_CACHE, _LOCAL_DB_META
-    if _LOCAL_DB_LOADED:
-        return
-    _LOCAL_DB_LOADED = True
-    _LOCAL_DB_CACHE = {}
-    _LOCAL_DB_META = {}
-    db_path = _db_file()
-    meta_path = _meta_file()
-    try:
-        if db_path.exists():
-            payload = json.loads(db_path.read_text(encoding="utf-8"))
-            _LOCAL_DB_CACHE = _parse_db_entries(payload.get("entries"))
-            if isinstance(payload, dict):
-                version = payload.get("version")
-                if version:
-                    _LOCAL_DB_META["version"] = str(version)
-    except Exception:
+    with _LOCAL_DB_LOCK:
+        if _LOCAL_DB_LOADED:
+            return
+        _LOCAL_DB_LOADED = True
         _LOCAL_DB_CACHE = {}
-    try:
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if isinstance(meta, dict):
-                _LOCAL_DB_META.update(meta)
-    except Exception:
-        pass
+        _LOCAL_DB_META = {}
+        db_path = _db_file()
+        meta_path = _meta_file()
+        try:
+            if db_path.exists():
+                payload = json.loads(db_path.read_text(encoding="utf-8"))
+                _LOCAL_DB_CACHE = _parse_db_entries(payload.get("entries"))
+                if isinstance(payload, dict):
+                    version = payload.get("version")
+                    if version:
+                        _LOCAL_DB_META["version"] = str(version)
+        except Exception:
+            _LOCAL_DB_CACHE = {}
+        try:
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(meta, dict):
+                    _LOCAL_DB_META.update(meta)
+        except Exception:
+            pass
 
 
 def _now_iso() -> str:
@@ -191,9 +194,10 @@ def download_db(url: str = DEFAULT_DB_URL, timeout_s: int = 10) -> dict[str, Any
     _write_json(_db_file(), payload)
     _write_json(_meta_file(), meta)
     global _LOCAL_DB_LOADED, _LOCAL_DB_CACHE, _LOCAL_DB_META
-    _LOCAL_DB_LOADED = True
-    _LOCAL_DB_CACHE = parsed_entries
-    _LOCAL_DB_META = dict(meta)
+    with _LOCAL_DB_LOCK:
+        _LOCAL_DB_LOADED = True
+        _LOCAL_DB_CACHE = parsed_entries
+        _LOCAL_DB_META = dict(meta)
     return _current_db_status()
 
 

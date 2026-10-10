@@ -358,9 +358,6 @@ export default function App() {
     rpc("callsign_db_status")
       .then((s) => setCallsignDbStatus(s as CallsignDbStatus))
       .catch(() => {});
-    rpc("callsign_db_check_update")
-      .then((s) => setCallsignDbStatus(s as CallsignDbStatus))
-      .catch(() => {});
   }, []);
 
   // Scroll log to bottom
