@@ -408,7 +408,7 @@ export default function App() {
     const last = rotatorSpeechLastAnnouncedRef.current;
     const speechText = `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`;
     if (!last) {
-      rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
+      rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: 0 };
       return;
     }
     const azDelta = Math.abs(((rotatorAz - last.az + 540) % 360) - 180);
