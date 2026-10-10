@@ -327,9 +327,15 @@ export default function RotatorPanel({
 
   function handleCompassClick(az: number) {
     setManualAz(az.toFixed(1));
+    if (mode === "manual") {
+      onSetPosition(az, parseFloat(manualEl) || 0);
+    }
   }
   function handleElevationClick(el: number) {
     setManualEl(el.toFixed(1));
+    if (mode === "manual") {
+      onSetPosition(parseFloat(manualAz) || 0, el);
+    }
   }
   function handleGo() {
     onSetPosition(parseFloat(manualAz) || 0, parseFloat(manualEl) || 0);
@@ -395,7 +401,7 @@ export default function RotatorPanel({
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(88,166,255,0.08)", borderRadius: 6, border: "1px solid #58a6ff44" }}>
             <div>
               <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel ?? targetLabel ?? "Manual"}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Manual"}</div>
             </div>
             <div style={{ textAlign: "right", fontFamily: "monospace" }}>
               <div style={{ fontSize: 10, color: "#8b949e" }}>AZ</div>
@@ -410,11 +416,11 @@ export default function RotatorPanel({
           <div style={{ display: "flex", gap: 12, justifyContent: "center", alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
-              <CompassRose current={currentAz} target={targetAz} size={150} onClick={connected ? handleCompassClick : undefined} />
+              <CompassRose current={currentAz} target={targetAz} size={150} onClick={isManualMode ? handleCompassClick : connected ? handleCompassClick : undefined} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Elevation</div>
-              <ElevationArc current={currentEl} target={targetEl} width={150} height={95} onClick={connected ? handleElevationClick : undefined} />
+              <ElevationArc current={currentEl} target={targetEl} width={150} height={95} onClick={isManualMode ? handleElevationClick : connected ? handleElevationClick : undefined} />
             </div>
           </div>
         </div>
@@ -531,7 +537,12 @@ export default function RotatorPanel({
               : "Click the compass or elevation arc to set target position. Orange dashed = target · Blue solid = current."}
         </div>
       )}
-      {!connected && (
+      {!connected && isManualMode && (
+        <div style={{ fontSize: 11, color: "#8b949e" }}>
+          Manual mode does not require rotctld; use the compass and arc to keep the antenna aligned.
+        </div>
+      )}
+      {!connected && !isManualMode && (
         <div style={{ fontSize: 11, color: "#8b949e" }}>
           Start rotctld: <code style={{ background: "#161b22", padding: "1px 5px", borderRadius: 3 }}>
             rotctld -m 1 -r /dev/ttyUSB0 -s 9600 -T 127.0.0.1 -t 4533

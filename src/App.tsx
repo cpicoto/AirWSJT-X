@@ -973,8 +973,7 @@ export default function App() {
               onSpeechThresholdDegChange={(value) => setRotatorSpeechThresholdDeg(Math.max(0.1, value))}
               onSpeechIntervalSecChange={(value) => setRotatorSpeechIntervalSec(Math.max(0, value))}
               mode={uiMode}
-              aircraftLabel={lockedPlane?.callsign ?? null}
-              targetLabel={lockedPlane ? `${lockedPlane.callsign} target` : "Manual target"}
+              aircraftLabel={lockedPlane && lockedPlane.callsign ? `${lockedPlane.callsign} target` : "Manual target"}
               onSetPosition={(az, el) => {
                 setRotatorTargetAz(az); setRotatorTargetEl(el);
                 rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
