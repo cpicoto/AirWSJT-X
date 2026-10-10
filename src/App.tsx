@@ -249,12 +249,14 @@ export default function App() {
   const txIndicatorTitle = wsjtxLive.transmitting
     ? `Red TX means transmitting (PTT ON).${txOffset}`
     : `TX○ means idle (not transmitting).${txOffset}`;
-  const canStartQso =
-    (state === "plane_locked" || state === "tracking" || state === "ready") &&
-    wsjtxLive.connected &&
+  const wsjtxReady = wsjtxLive.connected &&
     wsjtxLive.mode === "Q65" &&
     wsjtxLive.tr_period === 15 &&
-    (wsjtxLive.freq_mhz === null || wsjtxLive.freq_mhz >= 1240);
+    (wsjtxLive.freq_mhz == null || wsjtxLive.freq_mhz >= 1240);
+  const canStartQso = wsjtxReady && (
+    state === "ready" ||
+    (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking"))
+  );
 
   return (
     <div className="app">
