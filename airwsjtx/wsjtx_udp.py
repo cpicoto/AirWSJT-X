@@ -83,7 +83,7 @@ class WSJTXStatus:
     fast_mode: bool
     special_op_mode: int
     freq_tolerance: int
-    tr_period: int
+    tr_period: float | None
     config_name: str | None
 
     @property
@@ -124,6 +124,19 @@ def _parse_header(d: bytes) -> tuple[int, int, int, str | None, int]:
     return magic, schema, msg_type, app_id, o
 
 
+def _normalize_tr_period(mode: str | None, tr_period: int) -> float | None:
+    if tr_period > 0:
+        return float(tr_period)
+    if not mode:
+        return None
+    return {
+        "FT8": 15.0,
+        "FT4": 7.5,
+        "FT2": 2.5,
+        "JT65": 60.0,
+    }.get(mode.upper())
+
+
 def parse_status(d: bytes) -> WSJTXStatus | None:
     try:
         magic, schema, msg_type, app_id, o = _parse_header(d)
@@ -147,7 +160,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
         fast, o = _bool(d, o)
         spec_op, o = _u8(d, o)
         freq_tol, o = _u32(d, o)
-        tr_period, o = _u32(d, o)
+        tr_period, o = _i32(d, o)
         config, o = _str(d, o)
         return WSJTXStatus(
             app_id=app_id or "",
@@ -169,7 +182,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
             fast_mode=fast,
             special_op_mode=spec_op,
             freq_tolerance=freq_tol,
-            tr_period=tr_period,
+            tr_period=_normalize_tr_period(mode, tr_period),
             config_name=config,
         )
     except Exception:
