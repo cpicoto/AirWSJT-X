@@ -223,7 +223,7 @@ export default function App() {
   const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
     const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
-    return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
+    return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "hidden";
   });
   const [portableScale, setPortableScale] = useState<number>(() => {
     const saved = Number(localStorage.getItem(PORTABLE_SCALE_KEY) ?? "100");

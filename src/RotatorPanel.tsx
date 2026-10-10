@@ -398,19 +398,9 @@ export default function RotatorPanel({
 
       {isManualMode && (
         <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(88,166,255,0.08)", borderRadius: 6, border: "1px solid #58a6ff44" }}>
-            <div>
-              <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Manual"}</div>
-            </div>
-            <div style={{ textAlign: "right", fontFamily: "monospace" }}>
-              <div style={{ fontSize: 10, color: "#8b949e" }}>AZ</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#58a6ff" }}>{targetAz != null ? targetAz.toFixed(1) : currentAz.toFixed(1)}°</div>
-            </div>
-            <div style={{ textAlign: "right", fontFamily: "monospace" }}>
-              <div style={{ fontSize: 10, color: "#8b949e" }}>EL</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#3fb950" }}>{targetEl != null ? targetEl.toFixed(1) : currentEl.toFixed(1)}°</div>
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px", background: "rgba(88,166,255,0.08)", borderRadius: 6, border: "1px solid #58a6ff44" }}>
+            <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Manual"}</div>
           </div>
 
           <div style={{ display: "flex", gap: 12, justifyContent: "center", alignItems: "center" }}>
