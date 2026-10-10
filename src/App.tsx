@@ -249,6 +249,12 @@ export default function App() {
   const txIndicatorTitle = wsjtxLive.transmitting
     ? `Red TX means transmitting (PTT ON).${txOffset}`
     : `TX○ means idle (not transmitting).${txOffset}`;
+  const canStartQso =
+    (state === "plane_locked" || state === "tracking" || state === "ready") &&
+    wsjtxLive.connected &&
+    wsjtxLive.mode === "Q65" &&
+    wsjtxLive.tr_period === 15 &&
+    (wsjtxLive.freq_mhz == null || wsjtxLive.freq_mhz >= 1240);
 
   return (
     <div className="app">
@@ -515,7 +521,7 @@ export default function App() {
         }} disabled={state !== "idle" && state !== "completed" && state !== "aborted"}>
           Begin Session
         </button>
-        <button className="btn-success" onClick={startQso} disabled={state !== "ready"}>
+        <button className="btn-success" onClick={startQso} disabled={!canStartQso}>
           ▶ Start QSO
         </button>
         <button className="btn-danger" onClick={() => finishQso(true)}

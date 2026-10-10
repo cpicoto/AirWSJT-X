@@ -52,8 +52,8 @@ class ContactSession:
             self.state = SessionState.TRACKING
 
     def start_qso(self) -> None:
-        if self.state != SessionState.READY:
-            raise ValueError("Cannot start QSO until ready.")
+        if self.state not in (SessionState.PLANE_LOCKED, SessionState.TRACKING, SessionState.READY):
+            raise ValueError("Cannot start QSO until an aircraft is locked and ready to transmit.")
         self.state = SessionState.ACTIVE_QSO
 
     def complete(self) -> None:

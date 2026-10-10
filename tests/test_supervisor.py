@@ -110,7 +110,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.session.state, SessionState.COMPLETED)
         self.assertFalse(self.supervisor.wsjtx.status.ptt_enabled)
 
-    def test_cannot_start_qso_without_ready_gate(self) -> None:
+    def test_start_qso_is_allowed_after_plane_lock(self) -> None:
         self.supervisor.begin_session(
             station_a=self.station_a,
             station_b=self.station_b,
@@ -118,8 +118,9 @@ class SupervisorTests(unittest.TestCase):
             frequency_hz=1296150000,
             tracks=[self.valid_track],
         )
-        with self.assertRaises(ValueError):
-            self.supervisor.operator_start_qso()
+        self.supervisor.operator_start_qso()
+        self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
+        self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
 
     def test_tracking_target_advances_with_new_samples(self) -> None:
         moving_supervisor = AirWSJTXSupervisor(rotator=RotatorController(stable_samples_required=1))
