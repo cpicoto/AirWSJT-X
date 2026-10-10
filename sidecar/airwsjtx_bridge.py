@@ -885,6 +885,7 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
 
 def _get_scatter_aircraft() -> list[dict]:
     """Compute scatter geometry for all cached aircraft and return sorted list."""
+    global _aircraft_last_update_monotonic, _aircraft_last_update_epoch_s
     now_monotonic = time.monotonic()
     with _aircraft_lock:
         age_s = (
@@ -894,6 +895,8 @@ def _get_scatter_aircraft() -> list[dict]:
         )
         if _aircraft_cache_freshness(age_s) == "expired":
             _aircraft_cache.clear()
+            _aircraft_last_update_monotonic = None
+            _aircraft_last_update_epoch_s = None
             return []
         snapshot = list(_aircraft_cache)
     if not _station_a_locator:
@@ -990,6 +993,8 @@ def _emit_aircraft_update() -> None:
     age_s = _aircraft_cache_age_s()
     freshness = _aircraft_cache_freshness(age_s)
     aircraft, total = _get_scatter_aircraft_with_total()
+    with _aircraft_lock:
+        last_update_epoch_s = _aircraft_last_update_epoch_s
     with _source_status_lock:
         active_source = _active_source
     _emit({
@@ -1000,7 +1005,7 @@ def _emit_aircraft_update() -> None:
             "station_a": _station_a_locator,
             "station_b": _station_b_locator,
             "active_source": active_source,
-            "last_update_epoch_s": _aircraft_last_update_epoch_s,
+            "last_update_epoch_s": last_update_epoch_s,
             "cache_age_s": round(age_s, 1) if age_s is not None else None,
             "data_freshness": freshness,
         },

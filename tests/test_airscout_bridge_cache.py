@@ -20,10 +20,12 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             airwsjtx_bridge._aircraft_last_update_epoch_s = self._orig_last_epoch
 
     def test_freshness_classification_boundaries(self) -> None:
+        stale_after = airwsjtx_bridge._aircraft_cache_stale_after_s
+        expire_after = airwsjtx_bridge._aircraft_cache_expire_after_s
         self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(None), "empty")
-        self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(10.0), "fresh")
-        self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(60.0), "stale")
-        self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(180.0), "expired")
+        self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(max(0.0, stale_after - 1.0)), "fresh")
+        self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(stale_after + 1.0), "stale")
+        self.assertEqual(airwsjtx_bridge._aircraft_cache_freshness(expire_after + 1.0), "expired")
 
     def test_replace_cache_tracks_last_update(self) -> None:
         now = time.monotonic()
