@@ -92,10 +92,10 @@ class CallsignDatabaseTests(unittest.TestCase):
 
         with patch.object(
             self.callsign,
-            "_download_json",
+            "_download_manifest",
             return_value={
                 "version": "2026-11-01",
-                "entries": {"K1ABC": {"grid": "FN20"}},
+                "entries": 1,
             },
         ):
             status = self.callsign.check_db_update()

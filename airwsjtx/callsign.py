@@ -36,6 +36,7 @@ class StationInfo:
 # ─── Offline callsign/grid database ────────────────────────────────────────────
 
 DEFAULT_DB_URL = "https://ad7np.us/airwsjtx/callsign-grid-db.json"
+DEFAULT_DB_MANIFEST_URL = "https://ad7np.us/airwsjtx/callsign-grid-db-version.json"
 DEFAULT_CONTRIBUTION_URL = "https://ad7np.us/airwsjtx/callsign-grid-submit"
 DB_FRESHNESS_DAYS = 30
 
@@ -150,14 +151,17 @@ def _parse_iso(value: object) -> datetime | None:
 
 def _current_db_status() -> dict[str, Any]:
     _load_local_db()
-    checked_at = _parse_iso(_LOCAL_DB_META.get("downloaded_at"))
+    with _LOCAL_DB_LOCK:
+        meta = dict(_LOCAL_DB_META)
+        entry_count = len(_LOCAL_DB_CACHE)
+    checked_at = _parse_iso(meta.get("downloaded_at"))
     stale_after = datetime.now(timezone.utc) - timedelta(days=DB_FRESHNESS_DAYS)
     is_stale = checked_at is None or checked_at < stale_after
     return {
-        "db_url": str(_LOCAL_DB_META.get("db_url") or DEFAULT_DB_URL),
-        "version": _LOCAL_DB_META.get("version"),
-        "downloaded_at": _LOCAL_DB_META.get("downloaded_at"),
-        "entries": len(_LOCAL_DB_CACHE),
+        "db_url": str(meta.get("db_url") or DEFAULT_DB_URL),
+        "version": meta.get("version"),
+        "downloaded_at": meta.get("downloaded_at"),
+        "entries": entry_count,
         "fresh": not is_stale,
         "freshness_days": DB_FRESHNESS_DAYS,
     }
@@ -176,6 +180,15 @@ def _download_json(url: str, timeout_s: int = 10) -> dict[str, Any]:
     entries = payload.get("entries")
     if not isinstance(entries, dict):
         raise ValueError("Database payload missing entries")
+    return payload
+
+
+def _download_manifest(url: str, timeout_s: int = 8) -> dict[str, Any]:
+    req = urllib.request.Request(url, headers={"User-Agent": "AirWSJT-X/0.1"})
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        payload = json.loads(resp.read())
+    if not isinstance(payload, dict):
+        raise ValueError("Manifest payload must be a JSON object")
     return payload
 
 
@@ -201,7 +214,11 @@ def download_db(url: str = DEFAULT_DB_URL, timeout_s: int = 10) -> dict[str, Any
     return _current_db_status()
 
 
-def check_db_update(url: str = DEFAULT_DB_URL, timeout_s: int = 8) -> dict[str, Any]:
+def check_db_update(
+    url: str = DEFAULT_DB_URL,
+    timeout_s: int = 8,
+    manifest_url: str = DEFAULT_DB_MANIFEST_URL,
+) -> dict[str, Any]:
     status = _current_db_status()
     result = dict(status)
     result["online"] = False
@@ -209,17 +226,31 @@ def check_db_update(url: str = DEFAULT_DB_URL, timeout_s: int = 8) -> dict[str, 
     result["update_available"] = False
     result["checked_at"] = _now_iso()
     try:
-        payload = _download_json(url, timeout_s=timeout_s)
-        remote_version = payload.get("version")
+        manifest = _download_manifest(manifest_url, timeout_s=timeout_s)
+        remote_version = manifest.get("version")
+        remote_entries = manifest.get("entries")
         if remote_version is None:
             remote_version = result["checked_at"]
+        if remote_entries is None:
+            remote_entries = 0
         remote_version_str = str(remote_version)
         result["online"] = True
         result["remote_version"] = remote_version_str
-        result["remote_entries"] = len(_parse_db_entries(payload.get("entries")))
+        result["remote_entries"] = int(remote_entries)
         result["update_available"] = remote_version_str != (status.get("version") or "")
-    except Exception as exc:
-        result["error"] = str(exc)
+    except Exception as manifest_exc:
+        try:
+            payload = _download_json(url, timeout_s=timeout_s)
+            remote_version = payload.get("version")
+            if remote_version is None:
+                remote_version = result["checked_at"]
+            remote_version_str = str(remote_version)
+            result["online"] = True
+            result["remote_version"] = remote_version_str
+            result["remote_entries"] = len(_parse_db_entries(payload.get("entries")))
+            result["update_available"] = remote_version_str != (status.get("version") or "")
+        except Exception:
+            result["error"] = str(manifest_exc)
     return result
 
 

@@ -18,6 +18,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from airwsjtx.airscout import Aircraft, Dump1090Feed, OpenSkyFeed
 from airwsjtx.callsign import (
+    DEFAULT_DB_MANIFEST_URL,
     check_db_update as callsign_check_db_update,
     download_db as callsign_download_db,
     get_db_status as callsign_get_db_status,
@@ -440,11 +441,25 @@ def handle(msg: dict) -> None:
 
         elif method == "callsign_db_check_update":
             db_url = str(params.get("url") or "")
+            manifest_url = str(params.get("manifest_url") or "")
             timeout_s = int(params.get("timeout_s", 8))
             if db_url:
-                _ok(id_, callsign_check_db_update(db_url, timeout_s=timeout_s))
+                _ok(
+                    id_,
+                    callsign_check_db_update(
+                        db_url,
+                        timeout_s=timeout_s,
+                        manifest_url=manifest_url or DEFAULT_DB_MANIFEST_URL,
+                    ),
+                )
             else:
-                _ok(id_, callsign_check_db_update(timeout_s=timeout_s))
+                _ok(
+                    id_,
+                    callsign_check_db_update(
+                        timeout_s=timeout_s,
+                        manifest_url=manifest_url or DEFAULT_DB_MANIFEST_URL,
+                    ),
+                )
 
         elif method == "callsign_db_download":
             db_url = str(params.get("url") or "")
