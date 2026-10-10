@@ -30,3 +30,9 @@ The AirScatter profile provides operating conventions for discoverability while 
 ```bash
 python -m unittest discover -s tests
 ```
+
+## WSJT-X status strip TX indicator
+
+- `TX○` means WSJT-X is idle (not transmitting).
+- Red `TX●` means WSJT-X is currently transmitting (PTT ON).
+- `TX <value>Hz` shows the current TX frequency offset (`tx_df`) reported by WSJT-X.

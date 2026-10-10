@@ -244,6 +244,10 @@ export default function App() {
   const state = status?.state ?? "idle";
   const stateColor = STATE_COLOR[state] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
+  const txOffset = wsjtxLive.tx_df != null ? `${wsjtxLive.tx_df}Hz` : "—";
+  const txIndicatorTitle = wsjtxLive.transmitting
+    ? `TX frequency offset: ${txOffset}. Red TX means transmitting (PTT ON).`
+    : `TX frequency offset: ${txOffset}. TX○ means idle (not transmitting).`;
 
   return (
     <div className="app">
@@ -278,11 +282,19 @@ export default function App() {
               <span style={{ color: wsjtxLive.decoding ? "var(--green)" : "var(--text-muted)", fontSize: 10 }}>
                 {wsjtxLive.decoding ? "DEC●" : "DEC○"}
               </span>
-              <span style={{ color: wsjtxLive.transmitting ? "var(--red)" : "var(--text-muted)", fontSize: 10 }}>
+              <span
+                style={{ color: wsjtxLive.transmitting ? "var(--red)" : "var(--text-muted)", fontSize: 10 }}
+                title={txIndicatorTitle}
+              >
                 {wsjtxLive.transmitting ? "TX●" : "TX○"}
               </span>
               {wsjtxLive.rx_df != null && (
                 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>RX {wsjtxLive.rx_df}Hz</span>
+              )}
+              {wsjtxLive.tx_df != null && (
+                <span style={{ color: "var(--text-muted)", fontSize: 11 }} title="TX frequency offset in Hz">
+                  TX {wsjtxLive.tx_df}Hz
+                </span>
               )}
             </>
           ) : (
