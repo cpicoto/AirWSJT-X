@@ -8,6 +8,7 @@ Thanks for your interest in contributing to AirWSJT-X! This project is built by 
 2. Create a feature branch (`git checkout -b feature/my-improvement`)
 3. Make your changes
 4. Run the tests (`python -m unittest discover -s tests -v`)
+   - Cross-platform tests live in `tests/test_cross_platform.py` and cover path handling, atomic writes, struct endianness, floating-point consistency, and callsign case normalisation. CI runs this suite on Ubuntu, Windows, and macOS.
 5. Commit your changes (`git commit -m 'Add my improvement'`)
 6. Push to the branch (`git push origin feature/my-improvement`)
 7. Open a Pull Request
