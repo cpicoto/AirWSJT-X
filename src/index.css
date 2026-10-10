@@ -131,10 +131,10 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 }
 .decode-row {
   display: grid;
-  grid-template-columns: 52px 40px 56px 1fr;
-  gap: 4px;
+  grid-template-columns: 50px 45px 65px 1fr;
+  gap: 6px;
   align-items: center;
-  padding: 1px 0;
+  padding: 2px 4px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
   overflow: hidden;
@@ -171,4 +171,3 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 }
 .station-pill .call { font-family: monospace; font-weight: 700; font-size: 13px; }
 .station-pill .grid { font-family: monospace; font-size: 11px; color: var(--text-muted); }
-
