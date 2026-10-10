@@ -7,6 +7,7 @@ from __future__ import annotations
 import socket
 import struct
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -233,6 +234,8 @@ class WSJTXListener:
         on_decode: Callable[[WSJTXDecode], None] | None = None,
         on_connected: Callable[[str], None] | None = None,
         on_disconnected: Callable[[], None] | None = None,
+        heartbeat_timeout_s: float = 30.0,
+        socket_timeout_s: float = 2.0,
     ) -> None:
         self.port = port
         self.multicast = multicast
@@ -240,9 +243,12 @@ class WSJTXListener:
         self.on_decode = on_decode
         self.on_connected = on_connected
         self.on_disconnected = on_disconnected
+        self.heartbeat_timeout_s = heartbeat_timeout_s
+        self.socket_timeout_s = socket_timeout_s
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
+        self._last_packet = 0.0
 
     def start(self) -> None:
         self._stop.clear()
@@ -256,33 +262,51 @@ class WSJTXListener:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(2.0)
+        s.settimeout(self.socket_timeout_s)
         s.bind(("", self.port))
         mreq = struct.pack("4sL", socket.inet_aton(self.multicast), socket.INADDR_ANY)
         s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         return s
 
+    def _mark_connected(self, data: bytes) -> None:
+        if self._connected:
+            return
+        try:
+            magic, _, msg_type, app_id, _ = _parse_header(data)
+        except Exception:
+            return
+        self._connected = True
+        if self.on_connected and magic == WSJTX_MAGIC and msg_type in (MSG_HEARTBEAT, MSG_STATUS, MSG_DECODE, MSG_CLOSE):
+            self.on_connected(app_id or "WSJT-X")
+
+    def _mark_disconnected(self) -> None:
+        if not self._connected:
+            return
+        self._connected = False
+        if self.on_disconnected:
+            self.on_disconnected()
+
+    def _check_connection_timeout(self, now: float | None = None) -> None:
+        if not self._connected or not self._last_packet:
+            return
+        if now is None:
+            now = time.monotonic()
+        if (now - self._last_packet) > self.heartbeat_timeout_s:
+            self._mark_disconnected()
+
     def _run(self) -> None:
         try:
             sock = self._make_socket()
-        except Exception as e:
+        except Exception:
             if self.on_disconnected:
                 self.on_disconnected()
             return
 
-        last_packet = 0.0
-        import time
-
         while not self._stop.is_set():
             try:
                 data, _ = sock.recvfrom(4096)
-                last_packet = time.monotonic()
-
-                if not self._connected:
-                    self._connected = True
-                    magic, _, msg_type, app_id, _ = _parse_header(data)
-                    if self.on_connected:
-                        self.on_connected(app_id or "WSJT-X")
+                self._last_packet = time.monotonic()
+                self._mark_connected(data)
 
                 if len(data) < 12:
                     continue
@@ -297,15 +321,9 @@ class WSJTXListener:
                     if dec and self.on_decode:
                         self.on_decode(dec)
                 elif msg_type == MSG_CLOSE:
-                    self._connected = False
-                    if self.on_disconnected:
-                        self.on_disconnected()
+                    self._mark_disconnected()
 
             except socket.timeout:
-                import time
-                if self._connected and last_packet and (time.monotonic() - last_packet) > 10:
-                    self._connected = False
-                    if self.on_disconnected:
-                        self.on_disconnected()
+                self._check_connection_timeout()
 
         sock.close()
