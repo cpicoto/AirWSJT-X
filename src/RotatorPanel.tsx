@@ -6,6 +6,12 @@ interface RotatorPanelProps {
   targetAz: number | null;
   targetEl: number | null;
   connected: boolean;
+  speechEnabled: boolean;
+  speechThresholdDeg: number;
+  speechIntervalSec: number;
+  onSpeechEnabledChange: (enabled: boolean) => void;
+  onSpeechThresholdDegChange: (deg: number) => void;
+  onSpeechIntervalSecChange: (sec: number) => void;
   onSetPosition: (az: number, el: number) => void;
   onStop: () => void;
   onPark: () => void;
@@ -293,7 +299,14 @@ function ElevationArc({
 
 export default function RotatorPanel({
   currentAz, currentEl, targetAz, targetEl,
-  connected, onSetPosition, onStop, onPark, onConnect,
+  connected,
+  speechEnabled,
+  speechThresholdDeg,
+  speechIntervalSec,
+  onSpeechEnabledChange,
+  onSpeechThresholdDegChange,
+  onSpeechIntervalSecChange,
+  onSetPosition, onStop, onPark, onConnect,
 }: RotatorPanelProps) {
   const [manualAz, setManualAz] = useState(currentAz.toFixed(1));
   const [manualEl, setManualEl] = useState(currentEl.toFixed(1));
@@ -418,9 +431,47 @@ export default function RotatorPanel({
 
       {/* Hint */}
       {connected && (
-        <div style={{ fontSize: 11, color: "#8b949e" }}>
-          Click the compass or elevation arc to set target position.
-          Orange dashed = target · Blue solid = current.
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+            padding: "8px 10px", borderRadius: 6, border: "1px solid #30363d",
+            background: "rgba(255,255,255,0.02)", fontSize: 11,
+          }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#c9d1d9" }}>
+              <input
+                type="checkbox"
+                checked={speechEnabled}
+                onChange={(e) => onSpeechEnabledChange(e.target.checked)}
+              />
+              Speech
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }}>
+              Δ°
+              <input
+                type="number"
+                min={0.1}
+                step={0.1}
+                value={speechThresholdDeg}
+                style={{ ...numInput, width: 58 }}
+                onChange={(e) => onSpeechThresholdDegChange(parseFloat(e.target.value) || 0.1)}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }}>
+              Interval s
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={speechIntervalSec}
+                style={{ ...numInput, width: 58 }}
+                onChange={(e) => onSpeechIntervalSecChange(Math.max(0, parseFloat(e.target.value) || 0))}
+              />
+            </label>
+          </div>
+          <div style={{ fontSize: 11, color: "#8b949e" }}>
+            Click the compass or elevation arc to set target position.
+            Orange dashed = target · Blue solid = current.
+          </div>
         </div>
       )}
       {!connected && (
