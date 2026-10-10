@@ -186,11 +186,15 @@ export default function App() {
   const [rotatorTargetEl, setRotatorTargetEl] = useState<number | null>(null);
   const [rotatorSpeechEnabled, setRotatorSpeechEnabled] = useState(() => localStorage.getItem(ROTATOR_SPEECH_ENABLED_KEY) === "1");
   const [rotatorSpeechThresholdDeg, setRotatorSpeechThresholdDeg] = useState(() => {
-    const value = Number(localStorage.getItem(ROTATOR_SPEECH_THRESHOLD_KEY));
+    const raw = localStorage.getItem(ROTATOR_SPEECH_THRESHOLD_KEY);
+    if (raw === null) return 3;
+    const value = Number(raw);
     return Number.isFinite(value) && value > 0 ? value : 3;
   });
   const [rotatorSpeechIntervalSec, setRotatorSpeechIntervalSec] = useState(() => {
-    const value = Number(localStorage.getItem(ROTATOR_SPEECH_INTERVAL_KEY));
+    const raw = localStorage.getItem(ROTATOR_SPEECH_INTERVAL_KEY);
+    if (raw === null) return 2;
+    const value = Number(raw);
     return Number.isFinite(value) && value >= 0 ? value : 2;
   });
   const [dxCallsign, setDxCallsign] = useState<string | null>(null);
@@ -404,9 +408,6 @@ export default function App() {
     const last = rotatorSpeechLastAnnouncedRef.current;
     const speechText = `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`;
     if (!last) {
-      const firstUtterance = new SpeechSynthesisUtterance(speechText);
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(firstUtterance);
       rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
       return;
     }
