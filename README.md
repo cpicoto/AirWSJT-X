@@ -51,6 +51,8 @@ When multiple WSJT-X instances are on the same network, use the **Rig** dropdown
 
 ### WSJT-X Connection Troubleshooting
 
+In **Stations**, enter **MY callsign** and **MY grid** and select **Apply** to use your station without WSJT-X reporting, or to override its values. Overrides are saved across restarts and are not overwritten by WSJT-X status updates. Empty fields use WSJT-X values; **Use WSJT-X** clears both overrides. Grids accept valid 4, 6, or 8 character Maidenhead locators. This does not bypass WSJT-X or frequency requirements for starting a radio QSO.
+
 - In WSJT-X **Settings > Reporting**, set the UDP server to `224.0.0.1` and port `2237`.
 - Select **Any rig** in the AirWSJT-X **Rig** dropdown to accept the first WSJT-X source, or select a discovered instance.
 - On Windows, allow AirWSJT-X and its Python sidecar through Windows Firewall on the network you use.

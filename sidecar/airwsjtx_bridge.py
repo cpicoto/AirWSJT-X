@@ -67,6 +67,10 @@ _aircraft_last_update_epoch_s: int | None = None
 _station_a_locator: str | None = None
 _station_b_locator: str | None = None
 _station_a_call: str | None = None
+_my_call_override: str | None = None
+_my_grid_override: str | None = None
+_wsjtx_de_call: str | None = None
+_wsjtx_de_grid: str | None = None
 _station_b_call: str | None = None
 
 # Aircraft display filters
@@ -493,8 +497,25 @@ def handle(msg: dict) -> None:
                 )
                 _ok(id_, result)
 
-        elif method == "set_station_calls":
+        elif method == "set_my_station_override":
+            global _my_call_override, _my_grid_override
             global _station_a_call, _station_b_call
+            call = (params.get("callsign") or "").strip().upper() or None
+            grid = (params.get("grid") or "").strip().upper() or None
+            if grid:
+                import re
+                if not re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?", grid):
+                    raise ValueError("MY grid must be a valid 4, 6, or 8 character Maidenhead locator")
+            if call and (not any(c.isdigit() for c in call) or not any(c.isalpha() for c in call)
+                         or not all(c.isascii() and (c.isalnum() or c == "/") for c in call)):
+                raise ValueError("MY callsign must contain letters and digits, with optional /")
+            _my_call_override, _my_grid_override = call, grid
+            _station_a_call = call or _wsjtx_de_call
+            _station_a_locator = grid or _wsjtx_de_grid
+            _start_configured_airscout_feed(force_restart=True)
+            _ok(id_, {"callsign": call, "grid": grid})
+
+        elif method == "set_station_calls":
             _station_a_call = params.get("call_a")
             _station_b_call = params.get("call_b")
             _ok(id_, {})
@@ -1093,14 +1114,16 @@ def _emit_aircraft_update() -> None:
 
 def _on_wsjtx_status(st: WSJTXStatus) -> None:
     global _station_a_locator, _station_b_locator, _station_a_call, _wsjtx_freq_hz, _wsjtx_band_mhz
+    global _wsjtx_de_call, _wsjtx_de_grid
+    _wsjtx_de_call, _wsjtx_de_grid = st.de_call, st.de_grid
     # Capture frequency for supervisor begin_session
     if st.freq_hz:
         _wsjtx_freq_hz = st.freq_hz
         _wsjtx_band_mhz = st.freq_mhz
     # Auto-populate station A call + locator from WSJT-X de_call/de_grid
-    if st.de_call and not _station_a_call:
+    if st.de_call and not _my_call_override:
         _station_a_call = st.de_call
-    if st.de_grid and st.de_grid != _station_a_locator:
+    if st.de_grid and not _my_grid_override and st.de_grid != _station_a_locator:
         _station_a_locator = st.de_grid
         with _source_status_lock:
             active_source = _active_source

@@ -12,6 +12,7 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
     name: null,
   }),
   set_station_calls: () => null,
+  set_my_station_override: p => ({ callsign: p.callsign, grid: p.grid }),
   airscout_set_stations: () => null,
   airscout_apply_filters: () => null,
   airscout_get_sources: () => ({

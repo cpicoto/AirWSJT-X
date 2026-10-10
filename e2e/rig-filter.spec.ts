@@ -1,5 +1,30 @@
 import { test, expect } from "@playwright/test";
 
+test("manual MY station works without WSJT-X and survives incoming status", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
+  await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN87VP");
+  await page.getByRole("textbox", { name: "MY grid", exact: true }).press("Tab");
+  await expect(page.getByRole("textbox", { name: "MY grid", exact: true })).toHaveValue("CN87VP");
+  await page.getByRole("button", { name: "Apply MY station" }).click();
+  await expect(page.locator(".station-pill").first()).toContainText("K7MDL");
+  await expect(page.locator(".station-pill").first()).toContainText("CN87VP");
+  await page.evaluate(() => {
+    const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "wsjtx_status", data: { de_call: "W1AW", de_grid: "FN31PR" },
+    }));
+  });
+  await expect(page.locator(".station-pill").first()).toContainText("K7MDL");
+  await expect(page.locator(".station-pill").first()).toContainText("CN87VP");
+  await page.reload();
+  await expect(page.locator(".station-pill").first()).toContainText("K7MDL");
+  await expect(page.getByRole("textbox", { name: "MY grid", exact: true })).toHaveValue("CN87VP");
+  await page.getByRole("button", { name: "Use WSJT-X", exact: true }).click();
+  await expect(page.getByText(/MY station reset to WSJT-X/)).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("airwsjtx.myCallOverride"))).toBe("");
+});
+
 test("discovers rigs, selects and persists a filter, and clears it", async ({ page }) => {
   await page.goto("/");
   const filter = page.getByRole("combobox", { name: "Rig", exact: true });

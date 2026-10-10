@@ -141,6 +141,25 @@ class WSJTXListenerFilterTests(unittest.TestCase):
 
 
 class WSJTXListenerSocketTests(unittest.TestCase):
+    def test_manual_station_override_survives_wsjtx_status_and_can_be_cleared(self) -> None:
+        from sidecar import airwsjtx_bridge as bridge
+
+        with patch.multiple(bridge, _my_call_override=None, _my_grid_override=None,
+                            _station_a_call=None, _station_a_locator=None,
+                            _wsjtx_de_call=None, _wsjtx_de_grid=None,
+                            _wsjtx_freq_hz=None, _wsjtx_band_mhz=None):
+            with patch.object(bridge, "_start_configured_airscout_feed"), patch.object(bridge, "_emit"):
+                bridge.handle({"id": "my", "method": "set_my_station_override",
+                               "params": {"callsign": "K7MDL", "grid": "CN87VP"}})
+                status = _make_status("WSJT-X")
+                status.de_call, status.de_grid = "W1AW", "FN31PR"
+                bridge._on_wsjtx_status(status)
+                self.assertEqual(bridge._station_a_call, "K7MDL")
+                self.assertEqual(bridge._station_a_locator, "CN87VP")
+                bridge.handle({"id": "reset", "method": "set_my_station_override", "params": {}})
+                self.assertEqual(bridge._station_a_call, "W1AW")
+                self.assertEqual(bridge._station_a_locator, "FN31PR")
+
     def test_discovers_filtered_out_rigs_from_udp_messages(self) -> None:
         on_status = Mock()
         listener = WSJTXListener(rig_name_filter="Selected-Rig", on_status=on_status)

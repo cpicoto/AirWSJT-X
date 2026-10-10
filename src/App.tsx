@@ -161,6 +161,8 @@ const STATE_COLOR: Record<string, string> = {
 
 const PORTABLE_GRID_OVERRIDES_KEY = "airwsjtx.portableGridOverrides";
 const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
+const MY_CALL_OVERRIDE_KEY = "airwsjtx.myCallOverride";
+const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
 const PORTABLE_SCALE_KEY = "airwsjtx.portableScale";
 const PORTABLE_MIN_FONT_PX = 28;
 const PORTABLE_BASE_FONT_PX = 72;
@@ -224,9 +226,15 @@ export default function App() {
     }
   });
   const [myGridInput, setMyGridInput] = useState("");
+  const [myCallOverride, setMyCallOverride] = useState(() => localStorage.getItem(MY_CALL_OVERRIDE_KEY) ?? "");
+  const [myGridOverride, setMyGridOverride] = useState(() => localStorage.getItem(MY_GRID_OVERRIDE_KEY) ?? "");
+  const [myCallInput, setMyCallInput] = useState(() => localStorage.getItem(MY_CALL_OVERRIDE_KEY) ?? "");
+  const myCallEditing = useRef(false);
+  const [myStationBusy, setMyStationBusy] = useState(false);
+  const myStationRestored = useRef(false);
   const [dxGridInput, setDxGridInput] = useState("");
-  const [myGridEditing, setMyGridEditing] = useState(false);
-  const [dxGridEditing, setDxGridEditing] = useState(false);
+  const myGridEditing = useRef(false);
+  const dxGridEditing = useRef(false);
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
   const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
@@ -561,10 +569,52 @@ export default function App() {
     rpc("airscout_apply_filters", { filters: normalized }).catch(() => {});
   }, [airscout?.station_a, airscout?.station_b]);
 
-  const myCallsign = wsjtxLive.de_call?.trim().toUpperCase() ?? null;
+  const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
   const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
-  const myGrid = (myCallsign ? stationGridOverrides[myCallsign] : null) ?? wsjtxLive.de_grid;
+  const myGrid = myGridOverride || (myCallsign ? stationGridOverrides[myCallsign] : null) || wsjtxLive.de_grid;
   const selectedDxGrid = (dxCall ? stationGridOverrides[dxCall] : null) ?? dxGrid;
+
+  useEffect(() => {
+    if (!status || myStationRestored.current) return;
+    myStationRestored.current = true;
+    if (myCallOverride || myGridOverride) {
+      rpc("set_my_station_override", { callsign: myCallOverride || null, grid: myGridOverride || null })
+        .catch(e => addLog(`MY station restore error: ${e}`));
+    }
+  }, [status, myCallOverride, myGridOverride, addLog]);
+
+  useEffect(() => {
+    if (!myCallEditing.current) setMyCallInput(myCallOverride || wsjtxLive.de_call || "");
+  }, [myCallOverride, wsjtxLive.de_call]);
+
+  async function applyMyStation(reset = false) {
+    const call = reset ? "" : myCallInput.trim().toUpperCase();
+    const grid = reset ? "" : myGridInput.trim().toUpperCase();
+    if (call && (!/^[A-Z0-9/]+$/.test(call) || !/[A-Z]/.test(call) || !/[0-9]/.test(call))) {
+      addLog("MY callsign must contain letters and digits, with optional /");
+      return;
+    }
+    if (grid && !/^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?$/.test(grid)) {
+      addLog("MY grid must be a valid 4, 6, or 8 character Maidenhead locator");
+      return;
+    }
+    setMyStationBusy(true);
+    try {
+      await rpc("set_my_station_override", { callsign: call || null, grid: grid || null });
+      localStorage.setItem(MY_CALL_OVERRIDE_KEY, call);
+      localStorage.setItem(MY_GRID_OVERRIDE_KEY, grid);
+      if (reset) savePortableGrid(myCallsign, null);
+      setMyCallOverride(call);
+      setMyGridOverride(grid);
+      setMyCallInput(call || wsjtxLive.de_call || "");
+      setMyGridInput(grid || wsjtxLive.de_grid || "");
+      addLog(reset ? "MY station reset to WSJT-X" : `MY station override: ${call || "WSJT-X"} ${grid || "WSJT-X"}`);
+    } catch (e) {
+      addLog(`MY station error: ${e}`);
+    } finally {
+      setMyStationBusy(false);
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem(PORTABLE_VIEW_KEY, portableView);
@@ -575,11 +625,11 @@ export default function App() {
   }, [portableScale]);
 
   useEffect(() => {
-    if (!myGridEditing) setMyGridInput(myGrid ?? "");
-  }, [myGrid, myGridEditing]);
+    if (!myGridEditing.current) setMyGridInput(myGrid ?? "");
+  }, [myGrid]);
   useEffect(() => {
-    if (!dxGridEditing) setDxGridInput(selectedDxGrid ?? "");
-  }, [selectedDxGrid, dxGridEditing]);
+    if (!dxGridEditing.current) setDxGridInput(selectedDxGrid ?? "");
+  }, [selectedDxGrid]);
   useEffect(() => {
     const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
     setAircraftFilters(stored);
@@ -777,10 +827,21 @@ export default function App() {
               <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>MY</span>
                 <input
+                  aria-label="MY callsign"
+                  value={myCallInput}
+                  onChange={e => setMyCallInput(e.target.value.toUpperCase())}
+                  onFocus={() => { myCallEditing.current = true; }}
+                  onBlur={() => { myCallEditing.current = false; }}
+                  placeholder="Callsign"
+                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
+                    borderRadius: 4, padding: "2px 6px", fontSize: 11, width: 86, fontFamily: "monospace" }}
+                />
+                <input
+                  aria-label="MY grid"
                   value={myGridInput}
                   onChange={(e) => setMyGridInput(e.target.value.toUpperCase())}
-                  onFocus={() => setMyGridEditing(true)}
-                  onBlur={() => setMyGridEditing(false)}
+                  onFocus={() => { myGridEditing.current = true; }}
+                  onBlur={() => { myGridEditing.current = false; }}
                   placeholder={wsjtxLive.de_grid ?? "Grid"}
                   style={{
                     background: "var(--surface)",
@@ -793,26 +854,20 @@ export default function App() {
                     fontFamily: "monospace",
                   }}
                 />
-                <button className="btn-secondary" style={{ fontSize: 10, padding: "2px 8px" }}
-                  onClick={() => {
-                    const grid = normalizeGrid(myGridInput);
-                    const locatorA = grid ?? wsjtxLive.de_grid;
-                    savePortableGrid(myCallsign, grid);
-                    if (locatorA && selectedDxGrid) {
-                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: selectedDxGrid }).catch(() => {});
-                    }
-                    addLog(`MY grid ${grid ? `override → ${grid}` : "reset to WSJT-X"}`);
-                  }}>
+                <button className="btn-secondary" aria-label="Apply MY station" disabled={myStationBusy}
+                  style={{ fontSize: 10, padding: "2px 8px" }} onClick={() => { void applyMyStation(); }}>
                   Apply
                 </button>
+                <button className="btn-secondary" disabled={myStationBusy} style={{ fontSize: 10, padding: "2px 8px" }}
+                  onClick={() => { void applyMyStation(true); }}>Use WSJT-X</button>
               </div>
               <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>DX</span>
                 <input
                   value={dxGridInput}
                   onChange={(e) => setDxGridInput(e.target.value.toUpperCase())}
-                  onFocus={() => setDxGridEditing(true)}
-                  onBlur={() => setDxGridEditing(false)}
+                  onFocus={() => { dxGridEditing.current = true; }}
+                  onBlur={() => { dxGridEditing.current = false; }}
                   placeholder={dxGrid ?? "Grid"}
                   style={{
                     background: "var(--surface)",
@@ -833,7 +888,7 @@ export default function App() {
                     }
                     const grid = normalizeGrid(dxGridInput);
                     const locatorB = grid ?? dxGrid;
-                    const locatorA = normalizeGrid(myGridInput) ?? wsjtxLive.de_grid;
+                    const locatorA = myGrid;
                     savePortableGrid(dxCall, grid);
                     if (locatorA && locatorB) {
                       rpc("airscout_set_stations", { locator_a: locatorA, locator_b: locatorB }).catch(() => {});
