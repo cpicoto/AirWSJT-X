@@ -35,8 +35,14 @@ _opensky_feed: OpenSkyFeed | None = None
 _dump1090_feed: Dump1090Feed | None = None
 _dump1090_host: str = "127.0.0.1"
 _dump1090_port: int = 30003
-_supported_sources = ("opensky", "dump1090")
+_supported_sources = ("opensky", "dump1090", "rtl-sdr", "rtl_sdr")
 _source_priority: list[str] = ["opensky", "dump1090"]
+_source_aliases = {
+    "rtl-sdr": "dump1090",
+    "rtl_sdr": "dump1090",
+    "dump1090": "dump1090",
+    "opensky": "opensky",
+}
 _source_priority_lock = threading.Lock()
 _source_status_lock = threading.Lock()
 _source_status: dict[str, dict[str, str | None]] = {
@@ -145,10 +151,12 @@ def _normalize_sources(raw_sources: object) -> list[str]:
             return list(_source_priority)
     normalized = []
     for src in raw_sources:
-        if isinstance(src, str):
-            src_norm = src.strip().lower()
-            if src_norm in _supported_sources and src_norm not in normalized:
-                normalized.append(src_norm)
+        if not isinstance(src, str):
+            continue
+        src_norm = src.strip().lower()
+        canonical = _source_aliases.get(src_norm, src_norm)
+        if canonical in _supported_sources and canonical not in normalized:
+            normalized.append(canonical)
     if normalized:
         return normalized
     with _source_priority_lock:

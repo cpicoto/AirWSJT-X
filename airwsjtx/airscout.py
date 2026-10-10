@@ -8,6 +8,7 @@ Supported sources:
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -198,13 +199,42 @@ class Dump1090Feed:
     def stop(self) -> None:
         self._stop.set()
 
+    @staticmethod
+    def _coerce_float(value: object) -> float | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text in {"nan", "inf", "-inf"}:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _decode_callsign(raw: str) -> str | None:
+        text = (raw or "").strip()
+        if not text:
+            return None
+        if re.fullmatch(r"[A-Z0-9_]{2,8}", text):
+            return text.replace("_", " ").strip()
+        return None
+
     def _parse_sbs(self, line: str) -> None:
-        parts = line.split(",")
-        if len(parts) < 22 or parts[0] != "MSG":
+        clean = line.strip().strip("\x00")
+        if not clean:
+            return
+        if clean.startswith("*"):
+            clean = clean[1:]
+        parts = [p.strip() for p in clean.split(",")]
+        if len(parts) < 5 or parts[0] not in {"MSG", "ES"}:
             return
         msg_type = parts[1]
-        icao24 = parts[4].lower()
-        callsign_raw = parts[10].strip()
+        icao24 = (parts[4] or "").lower()
+        if not icao24:
+            return
+
+        callsign_raw = parts[10] if len(parts) > 10 else ""
 
         with self._lock:
             ac = self._aircraft.setdefault(
@@ -217,29 +247,53 @@ class Dump1090Feed:
             )
             ac.last_seen = time.monotonic()
 
-            if callsign_raw:
-                ac.callsign = callsign_raw
+            callsign = self._decode_callsign(callsign_raw)
+            if callsign:
+                ac.callsign = callsign
 
             if msg_type == "1":  # Identification
                 pass
             elif msg_type == "3":  # Airborne position
-                try:
-                    alt_ft = float(parts[11]) if parts[11] else None
-                    ac.altitude_m = alt_ft * 0.3048 if alt_ft else ac.altitude_m
-                    ac.lat = float(parts[14]) if parts[14] else ac.lat
-                    ac.lon = float(parts[15]) if parts[15] else ac.lon
-                    ac.on_ground = parts[21].strip() == "1"
-                except ValueError:
-                    pass
+                alt_ft = self._coerce_float(parts[11]) if len(parts) > 11 else None
+                lat = self._coerce_float(parts[14]) if len(parts) > 14 else None
+                lon = self._coerce_float(parts[15]) if len(parts) > 15 else None
+                on_ground = False
+                if len(parts) > 21:
+                    on_ground = self._coerce_float(parts[21]) == 1.0
+                if alt_ft is not None:
+                    ac.altitude_m = alt_ft * 0.3048
+                if lat is not None:
+                    ac.lat = lat
+                if lon is not None:
+                    ac.lon = lon
+                ac.on_ground = on_ground
             elif msg_type == "4":  # Airborne velocity
-                try:
-                    speed_kts = float(parts[12]) if parts[12] else None
-                    ac.velocity_ms = speed_kts * 0.514444 if speed_kts else ac.velocity_ms
-                    ac.heading_deg = float(parts[13]) if parts[13] else ac.heading_deg
-                    vert = float(parts[16]) if parts[16] else None
-                    ac.vertical_rate_ms = vert * 0.00508 if vert else ac.vertical_rate_ms  # ft/min → m/s
-                except ValueError:
-                    pass
+                speed_kts = self._coerce_float(parts[11]) if len(parts) > 11 else None
+                heading = self._coerce_float(parts[12]) if len(parts) > 12 else None
+                vert = self._coerce_float(parts[16]) if len(parts) > 16 else None
+                if vert is None and len(parts) > 15:
+                    vert = self._coerce_float(parts[15])
+                if speed_kts is not None:
+                    ac.velocity_ms = speed_kts * 0.514444
+                if heading is not None:
+                    ac.heading_deg = heading
+                if vert is not None:
+                    ac.vertical_rate_ms = vert * 0.00508  # ft/min → m/s
+
+    def _parse_frame(self, frame: str | bytes | bytearray) -> None:
+        if isinstance(frame, (bytes, bytearray)):
+            try:
+                text = frame.decode("ascii", "ignore")
+            except Exception:
+                text = ""
+            if text:
+                self._parse_sbs(text)
+                return
+        else:
+            self._parse_sbs(frame)
+
+    def _parse_beast(self, frame: bytes | bytearray) -> None:
+        self._parse_frame(frame)
 
     def _expire_stale(self) -> None:
         now = time.monotonic()

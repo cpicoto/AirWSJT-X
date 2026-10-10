@@ -1,7 +1,7 @@
 import unittest
 import urllib.error
 
-from airwsjtx.airscout import OpenSkyFeed
+from airwsjtx.airscout import Dump1090Feed, OpenSkyFeed
 from airwsjtx.geo import heading_delta_deg, heading_within_tolerance
 
 
@@ -19,6 +19,36 @@ class _FakeStopEvent:
         if len(self.waits) >= self._max_waits:
             self._set = True
         return self._set
+
+
+class Dump1090FeedParsingTests(unittest.TestCase):
+    def test_parse_sbs_position_and_velocity(self) -> None:
+        feed = Dump1090Feed(report_interval_s=1.0)
+        msg = (
+            "MSG,3,1,1,7AC2A7,7AC2A7,0,0,0,0,NNN,35000,0,0,51.1234,-0.9876,0,0,0,0,0,0,0\n"
+        )
+
+        feed._parse_sbs(msg)
+
+        ac = feed._aircraft["7ac2a7"]
+        self.assertEqual(ac.callsign, "NNN")
+        self.assertAlmostEqual(ac.altitude_m, 10668.0)
+        self.assertAlmostEqual(ac.lat, 51.1234)
+        self.assertAlmostEqual(ac.lon, -0.9876)
+
+    def test_parse_sbs_velocity_message(self) -> None:
+        feed = Dump1090Feed(report_interval_s=1.0)
+        msg = (
+            "MSG,4,1,1,7AC2A7,7AC2A7,0,0,0,0,GABCD,420,180,0,0,0,1500,0,0,0,0,0,0\n"
+        )
+
+        feed._parse_sbs(msg)
+
+        ac = feed._aircraft["7ac2a7"]
+        self.assertEqual(ac.callsign, "GABCD")
+        self.assertAlmostEqual(ac.velocity_ms, 216.06648, places=4)
+        self.assertAlmostEqual(ac.heading_deg, 180.0)
+        self.assertAlmostEqual(ac.vertical_rate_ms, 7.62)
 
 
 class OpenSkyFeedBackoffTests(unittest.TestCase):
