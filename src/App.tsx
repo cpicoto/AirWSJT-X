@@ -29,6 +29,16 @@ interface WsjtxDecodeEntry {
   mode: string | null;
   ts: string;
 }
+interface WsjtxRig {
+  app_id: string;
+  config_name: string | null;
+}
+function isWsjtxRig(value: unknown): value is WsjtxRig {
+  if (typeof value !== "object" || value === null) return false;
+  return "app_id" in value && typeof value.app_id === "string"
+    && "config_name" in value
+    && (value.config_name === null || typeof value.config_name === "string");
+}
 interface AircraftEntry {
   icao24: string;
   callsign: string;
@@ -221,6 +231,9 @@ export default function App() {
   const [autoLock, setAutoLock] = useState(true);
   const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
   const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
+  const [wsjtxKnownRigs, setWsjtxKnownRigs] = useState<WsjtxRig[]>([]);
+  const [wsjtxRigDiscoveryError, setWsjtxRigDiscoveryError] = useState<string | null>(null);
+  const [wsjtxRigFilterBusy, setWsjtxRigFilterBusy] = useState(false);
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
     const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
     return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
@@ -262,6 +275,9 @@ export default function App() {
             setWsjtxLive(w => ({ ...w, connected: true, app_id: evtData.app_id as string }));
           } else if (evt === "wsjtx_disconnected") {
             addLog("WSJT-X disconnected");
+            setWsjtxLive(w => ({ ...w, connected: false }));
+          } else if (evt === "wsjtx_error") {
+            addLog(`WSJT-X error: ${evtData.message}`);
             setWsjtxLive(w => ({ ...w, connected: false }));
           } else if (evt === "wsjtx_status") {
             setWsjtxLive(w => ({
@@ -349,12 +365,25 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const s = await rpc("get_status") as { state: string };
+        const s = await rpc("get_status") as { state: string; wsjtx_known_rigs?: unknown };
         setStatus(s);
+        const rigs = s.wsjtx_known_rigs;
+        if (Array.isArray(rigs) && rigs.every(isWsjtxRig)) {
+          setWsjtxKnownRigs(rigs);
+          setWsjtxRigDiscoveryError(null);
+        } else {
+          setWsjtxRigDiscoveryError(rigs === undefined
+            ? "Rig discovery unavailable: rebuild the Python sidecar and restart the app."
+            : "Invalid WSJT-X rig list received from the Python sidecar.");
+        }
       } catch { /* sidecar may not be up yet */ }
     }, 2000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (wsjtxRigDiscoveryError) addLog(wsjtxRigDiscoveryError);
+  }, [wsjtxRigDiscoveryError, addLog]);
 
   useEffect(() => {
     const saved = localStorage.getItem("wsjtxRigNameFilter") ?? "";
@@ -447,6 +476,7 @@ export default function App() {
 
   async function applyWsjtxRigFilter(rawValue: string) {
     const value = rawValue.trim();
+    setWsjtxRigFilterBusy(true);
     try {
       await rpc("wsjtx_set_rig_name_filter", { rig_name: value || null });
       localStorage.setItem("wsjtxRigNameFilter", value);
@@ -454,6 +484,8 @@ export default function App() {
       addLog(value ? `WSJT-X rig filter: ${value}` : "WSJT-X rig filter cleared");
     } catch (e) {
       addLog(`WSJT-X filter error: ${e}`);
+    } finally {
+      setWsjtxRigFilterBusy(false);
     }
   }
 
@@ -574,11 +606,6 @@ export default function App() {
   <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
     <div className="portable-header">
       <span>Az / El</span>
-      <div className="portable-controls">
-        <button className="portable-mode" onClick={() => setPortableView("panel")}>Panel</button>
-        <button className="portable-mode" onClick={() => setPortableView("overlay")}>Overlay</button>
-        <button className="portable-mode" onClick={() => setPortableView("hidden")}>Hide</button>
-      </div>
     </div>
     <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
       <div className="portable-readout">
@@ -590,26 +617,13 @@ export default function App() {
         <span className="portable-value">{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
       </div>
     </div>
-    <div className="portable-footer">
-      <label>
-        Scale
-        <input
-          type="range"
-          min={70}
-          max={180}
-          step={5}
-          value={portableScale}
-          onChange={(e) => setPortableScale(Number(e.target.value))}
-        />
-      </label>
-    </div>
   </div>
   );
 
   const portableDisplay = portableView === "hidden" ? null : portableReadout;
 
   return (
-    <div className="app">
+    <div className={`app${portableView === "panel" ? " has-portable-panel" : ""}`}>
       {portableView === "overlay" && portableDisplay}
 
       {/* ── Top bar ── */}
@@ -667,11 +681,11 @@ export default function App() {
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
             Rig
-            <input
+            <select
               value={wsjtxRigFilter}
-              placeholder="all"
+              disabled={wsjtxRigFilterBusy}
               style={{
-                width: 92,
+                width: 180,
                 fontSize: 10,
                 padding: "2px 6px",
                 borderRadius: 4,
@@ -679,16 +693,24 @@ export default function App() {
                 background: "var(--surface)",
                 color: "var(--text)",
               }}
-              onChange={(e) => setWsjtxRigFilter(e.target.value)}
-              onBlur={() => { void applyWsjtxRigFilter(wsjtxRigFilter); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  (e.currentTarget as HTMLInputElement).blur();
-                }
-              }}
-            />
+              onChange={(e) => { void applyWsjtxRigFilter(e.target.value); }}
+            >
+              <option value="">Any rig</option>
+              {wsjtxRigFilter && !wsjtxKnownRigs.some(rig => rig.app_id === wsjtxRigFilter) && (
+                <option value={wsjtxRigFilter}>{wsjtxRigFilter} (saved)</option>
+              )}
+              {wsjtxKnownRigs.map(rig => (
+                <option key={rig.app_id} value={rig.app_id}>
+                  {rig.config_name ? `${rig.app_id} (${rig.config_name})` : rig.app_id}
+                </option>
+              ))}
+            </select>
           </label>
+          {wsjtxRigDiscoveryError && (
+            <span title={wsjtxRigDiscoveryError} style={{ fontSize: 10, color: "var(--yellow)" }}>
+              Rig discovery unavailable
+            </span>
+          )}
           <span style={{ fontSize: 10, color: connectivityColor, fontWeight: 600 }}>
             {connectivityLabel}
           </span>
@@ -705,6 +727,27 @@ export default function App() {
           )}
         </div>
       </header>
+
+      <div className="portable-toolbar" role="group" aria-label="Az / El display controls">
+        <span>Az / El</span>
+        <div className="portable-controls">
+          <button className="portable-mode" aria-pressed={portableView === "panel"} onClick={() => setPortableView("panel")}>Panel</button>
+          <button className="portable-mode" aria-pressed={portableView === "overlay"} onClick={() => setPortableView("overlay")}>Overlay</button>
+          <button className="portable-mode" aria-pressed={portableView === "hidden"} onClick={() => setPortableView("hidden")}>Hide</button>
+        </div>
+        <label>
+          Scale
+          <input
+            type="range"
+            min={70}
+            max={180}
+            step={5}
+            value={portableScale}
+            onChange={(e) => setPortableScale(Number(e.target.value))}
+          />
+          <span>{portableScale}%</span>
+        </label>
+      </div>
 
       {portableView === "panel" && portableDisplay}
 

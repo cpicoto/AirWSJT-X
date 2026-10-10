@@ -34,6 +34,11 @@ pub fn run() {
             // On mobile, skip sidecar — the frontend runs standalone
             #[cfg(not(mobile))]
             {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Some(version) = &app.config().version {
+                        window.set_title(&format!("AirWSJT-X v{version}"))?;
+                    }
+                }
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let sidecar_cmd = handle

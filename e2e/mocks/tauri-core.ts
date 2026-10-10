@@ -1,5 +1,11 @@
 const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown> = {
-  get_status: () => ({ state: (window as unknown as Record<string, string>).__mockState ?? "tracking" }),
+  get_status: () => {
+    const mock = window as unknown as Record<string, unknown>;
+    return {
+      state: mock.__mockState ?? "tracking",
+      ...(!mock.__mockLegacySidecar && { wsjtx_known_rigs: mock.__mockRigs ?? [] }),
+    };
+  },
   callsign_lookup: (p) => ({
     callsign: p.callsign as string,
     grid: (window as unknown as Record<string, Record<string, string>>).__mockGrids?.[p.callsign as string] ?? null,

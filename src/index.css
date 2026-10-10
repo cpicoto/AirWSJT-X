@@ -19,8 +19,12 @@ body { background: var(--bg); overflow: hidden; height: 100vh; }
 /* ── Shell ──────────────────────────────────────────────────────────── */
 .app {
   display: grid;
-  grid-template-rows: 44px 1fr 44px;
+  grid-template-rows: 44px auto minmax(0, 1fr) 44px;
   height: 100vh;
+}
+
+.app.has-portable-panel {
+  grid-template-rows: 44px auto auto minmax(0, 1fr) 44px;
 }
 
 .topbar {
@@ -138,7 +142,7 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 .portable-overlay {
   position: fixed;
   right: 18px;
-  top: 58px;
+  top: 90px;
   width: min(34vw, 360px);
   min-width: 260px;
   z-index: 40;
@@ -206,23 +210,32 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
   text-shadow: 0 0 12px rgba(88, 166, 255, 0.45);
 }
 
-.portable-footer {
-  margin-top: 8px;
+.portable-toolbar {
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   color: var(--text-muted);
   font-size: 10px;
 }
 
-.portable-footer label {
+.portable-toolbar label {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-.portable-footer input[type="range"] {
+.portable-toolbar input[type="range"] {
   width: 120px;
   accent-color: var(--accent);
+}
+
+.portable-mode[aria-pressed="true"] {
+  background: rgba(88, 166, 255, 0.3);
+  border-color: var(--accent);
 }
 
 /* ── Decode list ─────────────────────────────────────────────────────── */

@@ -272,6 +272,7 @@ def handle(msg: dict) -> None:
             s = supervisor.session
             _ok(id_, {
                 "state": s.state.value,
+                "wsjtx_known_rigs": _wsjtx_listener.get_known_rigs() if _wsjtx_listener else [],
                 "station_a": {"callsign": s.station_a.callsign, "locator": s.station_a.locator} if s.station_a else None,
                 "station_b": {"callsign": s.station_b.callsign, "locator": s.station_b.locator} if s.station_b else None,
                 "selected_aircraft_id": s.selected_aircraft_id,
@@ -1160,6 +1161,10 @@ def _on_wsjtx_disconnected() -> None:
     _emit({"event": "wsjtx_disconnected", "data": {}})
 
 
+def _on_wsjtx_error(message: str) -> None:
+    _emit({"event": "wsjtx_error", "data": {"message": message}})
+
+
 def main() -> None:
     global _wsjtx_listener
     _emit_source_status()
@@ -1168,6 +1173,7 @@ def main() -> None:
         on_decode=_on_wsjtx_decode,
         on_connected=_on_wsjtx_connected,
         on_disconnected=_on_wsjtx_disconnected,
+        on_error=_on_wsjtx_error,
     )
     _wsjtx_listener = listener
     listener.start()

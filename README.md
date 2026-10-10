@@ -47,7 +47,15 @@ Q65-15s operation is enabled only when:
 4. WSJT-X is configured for a supported 23cm+ band
 5. The operator explicitly starts the QSO
 
-When multiple WSJT-X instances are on the same network, use the **Rig** filter in the top bar to select a specific WSJT-X source by rig/config name.
+When multiple WSJT-X instances are on the same network, use the **Rig** dropdown in the top bar to select a discovered WSJT-X instance. The list shows instance IDs and configuration names when available, refreshes every two seconds, and includes rigs seen during this application session even while another rig is selected. Selecting an entry applies and saves the filter immediately; **Any rig** clears it and accepts the first source. A saved selection remains available before that rig is seen again.
+
+### WSJT-X Connection Troubleshooting
+
+- In WSJT-X **Settings > Reporting**, set the UDP server to `224.0.0.1` and port `2237`.
+- Select **Any rig** in the AirWSJT-X **Rig** dropdown to accept the first WSJT-X source, or select a discovered instance.
+- On Windows, allow AirWSJT-X and its Python sidecar through Windows Firewall on the network you use.
+- Listener startup errors (for example, a port already in use) are reported as **WSJT-X error** in the application log and in the sidecar's stderr.
+- If the app reports **Rig discovery unavailable**, rebuild the Python sidecar and restart the desktop app. This indicates that the frontend is running with an older backend; the app remains usable, but discovered rigs cannot be listed until both are updated.
 
 ### Mobile Mode
 
@@ -108,6 +116,8 @@ AirWSJT-X uses WSJT-X native reporting as the primary PSK Reporter path. The Air
 ## UI Reference
 
 ### WSJT-X Status Strip TX Indicator
+
+The **Az / El** toolbar below the title bar is always available. Select **Panel** for an inline readout, **Overlay** for a floating readout, or **Hide** to dismiss it. The **Scale** slider adjusts the readout from 70% to 180%, even while hidden. Display mode and scale are remembered across restarts.
 
 - `TX○` — WSJT-X is idle (not transmitting)
 - Red `TX●` — WSJT-X is currently transmitting (PTT ON)

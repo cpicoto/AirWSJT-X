@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "e2e",
-  testMatch: "screenshots.spec.ts",
+  testMatch: ["screenshots.spec.ts", "rig-filter.spec.ts", "portable-controls.spec.ts", "candidate-layout.spec.ts"],
   timeout: 30000,
   use: {
     baseURL: "http://localhost:1421",

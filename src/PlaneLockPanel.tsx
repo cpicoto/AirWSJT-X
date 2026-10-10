@@ -155,7 +155,7 @@ export default function PlaneLockPanel({
 
       {/* Locked aircraft card */}
       {locked ? (
-        <div style={{
+        <div className="locked-plane" style={{
           padding: "12px 14px", borderRadius: 8,
           border: `2px solid ${sessionState === "ready" ? "#3fb950" : "#58a6ff"}44`,
           background: sessionState === "ready"
@@ -163,13 +163,15 @@ export default function PlaneLockPanel({
         }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
             <ScoreRing score={locked.scatter_score} />
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#58a6ff" }}>
+            <div style={{ flex: "1 1 150px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                <span title={locked.callsign} style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#58a6ff",
+                  maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {locked.callsign}
                 </span>
                 <span style={{ fontSize: 12, color: "#8b949e" }}>
-                  FL{Math.round(locked.altitude_ft / 100)} · {locked.off_path_deg.toFixed(0)}° off-path
+                  Aircraft altitude: {Number.isFinite(locked.altitude_ft) ? `${Math.round(locked.altitude_ft).toLocaleString("en-US")} ft` : "-- ft"}
+                  {" · "}{locked.off_path_deg.toFixed(0)}° off-path
                 </span>
                 <button
                   style={{
@@ -222,10 +224,11 @@ export default function PlaneLockPanel({
               return (
                 <div
                   key={ac.icao24}
+                  className="plane-candidate"
                   onClick={() => onLockAircraft(ac.icao24)}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "24px 1fr 50px 60px 60px 50px",
+                    gridTemplateColumns: "18px minmax(0, 1fr) auto auto",
                     gap: 6, alignItems: "center",
                     padding: "5px 8px", borderRadius: 6, cursor: "pointer",
                     border: `1px solid ${isLocked ? "#58a6ff" : "#30363d"}`,
@@ -234,23 +237,25 @@ export default function PlaneLockPanel({
                   }}
                 >
                   <span style={{ color: "#8b949e", textAlign: "center" }}>{i + 1}</span>
-                  <span style={{ fontFamily: "monospace", fontWeight: isLocked ? 700 : 400,
+                  <span title={ac.callsign} style={{ fontFamily: "monospace", fontWeight: isLocked ? 700 : 400,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     color: isLocked ? "#58a6ff" : "#c9d1d9" }}>
                     {ac.callsign}
                   </span>
-                  <span style={{ color: "#8b949e", textAlign: "center" }}>
-                    FL{Math.round(ac.altitude_ft / 100)}
+                  <span title="Altitude in feet" style={{ color: "#8b949e", textAlign: "center", whiteSpace: "nowrap" }}>
+                    {Number.isFinite(ac.altitude_ft) ? `${Math.round(ac.altitude_ft).toLocaleString("en-US")} ft` : "-- ft"}
                   </span>
                   <span style={{ fontFamily: "monospace", color: scoreColor, fontWeight: 600,
                     textAlign: "center" }}>
                     {(ac.scatter_score * 100).toFixed(0)}%
                   </span>
-                  <span style={{ color: "#8b949e", fontFamily: "monospace", textAlign: "center" }}>
-                    {ac.az_a.toFixed(0)}°/{ac.el_a.toFixed(0)}°
+                  <span style={{ color: "#8b949e", fontFamily: "monospace", gridColumn: "2 / 4" }}>
+                    AZ/EL {ac.az_a.toFixed(0)}°/{ac.el_a.toFixed(0)}°
                   </span>
                   <span style={{ color: ac.off_path_deg < 20 ? "#3fb950"
                     : ac.off_path_deg < 40 ? "#d29922" : "#8b949e",
-                    fontFamily: "monospace", textAlign: "center" }}>
+                    fontFamily: "monospace", textAlign: "right", gridColumn: "4" }}
+                    title="Off-path angle">
                     {ac.off_path_deg.toFixed(0)}°
                   </span>
                 </div>
