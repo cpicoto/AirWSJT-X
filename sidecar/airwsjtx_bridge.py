@@ -7,7 +7,9 @@ Also runs background WSJT-X UDP listener and AirScout aircraft feeds.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,7 +18,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from airwsjtx.airscout import Aircraft, Dump1090Feed, OpenSkyFeed
 from airwsjtx.callsign import lookup as lookup_callsign
-from airwsjtx.geo import locator_to_latlon, scatter_geometry
+from airwsjtx.geo import bearing_deg, heading_within_tolerance, locator_to_latlon, scatter_geometry
 from airwsjtx.hamlib_rotator import HamlibRotator, RotatorPosition
 from airwsjtx.models import AircraftSample, AircraftTrack, Station
 from airwsjtx.supervisor import AirWSJTXSupervisor
@@ -49,6 +51,53 @@ _station_a_locator: str | None = None
 _station_b_locator: str | None = None
 _station_a_call: str | None = None
 _station_b_call: str | None = None
+
+# Aircraft display filters
+_DEFAULT_FILTERS = {
+    "lat_min": None,
+    "lat_max": None,
+    "lon_min": None,
+    "lon_max": None,
+    "altitude_min_ft": None,
+    "heading_tolerance_deg": 30.0,
+}
+
+
+def _aircraft_filter_path() -> str:
+    user_dir = os.path.join(tempfile.gettempdir(), "airwsjtx")
+    os.makedirs(user_dir, exist_ok=True)
+    return os.path.join(user_dir, "aircraft_filters.json")
+
+
+def _read_filters() -> dict[str, float | None]:
+    try:
+        with open(_aircraft_filter_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            result = dict(_DEFAULT_FILTERS)
+            for key, _default in _DEFAULT_FILTERS.items():
+                if key in data:
+                    val = data[key]
+                    if val is None or val == "":
+                        result[key] = None
+                    else:
+                        result[key] = float(val)
+            return result
+    except Exception:
+        pass
+    return dict(_DEFAULT_FILTERS)
+
+
+def _write_filters(filters: dict[str, float | None]) -> None:
+    try:
+        payload = {k: (None if v is None else float(v)) for k, v in filters.items()}
+        with open(_aircraft_filter_path(), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+    except Exception:
+        pass
+
+
+_aircraft_filters = _read_filters()
 
 # Hamlib rotator
 _rotator: HamlibRotator | None = None
@@ -246,9 +295,28 @@ def handle(msg: dict) -> None:
                 "sources": sources,
             })
 
+        elif method == "airscout_apply_filters":
+            raw_filters = params.get("filters")
+            if not isinstance(raw_filters, dict):
+                _err(id_, "filters object required")
+                return
+            next_filters = dict(_DEFAULT_FILTERS)
+            for key, _default in _DEFAULT_FILTERS.items():
+                if key in raw_filters:
+                    value = raw_filters[key]
+                    if value is None or value == "":
+                        next_filters[key] = None
+                    else:
+                        next_filters[key] = float(value)
+            global _aircraft_filters
+            _aircraft_filters = next_filters
+            _write_filters(_aircraft_filters)
+            _emit({"event": "airscout_filters_updated", "data": {"filters": dict(next_filters)}})
+            _ok(id_, {"filters": dict(next_filters)})
+
         elif method == "airscout_get_aircraft":
-            result = _get_scatter_aircraft()
-            _ok(id_, result)
+            result, total = _get_scatter_aircraft_with_total()
+            _ok(id_, {"aircraft": result, "total": total})
 
         elif method == "airscout_fetch_now":
             # Force an immediate OpenSky fetch
@@ -759,6 +827,34 @@ def _start_dump1090_feed(host: str, port: int) -> None:
     _dump1090_feed.start()
 
 
+def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> bool:
+    if ac.lat is None or ac.lon is None or ac.altitude_m is None:
+        return False
+
+    filters = dict(_aircraft_filters)
+    if filters.get("lat_min") is not None and ac.lat < float(filters["lat_min"]):
+        return False
+    if filters.get("lat_max") is not None and ac.lat > float(filters["lat_max"]):
+        return False
+    if filters.get("lon_min") is not None and ac.lon < float(filters["lon_min"]):
+        return False
+    if filters.get("lon_max") is not None and ac.lon > float(filters["lon_max"]):
+        return False
+
+    if filters.get("altitude_min_ft") is not None:
+        altitude_ft = ac.altitude_m * 3.28084
+        if altitude_ft < float(filters["altitude_min_ft"]):
+            return False
+
+    if ac.heading_deg is not None and ac.velocity_ms not in (None, 0):
+        bearing = bearing_deg(lat_a, lon_a, lat_b, lon_b)
+        tolerance = float(filters.get("heading_tolerance_deg") or 30.0)
+        if not heading_within_tolerance(bearing, ac.heading_deg, tolerance):
+            return False
+
+    return True
+
+
 def _get_scatter_aircraft() -> list[dict]:
     """Compute scatter geometry for all cached aircraft and return sorted list."""
     if not _station_a_locator:
@@ -774,6 +870,10 @@ def _get_scatter_aircraft() -> list[dict]:
         except Exception:
             pass
 
+    if lat_b is None or lon_b is None:
+        lat_b = lat_a
+        lon_b = lon_a
+
     results = []
     with _aircraft_lock:
         snapshot = list(_aircraft_cache)
@@ -783,10 +883,11 @@ def _get_scatter_aircraft() -> list[dict]:
             continue
         geo = scatter_geometry(
             lat_a, lon_a,
-            lat_b if lat_b is not None else lat_a,
-            lon_b if lon_b is not None else lon_a,
+            lat_b, lon_b,
             ac.lat, ac.lon, ac.altitude_m,  # type: ignore[arg-type]
         )
+        if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
+            continue
         results.append({
             "icao24": ac.icao24,
             "callsign": ac.callsign or ac.icao24,
@@ -803,15 +904,61 @@ def _get_scatter_aircraft() -> list[dict]:
     return results
 
 
+def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
+    if not _station_a_locator:
+        return [], 0
+    try:
+        lat_a, lon_a = locator_to_latlon(_station_a_locator)
+    except Exception:
+        return [], 0
+
+    lat_b, lon_b = None, None
+    if _station_b_locator:
+        try:
+            lat_b, lon_b = locator_to_latlon(_station_b_locator)
+        except Exception:
+            pass
+    if lat_b is None or lon_b is None:
+        lat_b = lat_a
+        lon_b = lon_a
+
+    results = []
+    total = 0
+    with _aircraft_lock:
+        snapshot = list(_aircraft_cache)
+
+    for ac in snapshot:
+        if not ac.has_position:
+            continue
+        total += 1
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m)  # type: ignore[arg-type]
+        if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
+            continue
+        results.append({
+            "icao24": ac.icao24,
+            "callsign": ac.callsign or ac.icao24,
+            "lat": round(ac.lat, 4),
+            "lon": round(ac.lon, 4),
+            "altitude_m": round(ac.altitude_m),
+            "altitude_ft": round(ac.altitude_m * 3.28084),
+            "velocity_kts": round(ac.velocity_ms * 1.94384) if ac.velocity_ms else None,
+            "heading_deg": round(ac.heading_deg) if ac.heading_deg else None,
+            **geo,
+        })
+
+    results.sort(key=lambda r: r["scatter_score"], reverse=True)
+    return results, total
+
+
 def _emit_aircraft_update() -> None:
-    aircraft = _get_scatter_aircraft()
+    aircraft, total = _get_scatter_aircraft_with_total()
     with _source_status_lock:
         active_source = _active_source
     _emit({
         "event": "airscout_update",
         "data": {
             "aircraft": aircraft[:20],
-            "total": len(aircraft),
+            "total": total,
             "station_a": _station_a_locator,
             "station_b": _station_b_locator,
             "active_source": active_source,

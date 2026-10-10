@@ -59,6 +59,54 @@ interface AirscoutSourceState {
   sources: Record<string, { state: string; message: string | null }>;
 }
 
+interface AircraftFilterSettings {
+  lat_min: number | null;
+  lat_max: number | null;
+  lon_min: number | null;
+  lon_max: number | null;
+  altitude_min_ft: number | null;
+  heading_tolerance_deg: number;
+}
+
+const DEFAULT_AIRCRAFT_FILTERS: AircraftFilterSettings = {
+  lat_min: null,
+  lat_max: null,
+  lon_min: null,
+  lon_max: null,
+  altitude_min_ft: null,
+  heading_tolerance_deg: 30,
+};
+
+function getAircraftFilterStorageKey(stationA: string | null | undefined, stationB: string | null | undefined): string {
+  const keyA = (stationA ?? "default").trim().toUpperCase();
+  const keyB = (stationB ?? "default").trim().toUpperCase();
+  return `airwsjtx.aircraftFilters.${keyA}__${keyB}`;
+}
+
+function parseAircraftFilterNumber(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function loadAircraftFilters(stationA: string | null | undefined, stationB: string | null | undefined): AircraftFilterSettings {
+  try {
+    const raw = localStorage.getItem(getAircraftFilterStorageKey(stationA, stationB));
+    if (!raw) return DEFAULT_AIRCRAFT_FILTERS;
+    const parsed = JSON.parse(raw) as Partial<AircraftFilterSettings>;
+    return {
+      lat_min: parsed.lat_min ?? null,
+      lat_max: parsed.lat_max ?? null,
+      lon_min: parsed.lon_min ?? null,
+      lon_max: parsed.lon_max ?? null,
+      altitude_min_ft: parsed.altitude_min_ft ?? null,
+      heading_tolerance_deg: Number(parsed.heading_tolerance_deg ?? 30),
+    };
+  } catch {
+    return DEFAULT_AIRCRAFT_FILTERS;
+  }
+}
+
 // ─── Sidecar RPC ──────────────────────────────────────────────────────────────
 
 let _rpcId = 0;
@@ -149,6 +197,7 @@ export default function App() {
     const saved = Number(localStorage.getItem(PORTABLE_SCALE_KEY) ?? "100");
     return Number.isFinite(saved) && saved >= 70 && saved <= 180 ? saved : 100;
   });
+  const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
   const [lockedPlane, setLockedPlane] = useState<{
     icao24: string; callsign: string; altitude_ft: number;
     az_a: number; el_a: number; az_b: number; el_b: number;
@@ -342,12 +391,27 @@ export default function App() {
       : "var(--red)";
   const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090"];
 
+  const filteredAircraftCount = aircraft.length;
+  const totalAircraftCount = airscout?.total ?? filteredAircraftCount;
+
   const updateSourcePriority = (nextPriority: string[]) => {
     if (nextPriority.length === 0) return;
     rpc("airscout_set_sources", { sources: nextPriority })
       .then((s) => setSourceStatus(s as AirscoutSourceState))
       .catch((e) => addLog(`AirScout source config: ${e}`));
   };
+
+  const persistAircraftFilters = useCallback((nextFilters: AircraftFilterSettings) => {
+    const normalized: AircraftFilterSettings = {
+      ...nextFilters,
+      heading_tolerance_deg: Number.isFinite(nextFilters.heading_tolerance_deg) ? nextFilters.heading_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg,
+    };
+    const storageKey = getAircraftFilterStorageKey(airscout?.station_a, airscout?.station_b);
+    localStorage.setItem(storageKey, JSON.stringify(normalized));
+    setAircraftFilters(normalized);
+    rpc("airscout_apply_filters", { filters: normalized }).catch(() => {});
+  }, [airscout?.station_a, airscout?.station_b]);
+
   const myCallsign = wsjtxLive.de_call?.trim().toUpperCase() ?? null;
   const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
   const myGrid = (myCallsign ? stationGridOverrides[myCallsign] : null) ?? wsjtxLive.de_grid;
@@ -367,6 +431,11 @@ export default function App() {
   useEffect(() => {
     if (!dxGridEditing) setDxGridInput(selectedDxGrid ?? "");
   }, [selectedDxGrid, dxGridEditing]);
+  useEffect(() => {
+    const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
+    setAircraftFilters(stored);
+    rpc("airscout_apply_filters", { filters: stored }).catch(() => {});
+  }, [airscout?.station_a, airscout?.station_b]);
 
   function savePortableGrid(callsign: string | null, grid: string | null) {
     if (!callsign) return;
@@ -746,6 +815,45 @@ export default function App() {
                 {" · "}
                 <span style={{ color: sourceDotColor }}>{activeSourceState}</span>
                 {activeSourceMessage && <span style={{ color: "var(--text-muted)" }}> — {activeSourceMessage}</span>}
+                {totalAircraftCount > 0 && (
+                  <span style={{ marginLeft: 6, color: "var(--text)" }}>
+                    {filteredAircraftCount}/{totalAircraftCount} shown
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(100px, 1fr))", gap: 4 }}>
+                {[
+                  ["lat_min", "Min lat", "number"],
+                  ["lat_max", "Max lat", "number"],
+                  ["lon_min", "Min lon", "number"],
+                  ["lon_max", "Max lon", "number"],
+                  ["altitude_min_ft", "Min alt ft", "number"],
+                  ["heading_tolerance_deg", "Heading ±°", "number"],
+                ].map(([key, label, type]) => {
+                  const value = aircraftFilters[key as keyof AircraftFilterSettings];
+                  return (
+                    <label key={key} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 9, color: "var(--text-muted)" }}>
+                      <span>{label}</span>
+                      <input
+                        type={type}
+                        value={value == null ? "" : value}
+                        onChange={(e) => {
+                          const next = { ...aircraftFilters };
+                          const parsed = parseAircraftFilterNumber(e.target.value);
+                          (next as Record<string, number | null>)[key] = parsed;
+                          if (key === "heading_tolerance_deg") {
+                            next.heading_tolerance_deg = parsed ?? DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg;
+                          }
+                          persistAircraftFilters(next);
+                        }}
+                        style={{
+                          background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
+                          borderRadius: 4, padding: "2px 5px", fontSize: 10,
+                        }}
+                      />
+                    </label>
+                  );
+                })}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {availableSources.map((source) => {

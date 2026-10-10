@@ -55,6 +55,16 @@ def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (math.degrees(math.atan2(x, y)) + 360) % 360
 
 
+def heading_delta_deg(source_deg: float, target_deg: float) -> float:
+    """Angular difference between headings in degrees."""
+    return abs((source_deg - target_deg + 180.0) % 360.0 - 180.0)
+
+
+def heading_within_tolerance(path_bearing_deg: float, aircraft_heading_deg: float, tolerance_deg: float = 30.0) -> bool:
+    """Return True when an aircraft heading is within the allowed path corridor."""
+    return heading_delta_deg(aircraft_heading_deg, path_bearing_deg) <= abs(tolerance_deg)
+
+
 def elevation_deg(surface_km: float, altitude_m: float) -> float:
     """Elevation angle (degrees) from a station to an aircraft.
     Accounts for Earth curvature for long distances.

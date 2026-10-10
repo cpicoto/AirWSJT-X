@@ -2,6 +2,7 @@ import unittest
 import urllib.error
 
 from airwsjtx.airscout import OpenSkyFeed
+from airwsjtx.geo import heading_delta_deg, heading_within_tolerance
 
 
 class _FakeStopEvent:
@@ -67,6 +68,16 @@ class OpenSkyFeedBackoffTests(unittest.TestCase):
 
         self.assertEqual(feed._stop.waits, [10.0, 5.0, 10.0])  # type: ignore[attr-defined]
         self.assertEqual(errors, [])
+
+
+class AircraftFilterGeometryTests(unittest.TestCase):
+    def test_heading_delta_is_small_for_aligned_aircraft(self) -> None:
+        self.assertEqual(heading_delta_deg(0.0, 20.0), 20.0)
+        self.assertLess(heading_delta_deg(180.0, 200.0), 30.0)
+
+    def test_heading_tolerance_accepts_path_aligned_vectors(self) -> None:
+        self.assertTrue(heading_within_tolerance(0.0, 20.0, 30.0))
+        self.assertFalse(heading_within_tolerance(0.0, 90.0, 30.0))
 
 
 if __name__ == "__main__":
