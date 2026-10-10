@@ -39,7 +39,7 @@ class Dump1090FeedParsingTests(unittest.TestCase):
     def test_parse_sbs_velocity_message(self) -> None:
         feed = Dump1090Feed(report_interval_s=1.0)
         msg = (
-            "MSG,4,1,1,7AC2A7,7AC2A7,0,0,0,0,GABCD,420,180,0,0,0,1500,0,0,0,0,0,0\n"
+            "MSG,4,1,1,7AC2A7,7AC2A7,0,0,0,0,GABCD,0,420,180,0,0,1500,1234,0,0,0,0\n"
         )
 
         feed._parse_sbs(msg)
@@ -49,6 +49,11 @@ class Dump1090FeedParsingTests(unittest.TestCase):
         self.assertAlmostEqual(ac.velocity_ms, 216.06648, places=4)
         self.assertAlmostEqual(ac.heading_deg, 180.0)
         self.assertAlmostEqual(ac.vertical_rate_ms, 7.62)
+
+    def test_parse_beast_is_rejected(self) -> None:
+        feed = Dump1090Feed(report_interval_s=1.0)
+        with self.assertRaises(NotImplementedError):
+            feed._parse_beast(b"\x1a\x20\x00\x00")
 
 
 class OpenSkyFeedBackoffTests(unittest.TestCase):

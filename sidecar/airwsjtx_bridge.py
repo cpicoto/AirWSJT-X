@@ -35,7 +35,7 @@ _opensky_feed: OpenSkyFeed | None = None
 _dump1090_feed: Dump1090Feed | None = None
 _dump1090_host: str = "127.0.0.1"
 _dump1090_port: int = 30003
-_supported_sources = ("opensky", "dump1090", "rtl-sdr", "rtl_sdr")
+_supported_sources = ("opensky", "dump1090")
 _source_priority: list[str] = ["opensky", "dump1090"]
 _source_aliases = {
     "rtl-sdr": "dump1090",

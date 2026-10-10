@@ -216,8 +216,9 @@ class Dump1090Feed:
         text = (raw or "").strip()
         if not text:
             return None
-        if re.fullmatch(r"[A-Z0-9_]{2,8}", text):
-            return text.replace("_", " ").strip()
+        upper = text.upper()
+        if re.fullmatch(r"[A-Z0-9_]{2,8}", upper):
+            return upper.replace("_", " ").strip()
         return None
 
     def _parse_sbs(self, line: str) -> None:
@@ -257,22 +258,18 @@ class Dump1090Feed:
                 alt_ft = self._coerce_float(parts[11]) if len(parts) > 11 else None
                 lat = self._coerce_float(parts[14]) if len(parts) > 14 else None
                 lon = self._coerce_float(parts[15]) if len(parts) > 15 else None
-                on_ground = False
                 if len(parts) > 21:
-                    on_ground = self._coerce_float(parts[21]) == 1.0
+                    ac.on_ground = parts[21].strip() == "1"
                 if alt_ft is not None:
                     ac.altitude_m = alt_ft * 0.3048
                 if lat is not None:
                     ac.lat = lat
                 if lon is not None:
                     ac.lon = lon
-                ac.on_ground = on_ground
             elif msg_type == "4":  # Airborne velocity
-                speed_kts = self._coerce_float(parts[11]) if len(parts) > 11 else None
-                heading = self._coerce_float(parts[12]) if len(parts) > 12 else None
+                speed_kts = self._coerce_float(parts[12]) if len(parts) > 12 else None
+                heading = self._coerce_float(parts[13]) if len(parts) > 13 else None
                 vert = self._coerce_float(parts[16]) if len(parts) > 16 else None
-                if vert is None and len(parts) > 15:
-                    vert = self._coerce_float(parts[15])
                 if speed_kts is not None:
                     ac.velocity_ms = speed_kts * 0.514444
                 if heading is not None:
@@ -282,10 +279,10 @@ class Dump1090Feed:
 
     def _parse_frame(self, frame: str | bytes | bytearray) -> None:
         if isinstance(frame, (bytes, bytearray)):
-            try:
-                text = frame.decode("ascii", "ignore")
-            except Exception:
-                text = ""
+            if frame and frame[0] == 0x1A:
+                self._parse_beast(frame)
+                return
+            text = frame.decode("ascii", "replace")
             if text:
                 self._parse_sbs(text)
                 return
@@ -293,7 +290,10 @@ class Dump1090Feed:
             self._parse_sbs(frame)
 
     def _parse_beast(self, frame: bytes | bytearray) -> None:
-        self._parse_frame(frame)
+        raise NotImplementedError(
+            "dump1090 Beast binary frames are not supported by this client; "
+            "use SBS/CSV output (the standard dump1090 --net-sbs mode)."
+        )
 
     def _expire_stale(self) -> None:
         now = time.monotonic()
