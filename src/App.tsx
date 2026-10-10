@@ -245,6 +245,7 @@ export default function App() {
   const stateColor = STATE_COLOR[state] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
 <<<<<<< HEAD
+<<<<<<< HEAD
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
   const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
   const txIndicatorTitle = wsjtxLive.transmitting
@@ -261,6 +262,10 @@ export default function App() {
 =======
   const canStartQso = state === "ready" || (!autoLock && !!lockedPlane && MANUAL_OVERRIDE_STATES.has(state));
 >>>>>>> 37166b8 (Polish manual override naming and state tests)
+=======
+  const canStartQso = state === SESSION_STATE.READY
+    || (!autoLock && !!lockedPlane && MANUAL_OVERRIDE_STATES.has(state));
+>>>>>>> 74f5dca (Strengthen state gating constants and tests)
 
   return (
     <div className="app">
