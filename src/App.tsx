@@ -402,10 +402,9 @@ export default function App() {
     rotatorSpeechLastProcessedRef.current = { az: rotatorAz, el: rotatorEl };
     const now = Date.now();
     const last = rotatorSpeechLastAnnouncedRef.current;
+    const speechText = `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`;
     if (!last) {
-      const firstUtterance = new SpeechSynthesisUtterance(
-        `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`,
-      );
+      const firstUtterance = new SpeechSynthesisUtterance(speechText);
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(firstUtterance);
       rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
@@ -415,9 +414,7 @@ export default function App() {
     const elDelta = Math.abs(rotatorEl - last.el);
     if (Math.max(azDelta, elDelta) < Math.max(0.1, rotatorSpeechThresholdDeg)) return;
     if (now - last.at < Math.max(0, rotatorSpeechIntervalSec) * 1000) return;
-    const utterance = new SpeechSynthesisUtterance(
-      `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`,
-    );
+    const utterance = new SpeechSynthesisUtterance(speechText);
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
     rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };

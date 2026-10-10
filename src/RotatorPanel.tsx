@@ -456,8 +456,8 @@ export default function RotatorPanel({
                 onChange={(e) => onSpeechThresholdDegChange(parseFloat(e.target.value) || 0.1)}
               />
             </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }}>
-              Interval s
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }} title="Minimum time between speech announcements">
+              Min interval (s)
               <input
                 type="number"
                 min={0}
