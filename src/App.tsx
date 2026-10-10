@@ -235,6 +235,7 @@ export default function App() {
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number } | null>(null);
+  const rotatorSpeechLastProcessedRef = useRef<{ az: number; el: number } | null>(null);
 
   const addLog = useCallback((msg: string) => {
     setLog((l) => [...l.slice(-49), `${new Date().toLocaleTimeString()} ${msg}`]);
@@ -393,11 +394,20 @@ export default function App() {
     if (!rotatorConnected || !rotatorSpeechEnabled) {
       window.speechSynthesis.cancel();
       rotatorSpeechLastAnnouncedRef.current = null;
+      rotatorSpeechLastProcessedRef.current = null;
       return;
     }
+    const processed = rotatorSpeechLastProcessedRef.current;
+    if (processed && processed.az === rotatorAz && processed.el === rotatorEl) return;
+    rotatorSpeechLastProcessedRef.current = { az: rotatorAz, el: rotatorEl };
     const now = Date.now();
     const last = rotatorSpeechLastAnnouncedRef.current;
     if (!last) {
+      const firstUtterance = new SpeechSynthesisUtterance(
+        `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`,
+      );
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(firstUtterance);
       rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
       return;
     }

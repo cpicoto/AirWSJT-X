@@ -445,8 +445,8 @@ export default function RotatorPanel({
               />
               Speech
             </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }}>
-              Δ°
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }} title="Minimum azimuth/elevation change to announce">
+              Min Δ°
               <input
                 type="number"
                 min={0.1}
