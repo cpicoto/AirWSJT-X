@@ -102,6 +102,7 @@ export default function App() {
   const [dxCallsign, setDxCallsign] = useState<string | null>(null);
   const [dxGrid, setDxGrid] = useState<string | null>(null);
   const [autoLock, setAutoLock] = useState(true);
+  const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
   const [lockedPlane, setLockedPlane] = useState<{
     icao24: string; callsign: string; altitude_ft: number;
     az_a: number; el_a: number; az_b: number; el_b: number;
@@ -220,6 +221,12 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    const saved = localStorage.getItem("wsjtxRigNameFilter") ?? "";
+    setWsjtxRigFilter(saved);
+    rpc("wsjtx_set_rig_name_filter", { rig_name: saved || null }).catch(() => {});
+  }, []);
+
   // Scroll log to bottom
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -239,6 +246,18 @@ export default function App() {
       setStatus((s) => s ? { ...s, state: r.state } : s);
       addLog(abort ? "QSO aborted — PTT OFF" : "QSO completed — PTT OFF");
     } catch (e) { addLog(`Error: ${e}`); }
+  }
+
+  async function applyWsjtxRigFilter(rawValue: string) {
+    const value = rawValue.trim();
+    try {
+      await rpc("wsjtx_set_rig_name_filter", { rig_name: value || null });
+      localStorage.setItem("wsjtxRigNameFilter", value);
+      setWsjtxRigFilter(value);
+      addLog(value ? `WSJT-X rig filter: ${value}` : "WSJT-X rig filter cleared");
+    } catch (e) {
+      addLog(`WSJT-X filter error: ${e}`);
+    }
   }
 
   const state = status?.state ?? "idle";
@@ -323,6 +342,30 @@ export default function App() {
           )}
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
+            Rig
+            <input
+              value={wsjtxRigFilter}
+              placeholder="all"
+              style={{
+                width: 92,
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: 4,
+                border: "1px solid var(--border)",
+                background: "var(--surface)",
+                color: "var(--text)",
+              }}
+              onChange={(e) => setWsjtxRigFilter(e.target.value)}
+              onBlur={() => { void applyWsjtxRigFilter(wsjtxRigFilter); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+            />
+          </label>
           {rotatorConnected
             ? <span style={{ fontSize: 10, color: "var(--green)" }}>● rotctld</span>
             : <span style={{ fontSize: 10, color: "var(--red)" }}>○ rotctld</span>}

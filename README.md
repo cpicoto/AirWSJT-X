@@ -20,6 +20,8 @@ This treats the selected airplane as a low-orbit dynamic target and only enables
 4. WSJT-X is configured for a supported 23cm+ band.
 5. The operator explicitly starts the QSO.
 
+When multiple WSJT-X instances are on the same network, use the **Rig** filter in the top bar to select a specific WSJT-X source by rig/config name.
+
 ## PSK Reporter strategy
 
 AirWSJT-X uses WSJT-X native reporting as the primary PSK Reporter path.

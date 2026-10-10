@@ -47,6 +47,7 @@ _locked_aircraft_id: str | None = None
 _lock_score: float = 0.0
 _wsjtx_freq_hz: int | None = None
 _wsjtx_band_mhz: float | None = None
+_wsjtx_listener: WSJTXListener | None = None
 
 
 def _emit(msg: dict) -> None:
@@ -236,6 +237,22 @@ def handle(msg: dict) -> None:
             _station_a_call = params.get("call_a")
             _station_b_call = params.get("call_b")
             _ok(id_, {})
+
+        elif method == "wsjtx_set_rig_name_filter":
+            if _wsjtx_listener is None:
+                _err(id_, "WSJT-X listener not ready")
+            else:
+                rig_name = params.get("rig_name")
+                if rig_name is not None:
+                    rig_name = str(rig_name)
+                _wsjtx_listener.set_rig_name_filter(rig_name)
+                _ok(id_, {"rig_name": _wsjtx_listener.get_rig_name_filter()})
+
+        elif method == "wsjtx_get_rig_name_filter":
+            if _wsjtx_listener is None:
+                _err(id_, "WSJT-X listener not ready")
+            else:
+                _ok(id_, {"rig_name": _wsjtx_listener.get_rig_name_filter()})
 
         elif method == "auto_lock_set":
             global _auto_lock_enabled
@@ -646,12 +663,14 @@ def _on_wsjtx_disconnected() -> None:
 
 
 def main() -> None:
+    global _wsjtx_listener
     listener = WSJTXListener(
         on_status=_on_wsjtx_status,
         on_decode=_on_wsjtx_decode,
         on_connected=_on_wsjtx_connected,
         on_disconnected=_on_wsjtx_disconnected,
     )
+    _wsjtx_listener = listener
     listener.start()
 
     for line in sys.stdin:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 import unittest
 
-from airwsjtx.wsjtx_udp import MSG_STATUS, WSJTX_MAGIC, parse_status
+from airwsjtx.wsjtx_udp import MSG_STATUS, WSJTX_MAGIC, WSJTXListener, WSJTXStatus, parse_status
 
 
 def _enc_str(value: str | None) -> bytes:
@@ -44,6 +44,32 @@ def _build_status_packet(mode: str | None, tr_period: int) -> bytes:
     )
 
 
+def _make_status(app_id: str, config_name: str | None = None) -> WSJTXStatus:
+    return WSJTXStatus(
+        app_id=app_id,
+        freq_hz=1296150000,
+        mode="Q65",
+        dx_call=None,
+        report=None,
+        tx_mode=None,
+        tx_enabled=False,
+        transmitting=False,
+        decoding=True,
+        rx_df=0,
+        tx_df=0,
+        de_call=None,
+        de_grid=None,
+        dx_grid=None,
+        tx_watchdog=False,
+        sub_mode=None,
+        fast_mode=False,
+        special_op_mode=0,
+        freq_tolerance=0,
+        tr_period=15,
+        config_name=config_name,
+    )
+
+
 class WSJTXStatusParsingTests(unittest.TestCase):
     def test_status_maps_fixed_modes_unset_period_to_default(self) -> None:
         for unset in (-1, 0):
@@ -73,6 +99,38 @@ class WSJTXStatusParsingTests(unittest.TestCase):
         self.assertIsNotNone(st)
         assert st is not None
         self.assertIsNone(st.tr_period)
+
+
+class WSJTXListenerFilterTests(unittest.TestCase):
+    def test_without_filter_accepts_any_source(self) -> None:
+        listener = WSJTXListener()
+        self.assertTrue(listener._matches_source("Rig-A"))
+        self.assertTrue(listener._matches_source("Rig-B"))
+
+    def test_filter_matches_app_id_case_insensitive(self) -> None:
+        listener = WSJTXListener(rig_name_filter="my-rig")
+        self.assertTrue(listener._matches_source("MY-RIG"))
+        self.assertFalse(listener._matches_source("other-rig"))
+
+    def test_filter_matches_status_config_name(self) -> None:
+        listener = WSJTXListener(rig_name_filter="home-shack")
+        self.assertTrue(listener._matches_source("WSJT-X", _make_status("WSJT-X", config_name="Home-Shack")))
+        self.assertFalse(listener._matches_source("WSJT-X", _make_status("WSJT-X", config_name="Portable")))
+
+    def test_listener_sticks_to_active_app_id(self) -> None:
+        listener = WSJTXListener()
+        listener._mark_connected("WSJT-X-A")
+        self.assertTrue(listener._matches_source("WSJT-X-A"))
+        self.assertFalse(listener._matches_source("WSJT-X-B"))
+
+    def test_set_filter_disconnects_and_clears_active_source(self) -> None:
+        disconnected: list[bool] = []
+        listener = WSJTXListener(on_disconnected=lambda: disconnected.append(True))
+        listener._mark_connected("WSJT-X-A")
+        listener.set_rig_name_filter("Rig-B")
+        self.assertEqual(listener.get_rig_name_filter(), "Rig-B")
+        self.assertEqual(disconnected, [True])
+        self.assertTrue(listener._matches_source("Rig-B"))
 
 
 if __name__ == "__main__":
