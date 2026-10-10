@@ -58,11 +58,13 @@ class WSJTXStatusParsingTests(unittest.TestCase):
         assert st is not None
         self.assertEqual(st.tr_period, 30.0)
 
-    def test_status_uses_none_for_unmapped_mode_with_negative_period(self) -> None:
-        st = parse_status(_build_status_packet("Q65", -1))
-        self.assertIsNotNone(st)
-        assert st is not None
-        self.assertIsNone(st.tr_period)
+    def test_status_uses_none_for_unmapped_mode_with_unset_period(self) -> None:
+        for unset in (-1, 0):
+            with self.subTest(unset=unset):
+                st = parse_status(_build_status_packet("Q65", unset))
+                self.assertIsNotNone(st)
+                assert st is not None
+                self.assertIsNone(st.tr_period)
 
     def test_status_uses_none_for_missing_mode_with_negative_period(self) -> None:
         st = parse_status(_build_status_packet(None, -1))
