@@ -218,6 +218,7 @@ def check_db_update(
     url: str = DEFAULT_DB_URL,
     timeout_s: int = 8,
     manifest_url: str = DEFAULT_DB_MANIFEST_URL,
+    allow_full_db_fallback: bool = False,
 ) -> dict[str, Any]:
     status = _current_db_status()
     result = dict(status)
@@ -239,18 +240,21 @@ def check_db_update(
         result["remote_entries"] = int(remote_entries)
         result["update_available"] = remote_version_str != (status.get("version") or "")
     except Exception as manifest_exc:
-        try:
-            payload = _download_json(url, timeout_s=timeout_s)
-            remote_version = payload.get("version")
-            if remote_version is None:
-                remote_version = result["checked_at"]
-            remote_version_str = str(remote_version)
-            result["online"] = True
-            result["remote_version"] = remote_version_str
-            result["remote_entries"] = len(_parse_db_entries(payload.get("entries")))
-            result["update_available"] = remote_version_str != (status.get("version") or "")
-        except Exception:
-            result["error"] = str(manifest_exc)
+        if allow_full_db_fallback:
+            try:
+                payload = _download_json(url, timeout_s=timeout_s)
+                remote_version = payload.get("version")
+                if remote_version is None:
+                    remote_version = result["checked_at"]
+                remote_version_str = str(remote_version)
+                result["online"] = True
+                result["remote_version"] = remote_version_str
+                result["remote_entries"] = len(_parse_db_entries(payload.get("entries")))
+                result["update_available"] = remote_version_str != (status.get("version") or "")
+                return result
+            except Exception:
+                pass
+        result["error"] = str(manifest_exc)
     return result
 
 

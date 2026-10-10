@@ -443,6 +443,7 @@ def handle(msg: dict) -> None:
             db_url = str(params.get("url") or "")
             manifest_url = str(params.get("manifest_url") or "")
             timeout_s = int(params.get("timeout_s", 8))
+            allow_full_db_fallback = bool(params.get("allow_full_db_fallback", False))
             if db_url:
                 _ok(
                     id_,
@@ -450,6 +451,7 @@ def handle(msg: dict) -> None:
                         db_url,
                         timeout_s=timeout_s,
                         manifest_url=manifest_url or DEFAULT_DB_MANIFEST_URL,
+                        allow_full_db_fallback=allow_full_db_fallback,
                     ),
                 )
             else:
@@ -458,6 +460,7 @@ def handle(msg: dict) -> None:
                     callsign_check_db_update(
                         timeout_s=timeout_s,
                         manifest_url=manifest_url or DEFAULT_DB_MANIFEST_URL,
+                        allow_full_db_fallback=allow_full_db_fallback,
                     ),
                 )
 
