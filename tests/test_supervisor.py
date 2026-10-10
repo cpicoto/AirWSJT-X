@@ -150,6 +150,10 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
         self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
 
+    def test_start_qso_rejects_idle_state(self) -> None:
+        with self.assertRaises(ValueError):
+            self.supervisor.operator_start_qso()
+
     def test_tracking_target_advances_with_new_samples(self) -> None:
         moving_supervisor = AirWSJTXSupervisor(rotator=RotatorController(stable_samples_required=1))
         moving_track = track("M1", [100, 110, 120], [10, 12, 14], [260, 255, 250])
