@@ -167,10 +167,12 @@ def _replace_aircraft_cache(aircraft: list[Aircraft]) -> None:
 
 
 def _aircraft_cache_age_s(now: float | None = None) -> float | None:
-    if _aircraft_last_update_monotonic is None:
+    with _aircraft_lock:
+        last_update_monotonic = _aircraft_last_update_monotonic
+    if last_update_monotonic is None:
         return None
     now_monotonic = time.monotonic() if now is None else now
-    return max(0.0, now_monotonic - _aircraft_last_update_monotonic)
+    return max(0.0, now_monotonic - last_update_monotonic)
 
 
 def _aircraft_cache_freshness(age_s: float | None) -> str:
@@ -883,11 +885,17 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
 
 def _get_scatter_aircraft() -> list[dict]:
     """Compute scatter geometry for all cached aircraft and return sorted list."""
-    age_s = _aircraft_cache_age_s()
-    if _aircraft_cache_freshness(age_s) == "expired":
-        with _aircraft_lock:
+    now_monotonic = time.monotonic()
+    with _aircraft_lock:
+        age_s = (
+            max(0.0, now_monotonic - _aircraft_last_update_monotonic)
+            if _aircraft_last_update_monotonic is not None
+            else None
+        )
+        if _aircraft_cache_freshness(age_s) == "expired":
             _aircraft_cache.clear()
-        return []
+            return []
+        snapshot = list(_aircraft_cache)
     if not _station_a_locator:
         return []
     try:
@@ -906,9 +914,6 @@ def _get_scatter_aircraft() -> list[dict]:
         lon_b = lon_a
 
     results = []
-    with _aircraft_lock:
-        snapshot = list(_aircraft_cache)
-
     for ac in snapshot:
         if not ac.has_position:
             continue

@@ -417,13 +417,7 @@ export default function App() {
     ? Math.max(0, nowEpochS - airscout.last_update_epoch_s)
     : airscout?.cache_age_s ?? null;
   const dataFreshness = airscout?.data_freshness ?? "empty";
-  const freshnessLabel = dataFreshness === "fresh"
-    ? "fresh"
-    : dataFreshness === "stale"
-      ? "stale"
-      : dataFreshness === "expired"
-        ? "expired"
-        : "waiting";
+  const freshnessLabel = ["fresh", "stale", "expired"].includes(dataFreshness) ? dataFreshness : "waiting";
   const sourceDotColor = activeSourceState === "connected"
     ? "var(--green)"
     : activeSourceState === "backoff" || activeSourceState === "connecting"

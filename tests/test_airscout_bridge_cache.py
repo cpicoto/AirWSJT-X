@@ -7,9 +7,10 @@ from sidecar import airwsjtx_bridge
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._orig_cache = list(airwsjtx_bridge._aircraft_cache)
-        self._orig_last_mono = airwsjtx_bridge._aircraft_last_update_monotonic
-        self._orig_last_epoch = airwsjtx_bridge._aircraft_last_update_epoch_s
+        with airwsjtx_bridge._aircraft_lock:
+            self._orig_cache = list(airwsjtx_bridge._aircraft_cache)
+            self._orig_last_mono = airwsjtx_bridge._aircraft_last_update_monotonic
+            self._orig_last_epoch = airwsjtx_bridge._aircraft_last_update_epoch_s
 
     def tearDown(self) -> None:
         with airwsjtx_bridge._aircraft_lock:
