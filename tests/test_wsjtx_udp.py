@@ -43,11 +43,13 @@ def _build_status_packet(mode: str, tr_period: int) -> bytes:
 
 
 class WSJTXStatusParsingTests(unittest.TestCase):
-    def test_status_maps_ft8_negative_period_to_default(self) -> None:
-        st = parse_status(_build_status_packet("FT8", -1))
-        self.assertIsNotNone(st)
-        assert st is not None
-        self.assertEqual(st.tr_period, 15.0)
+    def test_status_maps_fixed_modes_negative_period_to_default(self) -> None:
+        for mode, expected in (("FT8", 15.0), ("FT4", 7.5), ("FT2", 2.5), ("JT65", 60.0)):
+            with self.subTest(mode=mode):
+                st = parse_status(_build_status_packet(mode, -1))
+                self.assertIsNotNone(st)
+                assert st is not None
+                self.assertEqual(st.tr_period, expected)
 
     def test_status_uses_wire_period_when_positive(self) -> None:
         st = parse_status(_build_status_packet("Q65", 30))
