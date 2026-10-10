@@ -396,7 +396,7 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     if (!rotatorConnected || !rotatorSpeechEnabled) {
-      window.speechSynthesis.cancel();
+      if (rotatorSpeechLastAnnouncedRef.current) window.speechSynthesis.cancel();
       rotatorSpeechLastAnnouncedRef.current = null;
       rotatorSpeechLastProcessedRef.current = null;
       return;
@@ -408,13 +408,13 @@ export default function App() {
     const last = rotatorSpeechLastAnnouncedRef.current;
     const speechText = `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`;
     if (!last) {
-      rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: 0 };
+      rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
       return;
     }
     const azDelta = Math.abs(((rotatorAz - last.az + 540) % 360) - 180);
     const elDelta = Math.abs(rotatorEl - last.el);
-    if (Math.max(azDelta, elDelta) < Math.max(0.1, rotatorSpeechThresholdDeg)) return;
-    if (now - last.at < Math.max(0, rotatorSpeechIntervalSec) * 1000) return;
+    if (Math.max(azDelta, elDelta) < rotatorSpeechThresholdDeg) return;
+    if (now - last.at < rotatorSpeechIntervalSec * 1000) return;
     const utterance = new SpeechSynthesisUtterance(speechText);
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
