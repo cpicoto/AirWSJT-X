@@ -244,10 +244,10 @@ export default function App() {
   const state = status?.state ?? "idle";
   const stateColor = STATE_COLOR[state] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
-  const txOffset = wsjtxLive.tx_df != null ? `${wsjtxLive.tx_df}Hz` : "—";
+  const txOffset = wsjtxLive.tx_df != null ? ` TX frequency offset: ${wsjtxLive.tx_df}Hz.` : "";
   const txIndicatorTitle = wsjtxLive.transmitting
-    ? `TX frequency offset: ${txOffset}. Red TX means transmitting (PTT ON).`
-    : `TX frequency offset: ${txOffset}. TX○ means idle (not transmitting).`;
+    ? `Red TX means transmitting (PTT ON).${txOffset}`
+    : `TX○ means idle (not transmitting).${txOffset}`;
 
   return (
     <div className="app">
