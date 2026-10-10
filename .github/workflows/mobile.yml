@@ -84,6 +84,45 @@ jobs:
           echo "apk_path=$APK" >> $GITHUB_OUTPUT
           cp "$APK" /tmp/AirWSJT-X-android.apk
 
+      - name: Validate APK (manifest + package name)
+        run: |
+          APK=/tmp/AirWSJT-X-android.apk
+          # Use aapt2 from the Android SDK build-tools to inspect the APK.
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" | sort -V | tail -1)
+          echo "Using aapt2: $AAPT2"
+          BADGING=$("$AAPT2" dump badging "$APK")
+          echo "$BADGING"
+          # Verify the package name matches the Tauri identifier.
+          EXPECTED_PKG="com.airwsjtx.app"
+          if echo "$BADGING" | grep -q "package: name='$EXPECTED_PKG'"; then
+            echo "✅ Package name matches: $EXPECTED_PKG"
+          else
+            echo "❌ Package name mismatch! Expected '$EXPECTED_PKG'."
+            exit 1
+          fi
+          # Verify versionName is present and non-empty.
+          if echo "$BADGING" | grep -qE "versionName='[^']+'"; then
+            echo "✅ versionName is set"
+          else
+            echo "❌ versionName is missing or empty in APK manifest."
+            exit 1
+          fi
+          # Verify minSdkVersion is set (required to know device compatibility floor).
+          if echo "$BADGING" | grep -qE "sdkVersion:'[0-9]+'"; then
+            echo "✅ minSdkVersion is present"
+          else
+            echo "❌ minSdkVersion is missing in APK manifest."
+            exit 1
+          fi
+          # Check APK size is non-trivial (catches empty/corrupt builds).
+          SIZE=$(stat -c%s "$APK")
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "❌ APK is suspiciously small ($SIZE bytes); build may have failed silently."
+            exit 1
+          fi
+          echo "✅ APK size OK"
+
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
