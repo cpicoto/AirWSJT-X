@@ -127,8 +127,8 @@ def _parse_header(d: bytes) -> tuple[int, int, int, str | None, int]:
 def _normalize_tr_period(mode: str | None, tr_period: int) -> float | None:
     """Normalize WSJT-X T/R period.
 
-    WSJT-X may emit -1 (and occasionally 0) for fixed-period modes where
-    the period is implied by mode, so we map those modes to known defaults.
+    WSJT-X may emit non-positive values for unset periods where timing is
+    implied by mode, so we map known fixed-period modes to defaults.
     """
     if tr_period > 0:
         return float(tr_period)
