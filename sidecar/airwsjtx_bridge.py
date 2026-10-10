@@ -17,7 +17,13 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from airwsjtx.airscout import Aircraft, Dump1090Feed, OpenSkyFeed
-from airwsjtx.callsign import lookup as lookup_callsign
+from airwsjtx.callsign import (
+    check_db_update as callsign_check_db_update,
+    download_db as callsign_download_db,
+    get_db_status as callsign_get_db_status,
+    lookup as lookup_callsign,
+    submit_grid_contribution as callsign_submit_grid_contribution,
+)
 from airwsjtx.geo import bearing_deg, heading_within_tolerance, locator_to_latlon, scatter_geometry
 from airwsjtx.hamlib_rotator import HamlibRotator, RotatorPosition
 from airwsjtx.models import AircraftSample, AircraftTrack, Station
@@ -428,6 +434,45 @@ def handle(msg: dict) -> None:
                     "country": info.country,
                     "source": info.source,
                 })
+
+        elif method == "callsign_db_status":
+            _ok(id_, callsign_get_db_status())
+
+        elif method == "callsign_db_check_update":
+            db_url = str(params.get("url") or "")
+            timeout_s = int(params.get("timeout_s", 8))
+            if db_url:
+                _ok(id_, callsign_check_db_update(db_url, timeout_s=timeout_s))
+            else:
+                _ok(id_, callsign_check_db_update(timeout_s=timeout_s))
+
+        elif method == "callsign_db_download":
+            db_url = str(params.get("url") or "")
+            timeout_s = int(params.get("timeout_s", 10))
+            if db_url:
+                _ok(id_, callsign_download_db(db_url, timeout_s=timeout_s))
+            else:
+                _ok(id_, callsign_download_db(timeout_s=timeout_s))
+
+        elif method == "callsign_db_submit":
+            call = str(params.get("callsign", "")).strip()
+            grid = str(params.get("grid", "")).strip()
+            if not call or not grid:
+                _err(id_, "callsign and grid required")
+            else:
+                lat = params.get("lat")
+                lon = params.get("lon")
+                lat_val = float(lat) if lat not in (None, "") else None
+                lon_val = float(lon) if lon not in (None, "") else None
+                result = callsign_submit_grid_contribution(
+                    call,
+                    grid,
+                    name=params.get("name"),
+                    country=params.get("country"),
+                    lat=lat_val,
+                    lon=lon_val,
+                )
+                _ok(id_, result)
 
         elif method == "set_station_calls":
             global _station_a_call, _station_b_call

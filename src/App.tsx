@@ -61,6 +61,17 @@ interface AirscoutSourceState {
   priority: string[];
   sources: Record<string, { state: string; message: string | null }>;
 }
+interface CallsignDbStatus {
+  db_url: string;
+  version: string | null;
+  downloaded_at: string | null;
+  entries: number;
+  fresh: boolean;
+  freshness_days: number;
+  online?: boolean;
+  remote_version?: string | null;
+  update_available?: boolean;
+}
 
 interface AircraftFilterSettings {
   lat_min: number | null;
@@ -202,6 +213,8 @@ export default function App() {
     return Number.isFinite(saved) && saved >= 70 && saved <= 180 ? saved : 100;
   });
   const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
+  const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
+  const [callsignDbBusy, setCallsignDbBusy] = useState(false);
   const [lockedPlane, setLockedPlane] = useState<{
     icao24: string; callsign: string; altitude_ft: number;
     az_a: number; el_a: number; az_b: number; el_b: number;
@@ -339,6 +352,15 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(() => setNowEpochS(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    rpc("callsign_db_status")
+      .then((s) => setCallsignDbStatus(s as CallsignDbStatus))
+      .catch(() => {});
+    rpc("callsign_db_check_update")
+      .then((s) => setCallsignDbStatus(s as CallsignDbStatus))
+      .catch(() => {});
   }, []);
 
   // Scroll log to bottom
@@ -765,7 +787,71 @@ export default function App() {
                 }}>
                 + Other
               </button>
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+                onClick={async () => {
+                  setCallsignDbBusy(true);
+                  try {
+                    const s = await rpc("callsign_db_check_update") as CallsignDbStatus;
+                    setCallsignDbStatus(s);
+                    addLog(
+                      s.online
+                        ? (s.update_available
+                          ? `Callsign DB update available (${s.remote_version ?? "new version"})`
+                          : "Callsign DB is up to date")
+                        : "Callsign DB update check failed (offline)",
+                    );
+                  } catch (e) {
+                    addLog(`Callsign DB check failed: ${e}`);
+                  } finally {
+                    setCallsignDbBusy(false);
+                  }
+                }}
+                disabled={callsignDbBusy}>
+                DB Check
+              </button>
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+                onClick={async () => {
+                  setCallsignDbBusy(true);
+                  try {
+                    const s = await rpc("callsign_db_download") as CallsignDbStatus;
+                    setCallsignDbStatus(s);
+                    addLog(`Callsign DB downloaded (${s.entries} entries, ${s.version ?? "no version"})`);
+                  } catch (e) {
+                    addLog(`Callsign DB download failed: ${e}`);
+                  } finally {
+                    setCallsignDbBusy(false);
+                  }
+                }}
+                disabled={callsignDbBusy}>
+                DB Update
+              </button>
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+                onClick={async () => {
+                  const call = prompt("Contribute callsign:");
+                  if (!call) return;
+                  const grid = prompt("Contribute grid (Maidenhead):");
+                  if (!grid) return;
+                  try {
+                    const result = await rpc("callsign_db_submit", { callsign: call, grid }) as { accepted: boolean; queued: number };
+                    addLog(
+                      result.accepted
+                        ? `Contribution submitted: ${call.toUpperCase()} ${grid.toUpperCase()}`
+                        : `Contribution queued offline (${result.queued} pending)`,
+                    );
+                  } catch (e) {
+                    addLog(`Contribution failed: ${e}`);
+                  }
+                }}>
+                Contribute
+              </button>
             </div>
+            {callsignDbStatus && (
+              <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-muted)" }}>
+                Callsign DB: {callsignDbStatus.version ?? "not downloaded"} · {callsignDbStatus.entries} entries ·
+                {callsignDbStatus.fresh ? " fresh" : " stale"}
+                {callsignDbStatus.update_available ? " · update available" : ""}
+              </div>
+            )}
           </div>
 
           {/* Plane Lock — flex fills remaining space */}
