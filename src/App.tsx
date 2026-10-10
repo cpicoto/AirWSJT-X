@@ -88,6 +88,12 @@ const STATE_COLOR: Record<string, string> = {
 };
 
 const PORTABLE_GRID_OVERRIDES_KEY = "airwsjtx.portableGridOverrides";
+const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
+const PORTABLE_SCALE_KEY = "airwsjtx.portableScale";
+const PORTABLE_MIN_FONT_PX = 28;
+const PORTABLE_BASE_FONT_PX = 72;
+
+type PortableViewMode = "hidden" | "panel" | "overlay";
 
 function normalizeGrid(grid: string | null | undefined): string | null {
   const normalized = (grid ?? "").trim().toUpperCase();
@@ -135,6 +141,14 @@ export default function App() {
   const [dxGridEditing, setDxGridEditing] = useState(false);
   const [autoLock, setAutoLock] = useState(true);
   const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
+  const [portableView, setPortableView] = useState<PortableViewMode>(() => {
+    const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
+    return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
+  });
+  const [portableScale, setPortableScale] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(PORTABLE_SCALE_KEY) ?? "100");
+    return Number.isFinite(saved) && saved >= 70 && saved <= 180 ? saved : 100;
+  });
   const [lockedPlane, setLockedPlane] = useState<{
     icao24: string; callsign: string; altitude_ft: number;
     az_a: number; el_a: number; az_b: number; el_b: number;
@@ -340,6 +354,14 @@ export default function App() {
   const selectedDxGrid = (dxCall ? stationGridOverrides[dxCall] : null) ?? dxGrid;
 
   useEffect(() => {
+    localStorage.setItem(PORTABLE_VIEW_KEY, portableView);
+  }, [portableView]);
+
+  useEffect(() => {
+    localStorage.setItem(PORTABLE_SCALE_KEY, String(portableScale));
+  }, [portableScale]);
+
+  useEffect(() => {
     if (!myGridEditing) setMyGridInput(myGrid ?? "");
   }, [myGrid, myGridEditing]);
   useEffect(() => {
@@ -359,8 +381,50 @@ export default function App() {
     });
   }
 
+  const currentAz = lockedPlane ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
+  const currentEl = lockedPlane ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
+  const portableFontPx = Math.max(PORTABLE_MIN_FONT_PX, PORTABLE_BASE_FONT_PX * portableScale / 100);
+  const portableReadout = (
+  <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
+    <div className="portable-header">
+      <span>Az / El</span>
+      <div className="portable-controls">
+        <button className="portable-mode" onClick={() => setPortableView("panel")}>Panel</button>
+        <button className="portable-mode" onClick={() => setPortableView("overlay")}>Overlay</button>
+        <button className="portable-mode" onClick={() => setPortableView("hidden")}>Hide</button>
+      </div>
+    </div>
+    <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
+      <div className="portable-readout">
+        <span className="portable-label">AZ</span>
+        <span className="portable-value">{Number.isFinite(currentAz) ? currentAz.toFixed(1) : "--.-"}°</span>
+      </div>
+      <div className="portable-readout">
+        <span className="portable-label">EL</span>
+        <span className="portable-value">{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
+      </div>
+    </div>
+    <div className="portable-footer">
+      <label>
+        Scale
+        <input
+          type="range"
+          min={70}
+          max={180}
+          step={5}
+          value={portableScale}
+          onChange={(e) => setPortableScale(Number(e.target.value))}
+        />
+      </label>
+    </div>
+  </div>
+  );
+
+  const portableDisplay = portableView === "hidden" ? null : portableReadout;
+
   return (
     <div className="app">
+      {portableView === "overlay" && portableDisplay}
 
       {/* ── Top bar ── */}
       <header className="topbar">
@@ -452,6 +516,8 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {portableView === "panel" && portableDisplay}
 
       {/* ── 3-column content ── */}
       <div className="content">
