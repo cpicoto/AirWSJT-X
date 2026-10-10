@@ -292,7 +292,10 @@ export default function App() {
                 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>RX {wsjtxLive.rx_df}Hz</span>
               )}
               {wsjtxLive.tx_df != null && (
-                <span style={{ color: "var(--text-muted)", fontSize: 11 }} title="TX frequency offset in Hz">
+                <span
+                  style={{ color: "var(--text-muted)", fontSize: 11 }}
+                  title={`TX frequency offset: ${wsjtxLive.tx_df}Hz.`}
+                >
                   TX {wsjtxLive.tx_df}Hz
                 </span>
               )}
