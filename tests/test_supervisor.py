@@ -122,6 +122,21 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
         self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
 
+    def test_start_qso_rejects_invalid_session_state(self) -> None:
+        with self.assertRaises(ValueError):
+            self.supervisor.operator_start_qso()
+
+        self.supervisor.begin_session(
+            station_a=self.station_a,
+            station_b=self.station_b,
+            band_mhz=1296.0,
+            frequency_hz=1296150000,
+            tracks=[self.valid_track],
+        )
+        self.supervisor.finish_qso(abort=True)
+        with self.assertRaises(ValueError):
+            self.supervisor.operator_start_qso()
+
     def test_tracking_target_advances_with_new_samples(self) -> None:
         moving_supervisor = AirWSJTXSupervisor(rotator=RotatorController(stable_samples_required=1))
         moving_track = track("M1", [100, 110, 120], [10, 12, 14], [260, 255, 250])

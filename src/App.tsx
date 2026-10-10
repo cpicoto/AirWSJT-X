@@ -254,7 +254,7 @@ export default function App() {
     wsjtxLive.connected &&
     wsjtxLive.mode === "Q65" &&
     wsjtxLive.tr_period === 15 &&
-    (wsjtxLive.freq_mhz == null || wsjtxLive.freq_mhz >= 1240);
+    (wsjtxLive.freq_mhz === null || wsjtxLive.freq_mhz >= 1240);
 
   return (
     <div className="app">
