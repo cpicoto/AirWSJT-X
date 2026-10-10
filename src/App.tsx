@@ -52,6 +52,9 @@ interface AirscoutUpdate {
   station_a: string | null;
   station_b: string | null;
   active_source?: string | null;
+  last_update_epoch_s?: number | null;
+  cache_age_s?: number | null;
+  data_freshness?: string | null;
 }
 interface AirscoutSourceState {
   active_source: string | null;
@@ -187,6 +190,7 @@ export default function App() {
   const [dxGridInput, setDxGridInput] = useState("");
   const [myGridEditing, setMyGridEditing] = useState(false);
   const [dxGridEditing, setDxGridEditing] = useState(false);
+  const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
   const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
@@ -332,6 +336,11 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const id = setInterval(() => setNowEpochS(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // Scroll log to bottom
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -384,6 +393,37 @@ export default function App() {
   const activeSource = sourceStatus?.active_source ?? airscout?.active_source ?? null;
   const activeSourceState = activeSource ? sourceStatus?.sources?.[activeSource]?.state ?? "unknown" : "stopped";
   const activeSourceMessage = activeSource ? sourceStatus?.sources?.[activeSource]?.message ?? null : null;
+  const openskyState = sourceStatus?.sources?.opensky?.state ?? "stopped";
+  const connectivityState = activeSource === "dump1090" && activeSourceState === "connected"
+    ? "local"
+    : openskyState === "connected"
+      ? "online"
+      : ["backoff", "connecting", "disconnected"].includes(openskyState)
+        ? "degraded"
+        : "offline";
+  const connectivityColor = connectivityState === "online" || connectivityState === "local"
+    ? "var(--green)"
+    : connectivityState === "degraded"
+      ? "var(--yellow)"
+      : "var(--red)";
+  const connectivityLabel = connectivityState === "local"
+    ? "LOCAL ADS-B"
+    : connectivityState === "online"
+      ? "NET ONLINE"
+      : connectivityState === "degraded"
+        ? "NET DEGRADED"
+        : "NET OFFLINE";
+  const cacheAgeSeconds = airscout?.last_update_epoch_s
+    ? Math.max(0, nowEpochS - airscout.last_update_epoch_s)
+    : airscout?.cache_age_s ?? null;
+  const dataFreshness = airscout?.data_freshness ?? "empty";
+  const freshnessLabel = dataFreshness === "fresh"
+    ? "fresh"
+    : dataFreshness === "stale"
+      ? "stale"
+      : dataFreshness === "expired"
+        ? "expired"
+        : "waiting";
   const sourceDotColor = activeSourceState === "connected"
     ? "var(--green)"
     : activeSourceState === "backoff" || activeSourceState === "connecting"
@@ -572,8 +612,11 @@ export default function App() {
               }}
             />
           </label>
+          <span style={{ fontSize: 10, color: connectivityColor, fontWeight: 600 }}>
+            {connectivityLabel}
+          </span>
           <span style={{ fontSize: 10, color: sourceDotColor }}>
-            {activeSource ? "●" : "○"} {activeSource ?? "no source"}
+            {activeSource ? "●" : "○"} {activeSource ?? "no source"} · {freshnessLabel}
           </span>
           {rotatorConnected
             ? <span style={{ fontSize: 10, color: "var(--green)" }}>● rotctld</span>
@@ -815,6 +858,13 @@ export default function App() {
                 {" · "}
                 <span style={{ color: sourceDotColor }}>{activeSourceState}</span>
                 {activeSourceMessage && <span style={{ color: "var(--text-muted)" }}> — {activeSourceMessage}</span>}
+                {" · "}
+                <span style={{ color: dataFreshness === "fresh" ? "var(--green)" : dataFreshness === "stale" ? "var(--yellow)" : "var(--red)" }}>
+                  {freshnessLabel}
+                </span>
+                {cacheAgeSeconds != null && (
+                  <span style={{ color: "var(--text-muted)" }}> ({cacheAgeSeconds}s ago)</span>
+                )}
                 {totalAircraftCount > 0 && (
                   <span style={{ marginLeft: 6, color: "var(--text)" }}>
                     {filteredAircraftCount}/{totalAircraftCount} shown

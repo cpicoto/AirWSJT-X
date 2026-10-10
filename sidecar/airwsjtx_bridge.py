@@ -45,6 +45,10 @@ _source_status: dict[str, dict[str, str | None]] = {
 }
 _active_source: str | None = None
 _opensky_rate_limit_count = 0
+_aircraft_cache_stale_after_s = 45.0
+_aircraft_cache_expire_after_s = 120.0
+_aircraft_last_update_monotonic: float | None = None
+_aircraft_last_update_epoch_s: int | None = None
 
 # Station locators (updated from WSJT-X or RPC)
 _station_a_locator: str | None = None
@@ -149,6 +153,34 @@ def _normalize_sources(raw_sources: object) -> list[str]:
         return normalized
     with _source_priority_lock:
         return list(_source_priority)
+
+
+def _replace_aircraft_cache(aircraft: list[Aircraft]) -> None:
+    global _aircraft_last_update_monotonic, _aircraft_last_update_epoch_s
+    now_monotonic = time.monotonic()
+    now_epoch = int(time.time())
+    with _aircraft_lock:
+        _aircraft_cache.clear()
+        _aircraft_cache.extend(aircraft)
+        _aircraft_last_update_monotonic = now_monotonic
+        _aircraft_last_update_epoch_s = now_epoch
+
+
+def _aircraft_cache_age_s(now: float | None = None) -> float | None:
+    if _aircraft_last_update_monotonic is None:
+        return None
+    now_monotonic = time.monotonic() if now is None else now
+    return max(0.0, now_monotonic - _aircraft_last_update_monotonic)
+
+
+def _aircraft_cache_freshness(age_s: float | None) -> str:
+    if age_s is None:
+        return "empty"
+    if age_s <= _aircraft_cache_stale_after_s:
+        return "fresh"
+    if age_s <= _aircraft_cache_expire_after_s:
+        return "stale"
+    return "expired"
 
 
 def _emit(msg: dict) -> None:
@@ -323,9 +355,7 @@ def handle(msg: dict) -> None:
             try:
                 if _active_source == "opensky" and _opensky_feed:
                     aircraft = _opensky_feed.fetch_once()
-                    with _aircraft_lock:
-                        _aircraft_cache.clear()
-                        _aircraft_cache.extend(aircraft)
+                    _replace_aircraft_cache(aircraft)
                     _emit_aircraft_update()
                     _ok(id_, {"count": len(aircraft)})
                 elif _active_source == "dump1090":
@@ -559,9 +589,7 @@ def _start_opensky_feed() -> None:
         with _source_status_lock:
             _opensky_rate_limit_count = 0
         _set_source_status("opensky", "connected")
-        with _aircraft_lock:
-            _aircraft_cache.clear()
-            _aircraft_cache.extend(aircraft)
+        _replace_aircraft_cache(aircraft)
         _emit_aircraft_update()
 
     def _on_rate_limited(wait_s: float) -> None:
@@ -792,9 +820,7 @@ def _start_dump1090_feed(host: str, port: int) -> None:
 
     def _on_update(aircraft: list[Aircraft]) -> None:
         _set_source_status("dump1090", "connected")
-        with _aircraft_lock:
-            _aircraft_cache.clear()
-            _aircraft_cache.extend(aircraft)
+        _replace_aircraft_cache(aircraft)
         _emit_aircraft_update()
 
     def _on_connected() -> None:
@@ -857,6 +883,11 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
 
 def _get_scatter_aircraft() -> list[dict]:
     """Compute scatter geometry for all cached aircraft and return sorted list."""
+    age_s = _aircraft_cache_age_s()
+    if _aircraft_cache_freshness(age_s) == "expired":
+        with _aircraft_lock:
+            _aircraft_cache.clear()
+        return []
     if not _station_a_locator:
         return []
     try:
@@ -951,6 +982,8 @@ def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
 
 
 def _emit_aircraft_update() -> None:
+    age_s = _aircraft_cache_age_s()
+    freshness = _aircraft_cache_freshness(age_s)
     aircraft, total = _get_scatter_aircraft_with_total()
     with _source_status_lock:
         active_source = _active_source
@@ -962,6 +995,9 @@ def _emit_aircraft_update() -> None:
             "station_a": _station_a_locator,
             "station_b": _station_b_locator,
             "active_source": active_source,
+            "last_update_epoch_s": _aircraft_last_update_epoch_s,
+            "cache_age_s": round(age_s, 1) if age_s is not None else None,
+            "data_freshness": freshness,
         },
     })
     # Update tracking or try auto-lock
