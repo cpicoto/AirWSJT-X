@@ -1,0 +1,99 @@
+name: Mobile Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # iOS build requires Apple Developer signing credentials.
+  # To enable: add APPLE_DEVELOPMENT_TEAM secret, uncomment this job.
+  # ios:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: "22"
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: aarch64-apple-ios
+  #     - run: npm ci
+  #     - run: npx tauri ios init
+  #     - name: Build iOS
+  #       run: npx tauri ios build --export-method debugging
+  #       env:
+  #         APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+  #     - name: Package iOS artifacts
+  #       run: find src-tauri/gen/apple -name "*.app" -type d | head -1 | xargs -I{} tar czf /tmp/AirWSJT-X-ios.tar.gz {}
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: ios-build
+  #         path: /tmp/AirWSJT-X-ios.tar.gz
+  #     - uses: softprops/action-gh-release@v2
+  #       if: startsWith(github.ref, 'refs/tags/v')
+  #       with:
+  #         files: /tmp/AirWSJT-X-ios.tar.gz
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install Android NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Initialize Tauri Android
+        run: npx tauri android init
+
+      - name: Build Android APK
+        run: npx tauri android build --apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find APK
+        id: find_apk
+        run: |
+          APK=$(find src-tauri/gen/android -name "*.apk" -type f | head -1)
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          cp "$APK" /tmp/AirWSJT-X-android.apk
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: /tmp/AirWSJT-X-android.apk
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/AirWSJT-X-android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

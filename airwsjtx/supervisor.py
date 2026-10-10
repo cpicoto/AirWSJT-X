@@ -86,6 +86,8 @@ class AirWSJTXSupervisor:
         return command
 
     def operator_start_qso(self) -> None:
+        if not self.wsjtx.is_ready_for_qso():
+            raise ValueError("WSJT-X must be configured for Q65-15s on a supported 23cm+ band before starting a QSO.")
         self.session.start_qso()
         self.wsjtx.set_ptt(True)
 

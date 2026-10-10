@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>AirWSJT-X — Aircraft Scatter for WSJT-X | AD7NP</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d37;
+      --text: #e4e4e7;
+      --muted: #9ca3af;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --purple: #a855f7;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .container { max-width: 860px; margin: 0 auto; padding: 2rem 1.5rem; }
+    header { text-align: center; margin-bottom: 3rem; }
+    h1 { font-size: 2.4rem; font-weight: 700; margin-bottom: 0.3rem; }
+    h1 span { color: var(--accent); }
+    .tagline { color: var(--muted); font-size: 1.1rem; }
+    .badge {
+      display: inline-block;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.85rem;
+      color: var(--green);
+      margin-top: 0.75rem;
+    }
+    .screenshot {
+      margin-bottom: 2.5rem;
+      text-align: center;
+    }
+    .screenshot img {
+      width: 100%;
+      max-width: 860px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+    .screenshot .caption {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-top: 0.5rem;
+    }
+    .screenshot video {
+      width: 100%;
+      max-width: 860px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+      margin-top: 1.5rem;
+    }
+
+    /* Download section */
+    .download-section {
+      margin-bottom: 2.5rem;
+    }
+    .download-section h2 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .platform-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    @media (max-width: 600px) { .platform-group { grid-template-columns: 1fr; } }
+    .platform-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      text-align: center;
+    }
+    .platform-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.2rem;
+    }
+    .platform-card .platform-icon {
+      font-size: 1.8rem;
+      margin-bottom: 0.4rem;
+    }
+    .platform-card .dl-links {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+    .download-btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      padding: 0.6rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    .download-btn:hover { background: var(--accent-hover); }
+    .download-btn.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-weight: 500;
+      font-size: 0.85rem;
+      padding: 0.4rem 1rem;
+    }
+    .download-btn.secondary:hover { background: var(--surface); border-color: var(--accent); }
+    .dl-meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.3rem; }
+    .new-badge {
+      display: inline-block;
+      background: var(--purple);
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+
+    /* What's new */
+    .whats-new {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2.5rem;
+    }
+    .whats-new h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      color: var(--green);
+    }
+    .whats-new ul { padding-left: 1.5rem; margin: 0; }
+    .whats-new li { margin-bottom: 0.3rem; font-size: 0.95rem; }
+
+    section { margin-bottom: 2.5rem; }
+    h2 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    p { margin-bottom: 0.75rem; }
+    ul { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    li { margin-bottom: 0.4rem; }
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 600px) { .features { grid-template-columns: 1fr; } }
+    .feature {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.2rem;
+    }
+    .feature h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.3rem; }
+    .feature p { font-size: 0.9rem; color: var(--muted); margin: 0; }
+    .tech-stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .tech-tag {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.2rem 0.6rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .req-list { list-style: none; padding: 0; }
+    .req-list li { padding: 0.3rem 0; padding-left: 1.5rem; position: relative; }
+    .req-list li::before { content: "\2192"; position: absolute; left: 0; color: var(--accent); }
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.82rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    .callsign { font-weight: 700; color: var(--green); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Air<span>WSJT-X</span></h1>
+      <p class="tagline">Aircraft Scatter contacts on 23 cm and above — automated</p>
+      <div class="badge">v__VERSION__ — Code-Signed macOS + Mobile Support</div>
+    </header>
+
+    <div class="screenshot">
+      <img src="airwsjtx-screenshot-v022.png" alt="AirWSJT-X application showing simulated aircraft scatter contact between AD7NP and K7MDL on 10.368 GHz with plane lock on UAL1547, rotator tracking, and Q65 decodes">
+      <div class="caption">AirWSJT-X tracking aircraft scatter between AD7NP (CN87vp) and K7MDL (CN87tp) on 10.368 GHz — UAL1547 locked at 82% scatter score, Q65-15s</div>
+      <video controls autoplay muted loop playsinline>
+        <source src="airwsjtx-demo.mp4" type="video/mp4">
+      </video>
+      <div class="caption">Demo: Full contact lifecycle — startup → aircraft scan → plane lock → QSO exchange → completion</div>
+    </div>
+
+    <div class="whats-new">
+      <h2>What's New in v0.2.0</h2>
+      <ul>
+        <li><strong>Mobile app for Android</strong> — standalone aircraft tracker with OpenSky Network integration</li>
+        <li><strong>Compass rose &amp; elevation arc</strong> — visual Az/El display for hand-pointing antennas in the field</li>
+        <li><strong>Offline callsign database</strong> — callook.info DB stored locally on mobile via IndexedDB</li>
+        <li><strong>Speech callouts</strong> — audible Az/El announcements for selected aircraft while pointing</li>
+        <li><strong>Platform detection</strong> — desktop launches full WSJT-X supervisor; mobile launches standalone tracker</li>
+      </ul>
+    </div>
+
+    <div class="download-section">
+      <h2>Downloads</h2>
+      <div class="platform-group">
+        <div class="platform-card">
+          <div class="platform-icon">&#63743;</div>
+          <h3>macOS</h3>
+          <div class="dl-links">
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X___VERSION___aarch64.dmg" class="download-btn">Apple Silicon (.dmg)</a>
+            <div class="dl-meta">12 MB &middot; macOS 13+</div>
+          </div>
+        </div>
+        <div class="platform-card">
+          <div class="platform-icon">&#9881;</div>
+          <h3>Windows</h3>
+          <div class="dl-links">
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X___VERSION___x64_en-US.msi" class="download-btn">Installer (.msi)</a>
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X___VERSION___x64-setup.exe" class="download-btn secondary">Setup (.exe)</a>
+            <div class="dl-meta">13 MB &middot; Windows 10/11 x64</div>
+          </div>
+        </div>
+      </div>
+      <div class="platform-group">
+        <div class="platform-card">
+          <div class="platform-icon">&#128241;</div>
+          <h3>Android <span class="new-badge">New</span></h3>
+          <div class="dl-links">
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X-android.apk" class="download-btn">Download APK</a>
+            <div class="dl-meta">46 MB &middot; Android 8.0+</div>
+          </div>
+        </div>
+        <div class="platform-card" style="border-style: dashed;">
+          <div class="platform-icon">&#127822;</div>
+          <h3>iOS</h3>
+          <div class="dl-links">
+            <div class="dl-meta" style="color: var(--amber);">Coming soon — TestFlight beta planned</div>
+          </div>
+        </div>
+      </div>
+      <p style="text-align: center; margin-top: 0.5rem;">
+        <a href="https://github.com/cpicoto/AirWSJT-X/releases/tag/v__VERSION__" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">View all release assets on GitHub &rarr;</a>
+      </p>
+    </div>
+
+    <section>
+      <h2>What is AirWSJT-X?</h2>
+      <p>
+        AirWSJT-X merges <strong>AirScout</strong> aircraft tracking with <strong>WSJT-X</strong> weak-signal
+        digital modes to automate aircraft scatter contacts on 1296 MHz (23 cm) and higher microwave bands.
+      </p>
+      <p>
+        It treats commercial aircraft as dynamic, low-orbit reflectors. When a viable aircraft is detected
+        between two stations, AirWSJT-X locks the rotator, configures WSJT-X for Q65-15s operation, and
+        manages the entire QSO sequence — from airplane selection through contact completion.
+      </p>
+      <p>
+        The <strong>mobile app</strong> brings standalone aircraft tracking to the field — a compass rose and
+        elevation arc for hand-pointing antennas at aircraft, with speech callouts for hands-free operation.
+        No WSJT-X or rotator required.
+      </p>
+    </section>
+
+    <section>
+      <h2>Features</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>Aircraft Tracking</h3>
+          <p>Real-time airplane position tracking with automatic selection of viable scatter targets between two configured stations.</p>
+        </div>
+        <div class="feature">
+          <h3>Rotator Lock</h3>
+          <p>Automated rotator control via Hamlib — locks antenna bearing to the selected aircraft and maintains tracking stability.</p>
+        </div>
+        <div class="feature">
+          <h3>WSJT-X Integration</h3>
+          <p>Controls WSJT-X via UDP protocol for Q65-15s mode on 23 cm+ bands. Manages frequency, mode, and QSO sequencing.</p>
+        </div>
+        <div class="feature">
+          <h3>Contact State Machine</h3>
+          <p>Full QSO state machine manages the contact from CQ through 73, with automatic retry and timeout handling.</p>
+        </div>
+        <div class="feature">
+          <h3>Mobile Compass Rose <span class="new-badge">New</span></h3>
+          <p>Visual aircraft positions on a compass display with bearing needle and elevation arc — designed for hand-pointing in the field.</p>
+        </div>
+        <div class="feature">
+          <h3>Speech Callouts <span class="new-badge">New</span></h3>
+          <p>Audible azimuth and elevation announcements for the selected aircraft, so you can point without looking at the screen.</p>
+        </div>
+        <div class="feature">
+          <h3>Callsign Database <span class="new-badge">New</span></h3>
+          <p>Offline callsign lookup via callook.info with IndexedDB storage on mobile — identify operators without an internet connection.</p>
+        </div>
+        <div class="feature">
+          <h3>Modern Desktop UI</h3>
+          <p>Built with Tauri + React — lightweight native app with station config, plane lock panel, and rotator status display.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>How It Works</h2>
+      <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem;">Desktop (Full Mode)</h3>
+      <p>AirWSJT-X enables Q65-15s operation only when all conditions are met:</p>
+      <ul class="req-list">
+        <li>Two stations are configured (your station + target station)</li>
+        <li>A viable aircraft is detected and selected as a scatter target</li>
+        <li>Rotator lock is acquired and remains stable</li>
+        <li>WSJT-X is configured for a supported 23 cm+ band (1296 MHz and up)</li>
+        <li>The operator explicitly starts the QSO</li>
+      </ul>
+      <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; margin-top: 1rem;">Mobile (Standalone Tracker)</h3>
+      <p>The mobile app operates independently — no WSJT-X or rotator needed:</p>
+      <ul class="req-list">
+        <li>Enter your grid locator in settings</li>
+        <li>Aircraft in your area appear on the compass rose</li>
+        <li>Tap an aircraft to see its azimuth, elevation, and distance</li>
+        <li>Speech callouts guide antenna pointing hands-free</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Architecture</h2>
+      <p>
+        AirWSJT-X is a Tauri desktop application (Rust + React frontend) with a Python backend for
+        radio and tracking logic. The mobile app runs standalone TypeScript — no Python sidecar needed.
+      </p>
+      <div class="tech-stack">
+        <span class="tech-tag">Tauri 2.x</span>
+        <span class="tech-tag">React 19</span>
+        <span class="tech-tag">TypeScript</span>
+        <span class="tech-tag">Python</span>
+        <span class="tech-tag">Rust</span>
+        <span class="tech-tag">Hamlib</span>
+        <span class="tech-tag">WSJT-X UDP</span>
+        <span class="tech-tag">OpenSky Network</span>
+        <span class="tech-tag">IndexedDB</span>
+        <span class="tech-tag">Q65-15s</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Requirements</h2>
+      <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem;">Desktop</h3>
+      <ul class="req-list">
+        <li>Windows 10/11 (x64) or macOS 13+ (Apple Silicon)</li>
+        <li>WSJT-X installed and configured for 23 cm+ operation</li>
+        <li>Hamlib-compatible rotator (for automatic antenna tracking)</li>
+        <li>Internet connection (for aircraft position data)</li>
+      </ul>
+      <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; margin-top: 1rem;">Mobile</h3>
+      <ul class="req-list">
+        <li>Android 8.0+ (APK sideload)</li>
+        <li>Internet connection (for OpenSky Network aircraft data)</li>
+        <li>No additional software required</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Open Source</h2>
+      <p>
+        AirWSJT-X is free and open source software, licensed under the
+        <a href="https://www.gnu.org/licenses/gpl-3.0.html" style="color: var(--accent);">GNU General Public License v3.0</a>.
+        The source code, build instructions, and contribution guidelines are all on GitHub.
+      </p>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem;">
+        <a href="https://github.com/cpicoto/AirWSJT-X" class="download-btn" style="font-size: 0.9rem; padding: 0.5rem 1.2rem;">Source Code</a>
+        <a href="https://github.com/cpicoto/AirWSJT-X/blob/main/CONTRIBUTING.md" class="download-btn secondary" style="font-size: 0.9rem; padding: 0.5rem 1.2rem;">Contributing Guide</a>
+        <a href="https://github.com/cpicoto/AirWSJT-X/issues" class="download-btn secondary" style="font-size: 0.9rem; padding: 0.5rem 1.2rem;">Report a Bug</a>
+      </div>
+    </section>
+
+    <section>
+      <h2>FAQ</h2>
+      <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem;">Is AirWSJT-X safe for airplanes?</h3>
+      <p>
+        Yes — AirWSJT-X has absolutely no effect on aircraft or aviation systems.
+        It is a <strong>passive</strong> ham radio tool that reads publicly available aircraft position data
+        (the same data used by flight-tracking apps like Flightradar24 and ADS-B Exchange) to identify
+        airplanes flying between two ham radio stations. When a plane is in the right geometric position,
+        operators can bounce weak VHF/UHF radio signals off the aircraft's metal fuselage to communicate
+        with each other — a technique called <strong>aircraft scatter</strong>.
+      </p>
+      <ul>
+        <li><strong>No equipment is installed on the airplane.</strong> The aircraft is simply a passive reflector, like a building or a mountain.</li>
+        <li><strong>No frequencies are shared with aviation.</strong> Ham radio bands are completely separate from aircraft communication and navigation frequencies.</li>
+        <li><strong>No signals are transmitted <em>to</em> the airplane.</strong> The radio energy that reaches the fuselage is extremely weak (far less than a typical WiFi router) and reflects naturally off the metal surface.</li>
+        <li><strong>No aircraft systems are affected.</strong> The crew, passengers, avionics, and navigation are completely unaware of and unaffected by the process.</li>
+      </ul>
+      <p>Aircraft scatter is a well-established technique in amateur radio that has been used safely for decades.</p>
+
+      <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; margin-top: 1.5rem;">What's the difference between desktop and mobile?</h3>
+      <p>
+        The <strong>desktop app</strong> is the full aircraft scatter automation system — it connects to WSJT-X, controls your rotator, and manages the complete QSO workflow. The <strong>mobile app</strong> is a standalone aircraft tracker designed for field use — it shows you where aircraft are relative to your position, with a compass display and speech callouts for hand-pointing antennas.
+      </p>
+    </section>
+
+    <footer>
+      <p>
+        AirWSJT-X by <span class="callsign">AD7NP</span> &middot;
+        <a href="/">ad7np.us</a> &middot;
+        <a href="../RoverAIM">RoverAIM</a> &middot;
+        <a href="https://github.com/cpicoto/AirWSJT-X">GitHub</a>
+      </p>
+      <p style="margin-top: 0.3rem;">&copy; 2026 Carlos Picoto (AD7NP). Licensed under GPL v3.</p>
+    </footer>
+  </div>
+</body>
+</html>

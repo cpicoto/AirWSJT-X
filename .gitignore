@@ -8,3 +8,7 @@ dist/
 # Rust / Tauri
 src-tauri/target/
 
+# PyInstaller
+*.spec
+build/
+

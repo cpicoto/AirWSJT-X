@@ -51,6 +51,74 @@ interface AirscoutUpdate {
   total: number;
   station_a: string | null;
   station_b: string | null;
+  active_source?: string | null;
+  last_update_epoch_s?: number | null;
+  cache_age_s?: number | null;
+  data_freshness?: string | null;
+}
+interface AirscoutSourceState {
+  active_source: string | null;
+  priority: string[];
+  sources: Record<string, { state: string; message: string | null }>;
+}
+interface CallsignDbStatus {
+  db_url: string;
+  version: string | null;
+  downloaded_at: string | null;
+  entries: number;
+  fresh: boolean;
+  freshness_days: number;
+  online?: boolean;
+  remote_version?: string | null;
+  update_available?: boolean;
+}
+
+interface AircraftFilterSettings {
+  lat_min: number | null;
+  lat_max: number | null;
+  lon_min: number | null;
+  lon_max: number | null;
+  altitude_min_ft: number | null;
+  heading_tolerance_deg: number;
+}
+
+const DEFAULT_AIRCRAFT_FILTERS: AircraftFilterSettings = {
+  lat_min: null,
+  lat_max: null,
+  lon_min: null,
+  lon_max: null,
+  altitude_min_ft: null,
+  heading_tolerance_deg: 30,
+};
+
+function getAircraftFilterStorageKey(stationA: string | null | undefined, stationB: string | null | undefined): string {
+  const keyA = (stationA ?? "default").trim().toUpperCase();
+  const keyB = (stationB ?? "default").trim().toUpperCase();
+  return `airwsjtx.aircraftFilters.${keyA}__${keyB}`;
+}
+
+function parseAircraftFilterNumber(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function loadAircraftFilters(stationA: string | null | undefined, stationB: string | null | undefined): AircraftFilterSettings {
+  try {
+    const raw = localStorage.getItem(getAircraftFilterStorageKey(stationA, stationB));
+    if (!raw) return DEFAULT_AIRCRAFT_FILTERS;
+    const parsed = JSON.parse(raw) as Partial<AircraftFilterSettings>;
+    return {
+      lat_min: parsed.lat_min ?? null,
+      lat_max: parsed.lat_max ?? null,
+      lon_min: parsed.lon_min ?? null,
+      lon_max: parsed.lon_max ?? null,
+      altitude_min_ft: parsed.altitude_min_ft ?? null,
+      heading_tolerance_deg: Number(parsed.heading_tolerance_deg ?? 30),
+    };
+  } catch {
+    return DEFAULT_AIRCRAFT_FILTERS;
+  }
 }
 
 // ─── Sidecar RPC ──────────────────────────────────────────────────────────────
@@ -81,6 +149,22 @@ const STATE_COLOR: Record<string, string> = {
   aborted: "#f85149",
 };
 
+const PORTABLE_GRID_OVERRIDES_KEY = "airwsjtx.portableGridOverrides";
+const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
+const PORTABLE_SCALE_KEY = "airwsjtx.portableScale";
+const PORTABLE_MIN_FONT_PX = 28;
+const PORTABLE_BASE_FONT_PX = 72;
+
+type PortableViewMode = "hidden" | "panel" | "overlay";
+const ROTATOR_SPEECH_ENABLED_KEY = "airwsjtx.rotatorSpeech.enabled";
+const ROTATOR_SPEECH_THRESHOLD_KEY = "airwsjtx.rotatorSpeech.thresholdDeg";
+const ROTATOR_SPEECH_INTERVAL_KEY = "airwsjtx.rotatorSpeech.intervalSec";
+
+function normalizeGrid(grid: string | null | undefined): string | null {
+  const normalized = (grid ?? "").trim().toUpperCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -94,14 +178,60 @@ export default function App() {
   });
   const [decodes, setDecodes] = useState<WsjtxDecodeEntry[]>([]);
   const [airscout, setAirscout] = useState<AirscoutUpdate | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<AirscoutSourceState | null>(null);
   const [rotatorConnected, setRotatorConnected] = useState(false);
   const [rotatorAz, setRotatorAz] = useState(0);
   const [rotatorEl, setRotatorEl] = useState(0);
   const [rotatorTargetAz, setRotatorTargetAz] = useState<number | null>(null);
   const [rotatorTargetEl, setRotatorTargetEl] = useState<number | null>(null);
+  const [rotatorSpeechEnabled, setRotatorSpeechEnabled] = useState(() => localStorage.getItem(ROTATOR_SPEECH_ENABLED_KEY) === "1");
+  const [rotatorSpeechThresholdDeg, setRotatorSpeechThresholdDeg] = useState(() => {
+    const raw = localStorage.getItem(ROTATOR_SPEECH_THRESHOLD_KEY);
+    if (raw === null) return 3;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : 3;
+  });
+  const [rotatorSpeechIntervalSec, setRotatorSpeechIntervalSec] = useState(() => {
+    const raw = localStorage.getItem(ROTATOR_SPEECH_INTERVAL_KEY);
+    if (raw === null) return 2;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : 2;
+  });
   const [dxCallsign, setDxCallsign] = useState<string | null>(null);
   const [dxGrid, setDxGrid] = useState<string | null>(null);
+  const [stationGridOverrides, setStationGridOverrides] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem(PORTABLE_GRID_OVERRIDES_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      return Object.fromEntries(
+        Object.entries(parsed)
+          .map(([call, grid]) => [call.trim().toUpperCase(), normalizeGrid(grid)])
+          .filter((entry): entry is [string, string] => Boolean(entry[1])),
+      );
+    } catch {
+      return {};
+    }
+  });
+  const [myGridInput, setMyGridInput] = useState("");
+  const [dxGridInput, setDxGridInput] = useState("");
+  const [myGridEditing, setMyGridEditing] = useState(false);
+  const [dxGridEditing, setDxGridEditing] = useState(false);
+  const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
+  const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
+  const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
+  const [portableView, setPortableView] = useState<PortableViewMode>(() => {
+    const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
+    return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
+  });
+  const [portableScale, setPortableScale] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(PORTABLE_SCALE_KEY) ?? "100");
+    return Number.isFinite(saved) && saved >= 70 && saved <= 180 ? saved : 100;
+  });
+  const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
+  const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
+  const [callsignDbBusy, setCallsignDbBusy] = useState(false);
   const [lockedPlane, setLockedPlane] = useState<{
     icao24: string; callsign: string; altitude_ft: number;
     az_a: number; el_a: number; az_b: number; el_b: number;
@@ -109,6 +239,8 @@ export default function App() {
     rotator_az?: number | null; rotator_el?: number | null;
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number } | null>(null);
+  const rotatorSpeechLastProcessedRef = useRef<{ az: number; el: number } | null>(null);
 
   const addLog = useCallback((msg: string) => {
     setLog((l) => [...l.slice(-49), `${new Date().toLocaleTimeString()} ${msg}`]);
@@ -160,6 +292,10 @@ export default function App() {
             addLog(`DX: ${entry.message ?? "?"} SNR ${entry.snr}dB`);
           } else if (evt === "airscout_update") {
             setAirscout(evtData as unknown as AirscoutUpdate);
+          } else if (evt === "airscout_source_status") {
+            setSourceStatus(evtData as unknown as AirscoutSourceState);
+          } else if (evt === "airscout_source_switched") {
+            addLog(`AirScout source switched: ${String(evtData.from)} → ${String(evtData.to)} (${String(evtData.reason)})`);
           } else if (evt === "airscout_feed_started") {
             addLog(`AirScout feed started: ${evtData.source}`);
           } else if (evt === "airscout_error") {
@@ -220,10 +356,78 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    const saved = localStorage.getItem("wsjtxRigNameFilter") ?? "";
+    setWsjtxRigFilter(saved);
+    rpc("wsjtx_set_rig_name_filter", { rig_name: saved || null }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    rpc("airscout_get_sources")
+      .then((s) => setSourceStatus(s as AirscoutSourceState))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowEpochS(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    rpc("callsign_db_status")
+      .then((s) => setCallsignDbStatus(s as CallsignDbStatus))
+      .catch(() => {});
+  }, []);
+
   // Scroll log to bottom
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
+
+  useEffect(() => {
+    localStorage.setItem(ROTATOR_SPEECH_ENABLED_KEY, rotatorSpeechEnabled ? "1" : "0");
+  }, [rotatorSpeechEnabled]);
+  useEffect(() => {
+    localStorage.setItem(ROTATOR_SPEECH_THRESHOLD_KEY, String(rotatorSpeechThresholdDeg));
+  }, [rotatorSpeechThresholdDeg]);
+  useEffect(() => {
+    localStorage.setItem(ROTATOR_SPEECH_INTERVAL_KEY, String(rotatorSpeechIntervalSec));
+  }, [rotatorSpeechIntervalSec]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (!rotatorConnected || !rotatorSpeechEnabled) {
+      if (rotatorSpeechLastAnnouncedRef.current) window.speechSynthesis.cancel();
+      rotatorSpeechLastAnnouncedRef.current = null;
+      rotatorSpeechLastProcessedRef.current = null;
+      return;
+    }
+    const processed = rotatorSpeechLastProcessedRef.current;
+    if (processed && processed.az === rotatorAz && processed.el === rotatorEl) return;
+    rotatorSpeechLastProcessedRef.current = { az: rotatorAz, el: rotatorEl };
+    const now = Date.now();
+    const last = rotatorSpeechLastAnnouncedRef.current;
+    const speechText = `Azimuth ${Math.round(rotatorAz)}, Elevation ${Math.round(rotatorEl)}`;
+    if (!last) {
+      rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
+      return;
+    }
+    const azDelta = Math.abs(((rotatorAz - last.az + 540) % 360) - 180);
+    const elDelta = Math.abs(rotatorEl - last.el);
+    if (Math.max(azDelta, elDelta) < rotatorSpeechThresholdDeg) return;
+    if (now - last.at < rotatorSpeechIntervalSec * 1000) return;
+    const utterance = new SpeechSynthesisUtterance(speechText);
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+    rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
+  }, [
+    rotatorAz,
+    rotatorEl,
+    rotatorConnected,
+    rotatorSpeechEnabled,
+    rotatorSpeechThresholdDeg,
+    rotatorSpeechIntervalSec,
+  ]);
 
   async function startQso() {
     try {
@@ -241,12 +445,172 @@ export default function App() {
     } catch (e) { addLog(`Error: ${e}`); }
   }
 
+  async function applyWsjtxRigFilter(rawValue: string) {
+    const value = rawValue.trim();
+    try {
+      await rpc("wsjtx_set_rig_name_filter", { rig_name: value || null });
+      localStorage.setItem("wsjtxRigNameFilter", value);
+      setWsjtxRigFilter(value);
+      addLog(value ? `WSJT-X rig filter: ${value}` : "WSJT-X rig filter cleared");
+    } catch (e) {
+      addLog(`WSJT-X filter error: ${e}`);
+    }
+  }
+
   const state = status?.state ?? "idle";
   const stateColor = STATE_COLOR[state] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
+  const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
+  const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
+  const txIndicatorTitle = wsjtxLive.transmitting
+    ? `Red TX means transmitting (PTT ON).${txOffset}`
+    : `TX○ means idle (not transmitting).${txOffset}`;
+  const wsjtxReady = wsjtxLive.connected &&
+    wsjtxLive.mode === "Q65" &&
+    wsjtxLive.tr_period === 15 &&
+    (wsjtxLive.freq_mhz == null || wsjtxLive.freq_mhz >= 1240);
+  const canStartQso = wsjtxReady && (
+    state === "ready" ||
+    (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking"))
+  );
+  const activeSource = sourceStatus?.active_source ?? airscout?.active_source ?? null;
+  const activeSourceState = activeSource ? sourceStatus?.sources?.[activeSource]?.state ?? "unknown" : "stopped";
+  const activeSourceMessage = activeSource ? sourceStatus?.sources?.[activeSource]?.message ?? null : null;
+  const openskyState = sourceStatus?.sources?.opensky?.state ?? "stopped";
+  const connectivityState = activeSource === "dump1090" && activeSourceState === "connected"
+    ? "local"
+    : openskyState === "connected"
+      ? "online"
+      : ["backoff", "connecting", "disconnected"].includes(openskyState)
+        ? "degraded"
+        : "offline";
+  const connectivityColor = connectivityState === "online" || connectivityState === "local"
+    ? "var(--green)"
+    : connectivityState === "degraded"
+      ? "var(--yellow)"
+      : "var(--red)";
+  const connectivityLabel = connectivityState === "local"
+    ? "LOCAL ADS-B"
+    : connectivityState === "online"
+      ? "NET ONLINE"
+      : connectivityState === "degraded"
+        ? "NET DEGRADED"
+        : "NET OFFLINE";
+  const cacheAgeSeconds = airscout?.last_update_epoch_s
+    ? Math.max(0, nowEpochS - airscout.last_update_epoch_s)
+    : airscout?.cache_age_s ?? null;
+  const dataFreshness = airscout?.data_freshness ?? "empty";
+  const freshnessLabel = ["fresh", "stale", "expired"].includes(dataFreshness) ? dataFreshness : "waiting";
+  const sourceDotColor = activeSourceState === "connected"
+    ? "var(--green)"
+    : activeSourceState === "backoff" || activeSourceState === "connecting"
+      ? "var(--yellow)"
+      : "var(--red)";
+  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090"];
+
+  const filteredAircraftCount = aircraft.length;
+  const totalAircraftCount = airscout?.total ?? filteredAircraftCount;
+
+  const updateSourcePriority = (nextPriority: string[]) => {
+    if (nextPriority.length === 0) return;
+    rpc("airscout_set_sources", { sources: nextPriority })
+      .then((s) => setSourceStatus(s as AirscoutSourceState))
+      .catch((e) => addLog(`AirScout source config: ${e}`));
+  };
+
+  const persistAircraftFilters = useCallback((nextFilters: AircraftFilterSettings) => {
+    const normalized: AircraftFilterSettings = {
+      ...nextFilters,
+      heading_tolerance_deg: Number.isFinite(nextFilters.heading_tolerance_deg) ? nextFilters.heading_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg,
+    };
+    const storageKey = getAircraftFilterStorageKey(airscout?.station_a, airscout?.station_b);
+    localStorage.setItem(storageKey, JSON.stringify(normalized));
+    setAircraftFilters(normalized);
+    rpc("airscout_apply_filters", { filters: normalized }).catch(() => {});
+  }, [airscout?.station_a, airscout?.station_b]);
+
+  const myCallsign = wsjtxLive.de_call?.trim().toUpperCase() ?? null;
+  const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
+  const myGrid = (myCallsign ? stationGridOverrides[myCallsign] : null) ?? wsjtxLive.de_grid;
+  const selectedDxGrid = (dxCall ? stationGridOverrides[dxCall] : null) ?? dxGrid;
+
+  useEffect(() => {
+    localStorage.setItem(PORTABLE_VIEW_KEY, portableView);
+  }, [portableView]);
+
+  useEffect(() => {
+    localStorage.setItem(PORTABLE_SCALE_KEY, String(portableScale));
+  }, [portableScale]);
+
+  useEffect(() => {
+    if (!myGridEditing) setMyGridInput(myGrid ?? "");
+  }, [myGrid, myGridEditing]);
+  useEffect(() => {
+    if (!dxGridEditing) setDxGridInput(selectedDxGrid ?? "");
+  }, [selectedDxGrid, dxGridEditing]);
+  useEffect(() => {
+    const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
+    setAircraftFilters(stored);
+    rpc("airscout_apply_filters", { filters: stored }).catch(() => {});
+  }, [airscout?.station_a, airscout?.station_b]);
+
+  function savePortableGrid(callsign: string | null, grid: string | null) {
+    if (!callsign) return;
+    const call = callsign.trim().toUpperCase();
+    if (!call) return;
+    setStationGridOverrides(prev => {
+      const next = { ...prev };
+      if (grid) next[call] = grid;
+      else delete next[call];
+      localStorage.setItem(PORTABLE_GRID_OVERRIDES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  const currentAz = lockedPlane ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
+  const currentEl = lockedPlane ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
+  const portableFontPx = Math.max(PORTABLE_MIN_FONT_PX, PORTABLE_BASE_FONT_PX * portableScale / 100);
+  const portableReadout = (
+  <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
+    <div className="portable-header">
+      <span>Az / El</span>
+      <div className="portable-controls">
+        <button className="portable-mode" onClick={() => setPortableView("panel")}>Panel</button>
+        <button className="portable-mode" onClick={() => setPortableView("overlay")}>Overlay</button>
+        <button className="portable-mode" onClick={() => setPortableView("hidden")}>Hide</button>
+      </div>
+    </div>
+    <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
+      <div className="portable-readout">
+        <span className="portable-label">AZ</span>
+        <span className="portable-value">{Number.isFinite(currentAz) ? currentAz.toFixed(1) : "--.-"}°</span>
+      </div>
+      <div className="portable-readout">
+        <span className="portable-label">EL</span>
+        <span className="portable-value">{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
+      </div>
+    </div>
+    <div className="portable-footer">
+      <label>
+        Scale
+        <input
+          type="range"
+          min={70}
+          max={180}
+          step={5}
+          value={portableScale}
+          onChange={(e) => setPortableScale(Number(e.target.value))}
+        />
+      </label>
+    </div>
+  </div>
+  );
+
+  const portableDisplay = portableView === "hidden" ? null : portableReadout;
 
   return (
     <div className="app">
+      {portableView === "overlay" && portableDisplay}
 
       {/* ── Top bar ── */}
       <header className="topbar">
@@ -278,11 +642,22 @@ export default function App() {
               <span style={{ color: wsjtxLive.decoding ? "var(--green)" : "var(--text-muted)", fontSize: 10 }}>
                 {wsjtxLive.decoding ? "DEC●" : "DEC○"}
               </span>
-              <span style={{ color: wsjtxLive.transmitting ? "var(--red)" : "var(--text-muted)", fontSize: 10 }}>
+              <span
+                style={{ color: wsjtxLive.transmitting ? "var(--red)" : "var(--text-muted)", fontSize: 10 }}
+                title={txIndicatorTitle}
+              >
                 {wsjtxLive.transmitting ? "TX●" : "TX○"}
               </span>
               {wsjtxLive.rx_df != null && (
                 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>RX {wsjtxLive.rx_df}Hz</span>
+              )}
+              {wsjtxLive.tx_df != null && (
+                <span
+                  style={{ color: "var(--text-muted)", fontSize: 11 }}
+                  title={txOffsetTitle ?? undefined}
+                >
+                  TX {wsjtxLive.tx_df}Hz
+                </span>
               )}
             </>
           ) : (
@@ -290,6 +665,36 @@ export default function App() {
           )}
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
+            Rig
+            <input
+              value={wsjtxRigFilter}
+              placeholder="all"
+              style={{
+                width: 92,
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: 4,
+                border: "1px solid var(--border)",
+                background: "var(--surface)",
+                color: "var(--text)",
+              }}
+              onChange={(e) => setWsjtxRigFilter(e.target.value)}
+              onBlur={() => { void applyWsjtxRigFilter(wsjtxRigFilter); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+            />
+          </label>
+          <span style={{ fontSize: 10, color: connectivityColor, fontWeight: 600 }}>
+            {connectivityLabel}
+          </span>
+          <span style={{ fontSize: 10, color: sourceDotColor }}>
+            {activeSource ? "●" : "○"} {activeSource ?? "no source"} · {freshnessLabel}
+          </span>
           {rotatorConnected
             ? <span style={{ fontSize: 10, color: "var(--green)" }}>● rotctld</span>
             : <span style={{ fontSize: 10, color: "var(--red)" }}>○ rotctld</span>}
@@ -300,6 +705,8 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {portableView === "panel" && portableDisplay}
 
       {/* ── 3-column content ── */}
       <div className="content">
@@ -313,14 +720,85 @@ export default function App() {
             <div className="station-compact">
               <div className="station-pill" style={{ borderColor: "#58a6ff44" }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 1 }}>MY</div>
-                <div className="call" style={{ color: "var(--accent)" }}>{wsjtxLive.de_call ?? "—"}</div>
-                <div className="grid">{wsjtxLive.de_grid ?? "—"}</div>
+                <div className="call" style={{ color: "var(--accent)" }}>{myCallsign ?? "—"}</div>
+                <div className="grid">{myGrid ?? "—"}</div>
               </div>
               <div style={{ color: "var(--border)", fontSize: 16 }}>→</div>
               <div className="station-pill" style={{ borderColor: "#3fb95044" }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 1 }}>DX</div>
-                <div className="call" style={{ color: "var(--green)" }}>{dxCallsign ?? "—"}</div>
-                <div className="grid">{dxGrid ?? "—"}</div>
+                <div className="call" style={{ color: "var(--green)" }}>{dxCall ?? "—"}</div>
+                <div className="grid">{selectedDxGrid ?? "—"}</div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
+              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>MY</span>
+                <input
+                  value={myGridInput}
+                  onChange={(e) => setMyGridInput(e.target.value.toUpperCase())}
+                  onFocus={() => setMyGridEditing(true)}
+                  onBlur={() => setMyGridEditing(false)}
+                  placeholder={wsjtxLive.de_grid ?? "Grid"}
+                  style={{
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "2px 6px",
+                    fontSize: 11,
+                    width: 86,
+                    fontFamily: "monospace",
+                  }}
+                />
+                <button className="btn-secondary" style={{ fontSize: 10, padding: "2px 8px" }}
+                  onClick={() => {
+                    const grid = normalizeGrid(myGridInput);
+                    const locatorA = grid ?? wsjtxLive.de_grid;
+                    savePortableGrid(myCallsign, grid);
+                    if (locatorA && selectedDxGrid) {
+                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: selectedDxGrid }).catch(() => {});
+                    }
+                    addLog(`MY grid ${grid ? `override → ${grid}` : "reset to WSJT-X"}`);
+                  }}>
+                  Apply
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>DX</span>
+                <input
+                  value={dxGridInput}
+                  onChange={(e) => setDxGridInput(e.target.value.toUpperCase())}
+                  onFocus={() => setDxGridEditing(true)}
+                  onBlur={() => setDxGridEditing(false)}
+                  placeholder={dxGrid ?? "Grid"}
+                  style={{
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "2px 6px",
+                    fontSize: 11,
+                    width: 86,
+                    fontFamily: "monospace",
+                  }}
+                />
+                <button className="btn-secondary" style={{ fontSize: 10, padding: "2px 8px" }}
+                  onClick={() => {
+                    if (!dxCall) {
+                      addLog("Set DX callsign before applying DX grid");
+                      return;
+                    }
+                    const grid = normalizeGrid(dxGridInput);
+                    const locatorB = grid ?? dxGrid;
+                    const locatorA = normalizeGrid(myGridInput) ?? wsjtxLive.de_grid;
+                    savePortableGrid(dxCall, grid);
+                    if (locatorA && locatorB) {
+                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: locatorB }).catch(() => {});
+                    }
+                    addLog(`DX grid ${grid ? `override → ${grid}` : "reset to callbook"}`);
+                  }}>
+                  Apply
+                </button>
               </div>
             </div>
             {/* Quick-select */}
@@ -328,13 +806,19 @@ export default function App() {
               {[{ call: "VE7NX", grid: "CN89oh" }, { call: "W7PUA", grid: "CN84jq" }].map(s => (
                 <button key={s.call} className="btn-secondary"
                   style={{ fontSize: 10, padding: "3px 8px",
-                    border: dxCallsign === s.call ? "1px solid var(--green)" : undefined,
-                    color: dxCallsign === s.call ? "var(--green)" : undefined }}
+                    border: dxCall === s.call ? "1px solid var(--green)" : undefined,
+                    color: dxCall === s.call ? "var(--green)" : undefined }}
                   onClick={() => {
-                    setDxCallsign(s.call); setDxGrid(s.grid);
-                    rpc("set_station_calls", { call_a: wsjtxLive.de_call, call_b: s.call }).catch(() => {});
-                    rpc("airscout_set_stations", { locator_a: wsjtxLive.de_grid, locator_b: s.grid }).catch(() => {});
-                    addLog(`DX → ${s.call} ${s.grid}`);
+                    setDxCallsign(s.call); setDxGrid(s.grid.toUpperCase());
+                    const dxLocator = stationGridOverrides[s.call] ?? s.grid.toUpperCase();
+                    const locatorA = myGrid ?? wsjtxLive.de_grid;
+                    if (myCallsign) {
+                      rpc("set_station_calls", { call_a: myCallsign, call_b: s.call }).catch(() => {});
+                    }
+                    if (locatorA && dxLocator) {
+                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
+                    }
+                    addLog(`DX → ${s.call} ${dxLocator}`);
                   }}>
                   {s.call}
                 </button>
@@ -344,18 +828,91 @@ export default function App() {
                   const call = prompt("DX callsign:");
                   if (!call) return;
                   const info = await rpc("callsign_lookup", { callsign: call }) as { callsign: string; grid: string | null; name: string | null };
-                  if (info.grid) {
-                    setDxCallsign(info.callsign); setDxGrid(info.grid);
-                    rpc("set_station_calls", { call_a: wsjtxLive.de_call, call_b: info.callsign }).catch(() => {});
-                    rpc("airscout_set_stations", { locator_a: wsjtxLive.de_grid, locator_b: info.grid }).catch(() => {});
-                    addLog(`DX → ${info.callsign} ${info.grid}${info.name ? ` (${info.name})` : ""}`);
-                  } else {
-                    addLog(`Lookup: ${call} not found`);
+                  const nextCall = info.callsign.trim().toUpperCase();
+                  const lookedUpGrid = normalizeGrid(info.grid);
+                  const dxLocator = stationGridOverrides[nextCall] ?? lookedUpGrid;
+                  const locatorA = myGrid ?? wsjtxLive.de_grid;
+                  setDxCallsign(nextCall);
+                  setDxGrid(lookedUpGrid);
+                  if (myCallsign) {
+                    rpc("set_station_calls", { call_a: myCallsign, call_b: nextCall }).catch(() => {});
                   }
+                  if (locatorA && dxLocator) {
+                    rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
+                  }
+                  addLog(
+                    dxLocator
+                      ? `DX → ${nextCall} ${dxLocator}${info.name ? ` (${info.name})` : ""}`
+                      : `DX → ${nextCall} (enter portable grid manually)`,
+                  );
                 }}>
                 + Other
               </button>
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+                onClick={async () => {
+                  setCallsignDbBusy(true);
+                  try {
+                    const s = await rpc("callsign_db_check_update") as CallsignDbStatus;
+                    setCallsignDbStatus(s);
+                    addLog(
+                      s.online
+                        ? (s.update_available
+                          ? `Callsign DB update available (${s.remote_version ?? "new version"})`
+                          : "Callsign DB is up to date")
+                        : "Callsign DB update check failed (offline)",
+                    );
+                  } catch (e) {
+                    addLog(`Callsign DB check failed: ${e}`);
+                  } finally {
+                    setCallsignDbBusy(false);
+                  }
+                }}
+                disabled={callsignDbBusy}>
+                DB Check
+              </button>
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+                onClick={async () => {
+                  setCallsignDbBusy(true);
+                  try {
+                    const s = await rpc("callsign_db_download") as CallsignDbStatus;
+                    setCallsignDbStatus(s);
+                    addLog(`Callsign DB downloaded (${s.entries} entries, ${s.version ?? "no version"})`);
+                  } catch (e) {
+                    addLog(`Callsign DB download failed: ${e}`);
+                  } finally {
+                    setCallsignDbBusy(false);
+                  }
+                }}
+                disabled={callsignDbBusy}>
+                DB Update
+              </button>
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+                onClick={async () => {
+                  const call = prompt("Contribute callsign:");
+                  if (!call) return;
+                  const grid = prompt("Contribute grid (Maidenhead):");
+                  if (!grid) return;
+                  try {
+                    const result = await rpc("callsign_db_submit", { callsign: call, grid }) as { accepted: boolean; queued: number };
+                    addLog(
+                      result.accepted
+                        ? `Contribution submitted: ${call.toUpperCase()} ${grid.toUpperCase()}`
+                        : `Contribution queued offline (${result.queued} pending)`,
+                    );
+                  } catch (e) {
+                    addLog(`Contribution failed: ${e}`);
+                  }
+                }}>
+                Contribute
+              </button>
             </div>
+            {callsignDbStatus && (
+              <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-muted)" }}>
+                Callsign DB: {callsignDbStatus.version ?? "not downloaded"} · {callsignDbStatus.entries} entries ·
+                {callsignDbStatus.fresh ? " fresh" : " stale"}
+                {callsignDbStatus.update_available ? " · update available" : ""}
+              </div>
+            )}
           </div>
 
           {/* Plane Lock — flex fills remaining space */}
@@ -370,6 +927,7 @@ export default function App() {
               }}
               onUnlock={() => { setLockedPlane(null); rpc("unlock_aircraft", {}).catch(() => {}); }}
               onLockAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
+              sourceStatusText={activeSource ? `${activeSource} ${activeSourceState}` : undefined}
               aircraft={aircraft.slice(0, 5).map(ac => ({
                 icao24: ac.icao24, callsign: ac.callsign, altitude_ft: ac.altitude_ft,
                 scatter_score: ac.scatter_score, az_a: ac.az_a, el_a: ac.el_a,
@@ -382,11 +940,40 @@ export default function App() {
         {/* CENTRE: Rotator */}
         <div className="col" style={{ alignItems: "center", justifyContent: "center" }}>
           <div className="card" style={{ width: "100%", alignSelf: "stretch" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", gap: 4 }}>
+                {(["rotator", "manual"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className="btn-secondary"
+                    style={{
+                      fontSize: 10,
+                      padding: "4px 10px",
+                      border: uiMode === mode ? "1px solid var(--accent)" : "1px solid var(--border)",
+                      background: uiMode === mode ? "rgba(88,166,255,0.12)" : "var(--surface)",
+                      color: uiMode === mode ? "var(--accent)" : "var(--text-muted)",
+                    }}
+                    onClick={() => setUiMode(mode)}
+                  >
+                    {mode === "rotator" ? "Rotator" : "Manual"}
+                  </button>
+                ))}
+              </div>
+            </div>
             <RotatorPanel
               currentAz={rotatorAz} currentEl={rotatorEl}
               targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
               targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
               connected={rotatorConnected}
+              speechEnabled={rotatorSpeechEnabled}
+              speechThresholdDeg={rotatorSpeechThresholdDeg}
+              speechIntervalSec={rotatorSpeechIntervalSec}
+              onSpeechEnabledChange={setRotatorSpeechEnabled}
+              onSpeechThresholdDegChange={(value) => setRotatorSpeechThresholdDeg(Math.max(0.1, value))}
+              onSpeechIntervalSecChange={(value) => setRotatorSpeechIntervalSec(Math.max(0, value))}
+              mode={uiMode}
+              aircraftLabel={lockedPlane && lockedPlane.callsign ? `${lockedPlane.callsign} target` : "Manual target"}
               onSetPosition={(az, el) => {
                 setRotatorTargetAz(az); setRotatorTargetEl(el);
                 rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
@@ -414,7 +1001,7 @@ export default function App() {
                       {d.snr >= 0 ? `+${d.snr}` : d.snr}dB
                     </span>
                     <span style={{ color: "var(--text-muted)" }}>{d.delta_freq_hz}Hz</span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{d.message ?? ""}</span>
+                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{d.message ?? ""}</span>
                   </div>
                 ))
               }
@@ -435,9 +1022,121 @@ export default function App() {
                 </button>
               </span>}
             </h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                Source: <span style={{ color: "var(--text)" }}>{activeSource ?? "not set"}</span>
+                {" · "}
+                <span style={{ color: sourceDotColor }}>{activeSourceState}</span>
+                {activeSourceMessage && <span style={{ color: "var(--text-muted)" }}> — {activeSourceMessage}</span>}
+                {" · "}
+                <span style={{ color: dataFreshness === "fresh" ? "var(--green)" : dataFreshness === "stale" ? "var(--yellow)" : "var(--red)" }}>
+                  {freshnessLabel}
+                </span>
+                {cacheAgeSeconds != null && (
+                  <span style={{ color: "var(--text-muted)" }}> ({cacheAgeSeconds}s ago)</span>
+                )}
+                {totalAircraftCount > 0 && (
+                  <span style={{ marginLeft: 6, color: "var(--text)" }}>
+                    {filteredAircraftCount}/{totalAircraftCount} shown
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(100px, 1fr))", gap: 4 }}>
+                {[
+                  ["lat_min", "Min lat", "number"],
+                  ["lat_max", "Max lat", "number"],
+                  ["lon_min", "Min lon", "number"],
+                  ["lon_max", "Max lon", "number"],
+                  ["altitude_min_ft", "Min alt ft", "number"],
+                  ["heading_tolerance_deg", "Heading ±°", "number"],
+                ].map(([key, label, type]) => {
+                  const value = aircraftFilters[key as keyof AircraftFilterSettings];
+                  return (
+                    <label key={key} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 9, color: "var(--text-muted)" }}>
+                      <span>{label}</span>
+                      <input
+                        type={type}
+                        value={value == null ? "" : value}
+                        onChange={(e) => {
+                          const next = { ...aircraftFilters };
+                          const parsed = parseAircraftFilterNumber(e.target.value);
+                          (next as Record<string, number | null>)[key] = parsed;
+                          if (key === "heading_tolerance_deg") {
+                            next.heading_tolerance_deg = parsed ?? DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg;
+                          }
+                          persistAircraftFilters(next);
+                        }}
+                        style={{
+                          background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
+                          borderRadius: 4, padding: "2px 5px", fontSize: 10,
+                        }}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {availableSources.map((source) => {
+                  const priority = sourceStatus?.priority ?? ["opensky", "dump1090"];
+                  const idx = priority.indexOf(source);
+                  const enabled = idx >= 0;
+                  return (
+                    <div key={source} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <button
+                        style={{
+                          padding: "2px 6px", fontSize: 10, borderRadius: 3,
+                          background: enabled ? "rgba(63,185,80,0.12)" : "var(--surface)",
+                          color: enabled ? "var(--green)" : "var(--text-muted)",
+                          border: `1px solid ${enabled ? "var(--green)" : "var(--border)"}`,
+                        }}
+                        onClick={() => {
+                          if (enabled && priority.length > 1) {
+                            updateSourcePriority(priority.filter((s) => s !== source));
+                          } else if (!enabled) {
+                            updateSourcePriority([...priority, source]);
+                          }
+                        }}
+                      >
+                        {enabled ? "✓" : "+"} {source}
+                      </button>
+                      {enabled && (
+                        <>
+                          <button
+                            style={{ padding: "1px 5px", fontSize: 9, borderRadius: 3 }}
+                            disabled={idx <= 0}
+                            onClick={() => {
+                              if (idx <= 0) return;
+                              const next = [...priority];
+                              [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                              updateSourcePriority(next);
+                            }}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            style={{ padding: "1px 5px", fontSize: 9, borderRadius: 3 }}
+                            disabled={idx < 0 || idx >= priority.length - 1}
+                            onClick={() => {
+                              if (idx < 0 || idx >= priority.length - 1) return;
+                              const next = [...priority];
+                              [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                              updateSourcePriority(next);
+                            }}
+                          >
+                            ↓
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
             {aircraft.length === 0 ? (
               <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                {dxCallsign ? "Waiting for aircraft data…" : "Select a DX station to start"}
+                {dxCallsign
+                  ? `Waiting for aircraft data from ${activeSource ?? "selected source"}…`
+                  : "Select a DX station to start"}
               </div>
             ) : (
               <table className="ac-table">
@@ -499,7 +1198,7 @@ export default function App() {
         }} disabled={state !== "idle" && state !== "completed" && state !== "aborted"}>
           Begin Session
         </button>
-        <button className="btn-success" onClick={startQso} disabled={state !== "ready"}>
+        <button className="btn-success" onClick={startQso} disabled={!canStartQso}>
           ▶ Start QSO
         </button>
         <button className="btn-danger" onClick={() => finishQso(true)}
@@ -521,7 +1220,7 @@ export default function App() {
           {autoLock ? "🔒 Auto-lock" : "🔓 Manual"}
         </button>
         <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-muted)" }}>
-          {dxCallsign && dxGrid && `${wsjtxLive.de_grid ?? "?"} → ${dxGrid}`}
+          {dxCall && selectedDxGrid && `${myGrid ?? "?"} → ${selectedDxGrid}`}
         </div>
       </footer>
     </div>

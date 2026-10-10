@@ -8,6 +8,7 @@ Supported sources:
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -61,16 +62,20 @@ class OpenSkyFeed:
         lat_max: float,
         lon_max: float,
         interval_s: float = 30.0,
+        max_backoff_s: float = 300.0,
         on_update: Callable[[list[Aircraft]], None] | None = None,
         on_error: Callable[[str], None] | None = None,
+        on_rate_limited: Callable[[float], None] | None = None,
     ) -> None:
         self.lat_min = lat_min
         self.lon_min = lon_min
         self.lat_max = lat_max
         self.lon_max = lon_max
         self.interval_s = interval_s
+        self.max_backoff_s = max_backoff_s
         self.on_update = on_update
         self.on_error = on_error
+        self.on_rate_limited = on_rate_limited
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -127,15 +132,30 @@ class OpenSkyFeed:
         return aircraft
 
     def _run(self) -> None:
+        consecutive_429 = 0
         while not self._stop.is_set():
+            wait_s = self.interval_s
             try:
                 aircraft = self.fetch_once()
+                consecutive_429 = 0
                 if self.on_update:
                     self.on_update(aircraft)
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    consecutive_429 += 1
+                    base_delay = max(self.interval_s, 10.0)
+                    wait_s = min(base_delay * (2 ** (consecutive_429 - 1)), self.max_backoff_s)
+                    if self.on_rate_limited:
+                        self.on_rate_limited(wait_s)
+                else:
+                    consecutive_429 = 0
+                    if self.on_error:
+                        self.on_error(f"HTTP Error {e.code}: {e.reason}")
             except Exception as e:
+                consecutive_429 = 0
                 if self.on_error:
                     self.on_error(str(e))
-            self._stop.wait(self.interval_s)
+            self._stop.wait(wait_s)
 
 
 # ─── dump1090 SBS (port 30003) feed ──────────────────────────────────────────
@@ -179,13 +199,43 @@ class Dump1090Feed:
     def stop(self) -> None:
         self._stop.set()
 
+    @staticmethod
+    def _coerce_float(value: object) -> float | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text in {"nan", "inf", "-inf"}:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _decode_callsign(raw: str) -> str | None:
+        text = (raw or "").strip()
+        if not text:
+            return None
+        upper = text.upper()
+        if re.fullmatch(r"[A-Z0-9_]{2,8}", upper):
+            return upper.replace("_", " ").strip()
+        return None
+
     def _parse_sbs(self, line: str) -> None:
-        parts = line.split(",")
-        if len(parts) < 22 or parts[0] != "MSG":
+        clean = line.strip().strip("\x00")
+        if not clean:
+            return
+        if clean.startswith("*"):
+            clean = clean[1:]
+        parts = [p.strip() for p in clean.split(",")]
+        if len(parts) < 5 or parts[0] not in {"MSG", "ES"}:
             return
         msg_type = parts[1]
-        icao24 = parts[4].lower()
-        callsign_raw = parts[10].strip()
+        icao24 = (parts[4] or "").lower()
+        if not icao24:
+            return
+
+        callsign_raw = parts[10] if len(parts) > 10 else ""
 
         with self._lock:
             ac = self._aircraft.setdefault(
@@ -198,29 +248,52 @@ class Dump1090Feed:
             )
             ac.last_seen = time.monotonic()
 
-            if callsign_raw:
-                ac.callsign = callsign_raw
+            callsign = self._decode_callsign(callsign_raw)
+            if callsign:
+                ac.callsign = callsign
 
             if msg_type == "1":  # Identification
                 pass
             elif msg_type == "3":  # Airborne position
-                try:
-                    alt_ft = float(parts[11]) if parts[11] else None
-                    ac.altitude_m = alt_ft * 0.3048 if alt_ft else ac.altitude_m
-                    ac.lat = float(parts[14]) if parts[14] else ac.lat
-                    ac.lon = float(parts[15]) if parts[15] else ac.lon
+                alt_ft = self._coerce_float(parts[11]) if len(parts) > 11 else None
+                lat = self._coerce_float(parts[14]) if len(parts) > 14 else None
+                lon = self._coerce_float(parts[15]) if len(parts) > 15 else None
+                if len(parts) > 21:
                     ac.on_ground = parts[21].strip() == "1"
-                except ValueError:
-                    pass
+                if alt_ft is not None:
+                    ac.altitude_m = alt_ft * 0.3048
+                if lat is not None:
+                    ac.lat = lat
+                if lon is not None:
+                    ac.lon = lon
             elif msg_type == "4":  # Airborne velocity
-                try:
-                    speed_kts = float(parts[12]) if parts[12] else None
-                    ac.velocity_ms = speed_kts * 0.514444 if speed_kts else ac.velocity_ms
-                    ac.heading_deg = float(parts[13]) if parts[13] else ac.heading_deg
-                    vert = float(parts[16]) if parts[16] else None
-                    ac.vertical_rate_ms = vert * 0.00508 if vert else ac.vertical_rate_ms  # ft/min → m/s
-                except ValueError:
-                    pass
+                speed_kts = self._coerce_float(parts[12]) if len(parts) > 12 else None
+                heading = self._coerce_float(parts[13]) if len(parts) > 13 else None
+                vert = self._coerce_float(parts[16]) if len(parts) > 16 else None
+                if speed_kts is not None:
+                    ac.velocity_ms = speed_kts * 0.514444
+                if heading is not None:
+                    ac.heading_deg = heading
+                if vert is not None:
+                    ac.vertical_rate_ms = vert * 0.00508  # ft/min → m/s
+
+    def _parse_frame(self, frame: str | bytes | bytearray) -> None:
+        if isinstance(frame, (bytes, bytearray)):
+            if frame and frame[0] == 0x1A:
+                self._parse_beast(frame)
+                return
+            text = frame.decode("ascii", "replace")
+            if text:
+                self._parse_sbs(text)
+                return
+        else:
+            self._parse_sbs(frame)
+
+    def _parse_beast(self, frame: bytes | bytearray) -> None:
+        raise NotImplementedError(
+            "dump1090 Beast binary frames are not supported by this client; "
+            "use SBS/CSV output (the standard dump1090 --net-sbs mode)."
+        )
 
     def _expire_stale(self) -> None:
         now = time.monotonic()

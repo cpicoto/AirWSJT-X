@@ -1,7 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema/acl/capability.json",
   "identifier": "default",
-  "description": "Default capability for AirWSJT-X",
+  "description": "Desktop capability for AirWSJT-X with sidecar access",
+  "platforms": ["linux", "macOS", "windows"],
   "windows": ["main"],
   "permissions": [
     "core:default",

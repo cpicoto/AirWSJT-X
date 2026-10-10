@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "AirWSJT-X",
-  "version": "0.1.0",
+  "version": "0.2.4",
   "identifier": "com.airwsjtx.app",
   "build": {
     "frontendDist": "../dist",
@@ -28,14 +28,18 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/airwsjtx_bridge"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": null,
+      "providerShortName": "QJ2R7N9BRA",
+      "entitlements": "Entitlements.plist"
+    }
   },
   "plugins": {
     "shell": {

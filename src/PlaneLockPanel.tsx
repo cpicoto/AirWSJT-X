@@ -25,6 +25,7 @@ interface PlaneLockPanelProps {
     scatter_score: number; az_a: number; el_a: number;
     az_b: number; el_b: number; off_path_deg: number;
   }[];
+  sourceStatusText?: string;
 }
 
 const STATE_LABELS: Record<string, { label: string; color: string }> = {
@@ -92,6 +93,7 @@ function AzElBadge({ label, az, el, rotAz, rotEl }:
 
 export default function PlaneLockPanel({
   locked, autoLock, sessionState, onAutoLockToggle, onUnlock, onLockAircraft, aircraft,
+  sourceStatusText,
 }: PlaneLockPanelProps) {
   const stateInfo = STATE_LABELS[sessionState] ?? STATE_LABELS.idle;
 
@@ -200,7 +202,7 @@ export default function PlaneLockPanel({
       ) : (
         <div style={{ fontSize: 12, color: "#8b949e", padding: "8px 0" }}>
           {sessionState === "idle"
-            ? "Waiting for aircraft data… Auto-lock will select the best candidate."
+            ? `Waiting for aircraft data${sourceStatusText ? ` (${sourceStatusText})` : ""}… Auto-lock will select the best candidate.`
             : "No aircraft locked."}
         </div>
       )}

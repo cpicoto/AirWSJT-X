@@ -7,6 +7,7 @@ from __future__ import annotations
 import socket
 import struct
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -83,7 +84,7 @@ class WSJTXStatus:
     fast_mode: bool
     special_op_mode: int
     freq_tolerance: int
-    tr_period: int
+    tr_period: float | None
     config_name: str | None
 
     @property
@@ -124,6 +125,26 @@ def _parse_header(d: bytes) -> tuple[int, int, int, str | None, int]:
     return magic, schema, msg_type, app_id, o
 
 
+def _normalize_tr_period(mode: str | None, tr_period: int) -> float | None:
+    """Normalize WSJT-X T/R period.
+
+    Positive wire values are passed through as seconds. WSJT-X may emit
+    non-positive values (including 0 and -1) for unset periods where timing is
+    implied by mode, so known fixed-period modes are mapped to defaults;
+    unknown or missing modes return None.
+    """
+    if tr_period > 0:
+        return float(tr_period)
+    if not mode:
+        return None
+    return {
+        "FT8": 15.0,
+        "FT4": 7.5,
+        "FT2": 2.5,
+        "JT65": 60.0,
+    }.get(mode.upper())
+
+
 def parse_status(d: bytes) -> WSJTXStatus | None:
     try:
         magic, schema, msg_type, app_id, o = _parse_header(d)
@@ -147,7 +168,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
         fast, o = _bool(d, o)
         spec_op, o = _u8(d, o)
         freq_tol, o = _u32(d, o)
-        tr_period, o = _u32(d, o)
+        tr_period, o = _i32(d, o)
         config, o = _str(d, o)
         return WSJTXStatus(
             app_id=app_id or "",
@@ -169,7 +190,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
             fast_mode=fast,
             special_op_mode=spec_op,
             freq_tolerance=freq_tol,
-            tr_period=tr_period,
+            tr_period=_normalize_tr_period(mode, tr_period),
             config_name=config,
         )
     except Exception:
@@ -233,6 +254,9 @@ class WSJTXListener:
         on_decode: Callable[[WSJTXDecode], None] | None = None,
         on_connected: Callable[[str], None] | None = None,
         on_disconnected: Callable[[], None] | None = None,
+        heartbeat_timeout_s: float = 30.0,
+        socket_timeout_s: float = 2.0,
+        rig_name_filter: str | None = None,
     ) -> None:
         self.port = port
         self.multicast = multicast
@@ -240,9 +264,15 @@ class WSJTXListener:
         self.on_decode = on_decode
         self.on_connected = on_connected
         self.on_disconnected = on_disconnected
+        self.heartbeat_timeout_s = heartbeat_timeout_s
+        self.socket_timeout_s = socket_timeout_s
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
+        self._last_packet = 0.0
+        self._state_lock = threading.Lock()
+        self._rig_name_filter = self._normalize_rig_name(rig_name_filter)
+        self._active_app_id: str | None = None
 
     def start(self) -> None:
         self._stop.clear()
@@ -251,6 +281,69 @@ class WSJTXListener:
 
     def stop(self) -> None:
         self._stop.set()
+
+    @staticmethod
+    def _normalize_rig_name(rig_name: str | None) -> str | None:
+        if rig_name is None:
+            return None
+        value = rig_name.strip()
+        return value or None
+
+    def set_rig_name_filter(self, rig_name: str | None) -> str | None:
+        with self._state_lock:
+            self._rig_name_filter = self._normalize_rig_name(rig_name)
+            self._active_app_id = None
+            was_connected = self._connected
+            self._connected = False
+            configured_filter = self._rig_name_filter
+        if was_connected and self.on_disconnected:
+            self.on_disconnected()
+        return configured_filter
+
+    def get_rig_name_filter(self) -> str | None:
+        with self._state_lock:
+            return self._rig_name_filter
+
+    def _matches_source(self, app_id: str, status: WSJTXStatus | None = None) -> bool:
+        with self._state_lock:
+            rig_name_filter = self._rig_name_filter
+            active_app_id = self._active_app_id
+
+        if active_app_id and app_id != active_app_id:
+            return False
+        if not rig_name_filter:
+            return True
+
+        candidates = [app_id]
+        if status and status.config_name:
+            candidates.append(status.config_name)
+        expected = rig_name_filter.casefold()
+        return any(candidate.casefold() == expected for candidate in candidates if candidate)
+
+    def _mark_connected(self, app_id: str) -> None:
+        with self._state_lock:
+            if self._active_app_id is None:
+                self._active_app_id = app_id
+            was_connected = self._connected
+            self._connected = True
+        if not was_connected and self.on_connected:
+            self.on_connected(app_id or "WSJT-X")
+
+    def _mark_disconnected(self) -> None:
+        with self._state_lock:
+            was_connected = self._connected
+            self._connected = False
+            self._active_app_id = None
+        if was_connected and self.on_disconnected:
+            self.on_disconnected()
+
+    def _check_connection_timeout(self, now: float | None = None) -> None:
+        if not self._connected or not self._last_packet:
+            return
+        if now is None:
+            now = time.monotonic()
+        if (now - self._last_packet) > self.heartbeat_timeout_s:
+            self._mark_disconnected()
 
     def _make_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -261,7 +354,7 @@ class WSJTXListener:
         except (AttributeError, OSError):
             pass
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(2.0)
+        s.settimeout(self.socket_timeout_s)
         s.bind(("", self.port))
         # Multicast join is optional for localhost-unicast WSJT-X setups.
         # If join fails, keep socket alive for unicast traffic on the same port.
@@ -275,47 +368,40 @@ class WSJTXListener:
     def _run(self) -> None:
         try:
             sock = self._make_socket()
-        except Exception as e:
+        except Exception:
             if self.on_disconnected:
                 self.on_disconnected()
             return
 
-        last_packet = 0.0
-        import time
-
         while not self._stop.is_set():
             try:
                 data, _ = sock.recvfrom(4096)
-                last_packet = time.monotonic()
-
-                if not self._connected:
-                    self._connected = True
-                    magic, _, msg_type, app_id, _ = _parse_header(data)
-                    if self.on_connected:
-                        self.on_connected(app_id or "WSJT-X")
+                self._last_packet = time.monotonic()
 
                 if len(data) < 12:
                     continue
-                _, _, msg_type = struct.unpack_from(">III", data, 0)[:3]
+                magic, _, msg_type, app_id, _ = _parse_header(data)
+                if magic != WSJTX_MAGIC:
+                    continue
 
                 if msg_type == MSG_STATUS:
                     st = parse_status(data)
-                    if st and self.on_status:
-                        self.on_status(st)
+                    if st and self._matches_source(st.app_id, st):
+                        self._mark_connected(st.app_id)
+                        if self.on_status:
+                            self.on_status(st)
                 elif msg_type == MSG_DECODE:
                     dec = parse_decode(data)
-                    if dec and self.on_decode:
-                        self.on_decode(dec)
-                elif msg_type == MSG_CLOSE:
-                    self._connected = False
-                    if self.on_disconnected:
-                        self.on_disconnected()
+                    if dec and self._matches_source(dec.app_id):
+                        self._mark_connected(dec.app_id)
+                        if self.on_decode:
+                            self.on_decode(dec)
+                elif msg_type == MSG_CLOSE and self._matches_source(app_id or ""):
+                    self._mark_disconnected()
+                elif msg_type == MSG_HEARTBEAT and self._matches_source(app_id or ""):
+                    self._mark_connected(app_id or "WSJT-X")
 
             except socket.timeout:
-                import time
-                if self._connected and last_packet and (time.monotonic() - last_packet) > 10:
-                    self._connected = False
-                    if self.on_disconnected:
-                        self.on_disconnected()
+                self._check_connection_timeout()
 
         sock.close()
