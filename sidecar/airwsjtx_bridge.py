@@ -245,8 +245,8 @@ def handle(msg: dict) -> None:
                 rig_name = params.get("rig_name")
                 if rig_name is not None:
                     rig_name = str(rig_name)
-                _wsjtx_listener.set_rig_name_filter(rig_name)
-                _ok(id_, {"rig_name": _wsjtx_listener.get_rig_name_filter()})
+                configured_rig_name = _wsjtx_listener.set_rig_name_filter(rig_name)
+                _ok(id_, {"rig_name": configured_rig_name})
 
         elif method == "wsjtx_get_rig_name_filter":
             if _wsjtx_listener is None:
