@@ -219,6 +219,7 @@ export default function App() {
   const [dxGridEditing, setDxGridEditing] = useState(false);
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
+  const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
   const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
     const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
@@ -939,6 +940,27 @@ export default function App() {
         {/* CENTRE: Rotator */}
         <div className="col" style={{ alignItems: "center", justifyContent: "center" }}>
           <div className="card" style={{ width: "100%", alignSelf: "stretch" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", gap: 4 }}>
+                {(["rotator", "manual"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className="btn-secondary"
+                    style={{
+                      fontSize: 10,
+                      padding: "4px 10px",
+                      border: uiMode === mode ? "1px solid var(--accent)" : "1px solid var(--border)",
+                      background: uiMode === mode ? "rgba(88,166,255,0.12)" : "var(--surface)",
+                      color: uiMode === mode ? "var(--accent)" : "var(--text-muted)",
+                    }}
+                    onClick={() => setUiMode(mode)}
+                  >
+                    {mode === "rotator" ? "Rotator" : "Manual"}
+                  </button>
+                ))}
+              </div>
+            </div>
             <RotatorPanel
               currentAz={rotatorAz} currentEl={rotatorEl}
               targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
@@ -950,6 +972,9 @@ export default function App() {
               onSpeechEnabledChange={setRotatorSpeechEnabled}
               onSpeechThresholdDegChange={(value) => setRotatorSpeechThresholdDeg(Math.max(0.1, value))}
               onSpeechIntervalSecChange={(value) => setRotatorSpeechIntervalSec(Math.max(0, value))}
+              mode={uiMode}
+              aircraftLabel={lockedPlane?.callsign ?? null}
+              targetLabel={lockedPlane ? `${lockedPlane.callsign} target` : "Manual target"}
               onSetPosition={(az, el) => {
                 setRotatorTargetAz(az); setRotatorTargetEl(el);
                 rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
