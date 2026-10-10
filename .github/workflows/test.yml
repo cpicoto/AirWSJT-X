@@ -8,7 +8,15 @@ on:
 
 jobs:
   python-tests:
-    runs-on: ubuntu-latest
+    # Run the full Python test suite (including cross-platform tests) on all
+    # three supported OS families so regressions in path handling, atomic
+    # writes, struct endianness, and filesystem casing are caught early.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    name: Python tests (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
