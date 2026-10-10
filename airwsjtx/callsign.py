@@ -119,8 +119,8 @@ def _load_local_db() -> None:
         try:
             if db_path.exists():
                 payload = json.loads(db_path.read_text(encoding="utf-8"))
-                _LOCAL_DB_CACHE = _parse_db_entries(payload.get("entries"))
                 if isinstance(payload, dict):
+                    _LOCAL_DB_CACHE = _parse_db_entries(payload.get("entries"))
                     version = payload.get("version")
                     if version:
                         _LOCAL_DB_META["version"] = str(version)
@@ -249,22 +249,23 @@ def submit_grid_contribution(
         "lon": lon,
         "submitted_at": _now_iso(),
     }
-    accepted = False
-    error: str | None = None
-    try:
-        req = urllib.request.Request(
-            submit_url,
-            method="POST",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "AirWSJT-X/0.1",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout_s):
-            accepted = True
-    except Exception as exc:
-        error = str(exc)
+    def _post(data: dict[str, Any]) -> tuple[bool, str | None]:
+        try:
+            req = urllib.request.Request(
+                submit_url,
+                method="POST",
+                data=json.dumps(data).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "AirWSJT-X/0.1",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=timeout_s):
+                return True, None
+        except Exception as exc:
+            return False, str(exc)
+
+    accepted, error = _post(payload)
     queued: list[dict[str, Any]] = []
     q_path = _contrib_file()
     try:
@@ -274,7 +275,20 @@ def submit_grid_contribution(
                 queued = [e for e in existing if isinstance(e, dict)]
     except Exception:
         queued = []
-    if not accepted:
+
+    if accepted:
+        if queued:
+            still_pending: list[dict[str, Any]] = []
+            for item in queued:
+                ok, _ = _post(item)
+                if not ok:
+                    still_pending.append(item)
+            queued = still_pending
+        if queued:
+            _write_json(q_path, queued)
+        elif q_path.exists():
+            q_path.unlink()
+    else:
         queued.append(payload)
         _write_json(q_path, queued)
     return {

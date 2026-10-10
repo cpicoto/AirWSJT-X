@@ -8,7 +8,7 @@ import unittest
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import airwsjtx.callsign as callsign_module
 
@@ -117,6 +117,19 @@ class CallsignDatabaseTests(unittest.TestCase):
         queued = json.loads((Path(self._tmp.name) / "callsign_grid_contrib.json").read_text(encoding="utf-8"))
         self.assertEqual(queued[0]["callsign"], "K1ABC")
         self.assertEqual(queued[0]["grid"], "FN20")
+
+    def test_successful_submit_flushes_pending_queue(self) -> None:
+        q_path = Path(self._tmp.name) / "callsign_grid_contrib.json"
+        q_path.write_text(json.dumps([{"callsign": "K1XYZ", "grid": "FN31"}]), encoding="utf-8")
+        self.callsign = importlib.reload(callsign_module)
+        ok_response = MagicMock()
+        ok_response.__enter__.return_value = ok_response
+        ok_response.__exit__.return_value = False
+        with patch.object(self.callsign.urllib.request, "urlopen", return_value=ok_response):
+            result = self.callsign.submit_grid_contribution("k1abc", "fn20")
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["queued"], 0)
+        self.assertFalse(q_path.exists())
 
 
 if __name__ == "__main__":
