@@ -32,6 +32,8 @@ AirWSJT-X is a [Tauri 2](https://tauri.app/) desktop application (Rust + React f
 
 The desktop app is implemented as a supervisor layer that keeps WSJT-X mostly untouched and coordinates:
 
+The desktop app is intentionally split into a small UI layer and a single Python sidecar backend. The same backend code lives under `sidecar/airwsjtx_bridge.py`, while the platform launchers under `src-tauri/binaries/` ensure the app works on both macOS and Windows with the same business logic.
+
 - Airplane tracking/selection (`airwsjtx.tracker`)
 - Contact state machine (`airwsjtx.state_machine`)
 - Rotator lock control (`airwsjtx.rotator`)

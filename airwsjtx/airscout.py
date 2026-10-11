@@ -13,6 +13,7 @@ import json
 import math
 import re
 import socket
+import ssl
 import threading
 import time
 import urllib.error
@@ -23,6 +24,11 @@ from email.utils import parsedate_to_datetime
 from http.client import HTTPMessage
 from collections.abc import Mapping
 from typing import Callable, cast
+
+try:
+    import certifi
+except Exception:  # pragma: no cover
+    certifi = None
 
 
 # ─── Aircraft state ───────────────────────────────────────────────────────────
@@ -137,6 +143,16 @@ class OpenSkyFeed:
 
     URL = "https://opensky-network.org/api/states/all"
     TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+
+    @staticmethod
+    def _ssl_context() -> ssl.SSLContext:
+        """Use the installed CA bundle so packaged macOS builds validate OpenSky TLS."""
+        if certifi is not None:
+            try:
+                return ssl.create_default_context(cafile=certifi.where())
+            except Exception:
+                pass
+        return ssl.create_default_context()
 
     def __init__(
         self,

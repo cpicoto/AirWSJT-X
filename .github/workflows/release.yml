@@ -118,7 +118,7 @@ jobs:
 
       - name: Bundle Python sidecar with PyInstaller
         run: |
-          pip install pyinstaller
+          pip install pyinstaller certifi
           pyinstaller --onefile --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
 
       - name: Rename sidecar binary for Tauri target triple
