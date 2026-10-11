@@ -100,7 +100,7 @@ function CompassRose({
       )}
       <circle cx={cx} cy={cy} r={6} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
       {bearing !== null && (
-        <text x={cx} y={cy + innerR * 0.55} textAnchor="middle" fontSize={20} fontWeight={700}
+        <text x={cx} y={cy + innerR * 0.56} textAnchor="middle" fontSize={24} fontWeight={700}
           fill="#c9d1d9" fontFamily="monospace">{bearing.toFixed(1)}°</text>
       )}
     </svg>
@@ -118,12 +118,12 @@ function ElevationArc({
   width?: number;
   height?: number;
 }) {
-  const cx = width / 2;
-  const cy = height - 12;
-  const R = height - 20;
+  const cx = 18;
+  const cy = height - 16;
+  const R = Math.max(22, Math.min(width - 30, height - 24));
 
   function elToXY(el: number, r: number) {
-    const rad = Math.PI - (el / 90) * Math.PI;
+    const rad = (el * Math.PI) / 180;
     return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
   }
 
@@ -131,16 +131,17 @@ function ElevationArc({
   const arcEnd = elToXY(90, R);
 
   const ticks = [];
-  for (let e = 0; e <= 90; e += 10) {
+  for (let e = 0; e <= 90; e += 5) {
     const isMajor = e % 30 === 0;
+    const isMid = e % 10 === 0;
     const p1 = elToXY(e, R);
-    const p2 = elToXY(e, isMajor ? R - 12 : R - 6);
+    const p2 = elToXY(e, isMajor ? R - 14 : isMid ? R - 9 : R - 5);
     ticks.push(
       <line key={e} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
         stroke={isMajor ? "#58a6ff" : "#30363d"} strokeWidth={isMajor ? 1.5 : 0.8} />
     );
     if (isMajor) {
-      const lp = elToXY(e, R - 22);
+      const lp = elToXY(e, R - 24);
       ticks.push(
         <text key={`l${e}`} x={lp.x} y={lp.y} textAnchor="middle" dominantBaseline="central"
           fontSize={9} fill="#8b949e">{e}°</text>
@@ -150,10 +151,19 @@ function ElevationArc({
 
   return (
     <svg width={width} height={height} style={{ userSelect: "none" }}>
-      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 1 ${arcEnd.x} ${arcEnd.y}`}
-        fill="none" stroke="#1c2128" strokeWidth={16} strokeLinecap="round" />
-      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 1 ${arcEnd.x} ${arcEnd.y}`}
+      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${arcEnd.x} ${arcEnd.y}`}
+        fill="none" stroke="#1c2128" strokeWidth={18} strokeLinecap="round" />
+      <path d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${arcEnd.x} ${arcEnd.y}`}
         fill="none" stroke="#30363d" strokeWidth={1.5} />
+      {current !== null && (() => {
+        const fillEnd = elToXY(Math.max(0.5, current), R);
+        return (
+          <path
+            d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${fillEnd.x} ${fillEnd.y}`}
+            fill="none" stroke="rgba(63,185,80,0.22)" strokeWidth={16} strokeLinecap="round"
+          />
+        );
+      })()}
       {ticks}
       {current !== null && (
         <>
@@ -166,7 +176,7 @@ function ElevationArc({
       )}
       <circle cx={cx} cy={cy} r={6} fill="#161b22" stroke="#3fb950" strokeWidth={2} />
       {current !== null && (
-        <text x={cx} y={cy - R * 0.45} textAnchor="middle" fontSize={18} fontWeight={700}
+        <text x={cx + R * 0.55} y={cy - R * 0.52} textAnchor="middle" fontSize={20} fontWeight={700}
           fill="#c9d1d9" fontFamily="monospace">{current.toFixed(1)}°</text>
       )}
     </svg>
@@ -331,6 +341,10 @@ export default function MobileApp() {
   const compassAircraft = aircraft.slice(0, 12).map((a) => ({
     az: a.az, el: a.el, callsign: a.callsign,
   }));
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 360;
+  const compassSize = Math.max(220, Math.min(viewportWidth - 12, 320));
+  const elevationWidth = 164;
+  const elevationHeight = 92;
 
   if (showSettings) {
     return (
@@ -404,18 +418,18 @@ export default function MobileApp() {
       </div>
 
       {/* Pointing display */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "8px 0" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "10px 6px 4px" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
           <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
             Azimuth
           </div>
-          <CompassRose bearing={selectedAc?.az ?? null} size={160} aircraft={compassAircraft} />
+          <CompassRose bearing={selectedAc?.az ?? null} size={compassSize} aircraft={compassAircraft} />
         </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: -6 }}>
+          <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", alignSelf: "flex-start" }}>
             Elevation
           </div>
-          <ElevationArc current={selectedAc?.el ?? null} width={160} height={100} />
+          <ElevationArc current={selectedAc?.el ?? null} width={elevationWidth} height={elevationHeight} />
         </div>
       </div>
 
@@ -454,14 +468,14 @@ export default function MobileApp() {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 600, fontSize: 14, color: "#c9d1d9", fontFamily: "monospace" }}>
+              <span style={{ fontWeight: 600, fontSize: 13, color: "#c9d1d9", fontFamily: "monospace" }}>
                 {ac.callsign}
               </span>
               <span style={{ fontSize: 12, color: "#8b949e" }}>
                 {ac.distance_km.toFixed(0)} km
               </span>
             </div>
-            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#8b949e", fontFamily: "monospace" }}>
+            <div style={{ display: "flex", gap: 10, fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
               <span>AZ {ac.az.toFixed(0)}°</span>
               <span>EL {ac.el.toFixed(1)}°</span>
               <span>FL{Math.round(ac.altitude_ft / 100)}</span>
@@ -549,8 +563,8 @@ const listContainerStyle: React.CSSProperties = {
 };
 
 const listItemStyle: React.CSSProperties = {
-  padding: "8px 12px", borderBottom: "1px solid #21262d",
-  cursor: "pointer", display: "flex", flexDirection: "column", gap: 2,
+  padding: "6px 12px", borderBottom: "1px solid #21262d",
+  cursor: "pointer", display: "flex", flexDirection: "column", gap: 1,
 };
 
 const settingsInputStyle: React.CSSProperties = {
