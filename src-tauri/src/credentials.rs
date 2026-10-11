@@ -51,11 +51,27 @@ pub(crate) fn load(app: &AppHandle, provider: &str) -> Result<Option<Credentials
         match entry(provider)?.get_password() {
             Ok(value) => Some(value),
             Err(keyring::Error::NoEntry) => None,
-            Err(_) => return Err(format!("Cannot read {provider} credentials from the OS credential store")),
+            Err(e) => return Err(format!("Cannot read {provider} credentials from the OS credential store: {e}")),
         }
     };
     encoded.map(|value| serde_json::from_str(&value)
         .map_err(|_| format!("Invalid {provider} credential-store entry"))).transpose()
+}
+
+/// Like `load`, but treats keychain access errors as "no credentials" rather than
+/// a fatal error. On macOS the Keychain can return `PlatformFailure` (locked,
+/// permission-prompt dismissed, Gatekeeper restrictions) even when no entry
+/// exists. Falling back to anonymous/empty credentials is always safer than
+/// blocking the entire aircraft backend.
+#[cfg(not(target_os = "android"))]
+fn load_or_none(app: &AppHandle, provider: &str) -> (Option<Credentials>, Option<String>) {
+    match load(app, provider) {
+        Ok(v) => (v, None),
+        Err(e) => {
+            eprintln!("aircraft credentials ({provider}): {e}");
+            (None, Some(e))
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -112,15 +128,20 @@ fn message(provider: &str, value: Option<&Credentials>, id: Option<&str>, poll_i
 }
 
 #[cfg(not(mobile))]
-pub fn restore(app: &AppHandle, child: &mut tauri_plugin_shell::process::CommandChild) -> Result<(), String> {
+pub fn restore(app: &AppHandle, child: &mut tauri_plugin_shell::process::CommandChild) -> Result<Option<String>, String> {
     let rates = intervals(app)?;
+    let mut credential_warning: Option<String> = None;
     for provider in ["opensky", "adsbexchange"] {
-        let value = load(app, provider)?;
+        // Use load_or_none so that a macOS Keychain access error (PlatformFailure,
+        // locked keychain, Gatekeeper prompt dismissed) falls back to anonymous
+        // access instead of aborting startup entirely.
+        let (value, warning) = load_or_none(app, provider);
+        if credential_warning.is_none() { credential_warning = warning; }
         let seconds = if provider == "opensky" { rates.opensky } else { rates.adsbexchange };
         child.write(&message(provider, value.as_ref(), None, seconds)?)
             .map_err(|_| "Cannot restore aircraft settings to the backend".to_string())?;
     }
-    Ok(())
+    Ok(credential_warning)
 }
 
 #[tauri::command]
@@ -128,14 +149,23 @@ pub async fn get_source_credentials_status(
     app: AppHandle,
     state: tauri::State<'_, Arc<Mutex<SidecarState>>>,
 ) -> Result<CredentialStatus, String> {
-    let opensky = load(&app, "opensky")?;
+    // Use load_or_none so a macOS Keychain access error surfaces as
+    // application_error rather than making the whole command fail.
+    #[cfg(not(target_os = "android"))]
+    let (opensky, load_error) = load_or_none(&app, "opensky");
+    #[cfg(target_os = "android")]
+    let (opensky, load_error) = (load(&app, "opensky")?, None::<String>);
+    #[cfg(not(target_os = "android"))]
+    let (adsbexchange, _) = load_or_none(&app, "adsbexchange");
+    #[cfg(target_os = "android")]
     let adsbexchange = load(&app, "adsbexchange")?;
     let rates = intervals(&app)?;
+    let sidecar_error = state.lock().await.credential_error.clone();
     Ok(CredentialStatus {
         opensky_client_id: opensky.as_ref().map(|v| v.client_id.clone()).unwrap_or_default(),
         opensky_configured: opensky.is_some(),
         adsbexchange_configured: adsbexchange.is_some(),
-        application_error: state.lock().await.credential_error.clone(),
+        application_error: load_error.or(sidecar_error),
         opensky_poll_interval_s: rates.opensky,
         adsbexchange_poll_interval_s: rates.adsbexchange,
     })

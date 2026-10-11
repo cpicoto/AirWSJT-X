@@ -1,3 +1,6 @@
+import json
+import os
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -150,6 +153,66 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             selected = airwsjtx_bridge._select_auto_lock_candidate([ac])
             self.assertIsNotNone(selected)
             self.assertEqual(selected.icao24, "valid123")
+
+
+class SourcePriorityDefaultAndPersistenceTests(unittest.TestCase):
+    """dump1090 must be OFF by default; user opt-in must survive restarts."""
+
+    def test_default_priority_excludes_dump1090(self) -> None:
+        self.assertNotIn("dump1090", airwsjtx_bridge._DEFAULT_SOURCE_PRIORITY)
+        self.assertIn("opensky", airwsjtx_bridge._DEFAULT_SOURCE_PRIORITY)
+
+    def test_read_source_priority_returns_default_when_no_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            priority_file = os.path.join(tmpdir, "airwsjtx", "source_priority.json")
+            with patch.object(airwsjtx_bridge, "_source_priority_path", return_value=priority_file):
+                result = airwsjtx_bridge._read_source_priority()
+        self.assertEqual(result, list(airwsjtx_bridge._DEFAULT_SOURCE_PRIORITY))
+        self.assertNotIn("dump1090", result)
+
+    def test_write_and_read_source_priority_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            priority_file = os.path.join(tmpdir, "source_priority.json")
+            with patch.object(airwsjtx_bridge, "_source_priority_path", return_value=priority_file):
+                airwsjtx_bridge._write_source_priority(["opensky", "dump1090"])
+                result = airwsjtx_bridge._read_source_priority()
+        self.assertEqual(result, ["opensky", "dump1090"])
+
+    def test_read_source_priority_ignores_invalid_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            priority_file = os.path.join(tmpdir, "source_priority.json")
+            with open(priority_file, "w") as fh:
+                json.dump(["opensky", "invalid_source", "dump1090"], fh)
+            with patch.object(airwsjtx_bridge, "_source_priority_path", return_value=priority_file):
+                result = airwsjtx_bridge._read_source_priority()
+        self.assertEqual(result, ["opensky", "dump1090"])
+
+    def test_read_source_priority_falls_back_on_corrupt_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            priority_file = os.path.join(tmpdir, "source_priority.json")
+            with open(priority_file, "w") as fh:
+                fh.write("not valid json{{")
+            with patch.object(airwsjtx_bridge, "_source_priority_path", return_value=priority_file):
+                result = airwsjtx_bridge._read_source_priority()
+        self.assertEqual(result, list(airwsjtx_bridge._DEFAULT_SOURCE_PRIORITY))
+
+    def test_airscout_set_sources_persists_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            priority_file = os.path.join(tmpdir, "source_priority.json")
+            with patch.object(airwsjtx_bridge, "_source_priority_path", return_value=priority_file):
+                with patch.multiple(airwsjtx_bridge, _source_priority=["opensky"],
+                                    _active_source=None):
+                    with patch.object(airwsjtx_bridge, "_start_configured_airscout_feed"):
+                        with patch.object(airwsjtx_bridge, "_ok"):
+                            with patch.object(airwsjtx_bridge, "_emit"):
+                                airwsjtx_bridge.handle({
+                                    "id": "set_src",
+                                    "method": "airscout_set_sources",
+                                    "params": {"sources": ["opensky", "dump1090"]},
+                                })
+                # Read back from file without mocking the module variable
+                result = airwsjtx_bridge._read_source_priority()
+        self.assertIn("dump1090", result)
 
 
 if __name__ == "__main__":

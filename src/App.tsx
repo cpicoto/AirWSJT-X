@@ -566,7 +566,7 @@ export default function App() {
     : activeSourceState === "backoff" || activeSourceState === "connecting"
       ? "var(--yellow)"
       : "var(--red)";
-  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090", "adsbexchange"];
+  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "adsbexchange"];
 
   const filteredAircraftCount = aircraft.length;
   const totalAircraftCount = airscout?.total ?? filteredAircraftCount;
@@ -1203,7 +1203,7 @@ export default function App() {
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {availableSources.map((source) => {
-                  const priority = sourceStatus?.priority ?? ["opensky", "dump1090"];
+                  const priority = sourceStatus?.priority ?? ["opensky"];
                   const idx = priority.indexOf(source);
                   const enabled = idx >= 0;
                   return (

@@ -50,7 +50,9 @@ _dump1090_feed: Dump1090Feed | None = None
 _dump1090_host: str = "127.0.0.1"
 _dump1090_port: int = 30003
 _supported_sources = ("opensky", "dump1090", "adsbexchange")
-_source_priority: list[str] = ["opensky", "dump1090"]
+# dump1090 is OFF by default; the user must explicitly enable it via the UI.
+# The priority is persisted in source_priority.json so opt-in choices survive restarts.
+_DEFAULT_SOURCE_PRIORITY: list[str] = ["opensky"]
 _source_aliases = {
     "rtl-sdr": "dump1090",
     "rtl_sdr": "dump1090",
@@ -100,6 +102,38 @@ def _aircraft_filter_path() -> str:
     return os.path.join(user_dir, "aircraft_filters.json")
 
 
+def _source_priority_path() -> str:
+    user_dir = os.path.join(tempfile.gettempdir(), "airwsjtx")
+    os.makedirs(user_dir, exist_ok=True)
+    return os.path.join(user_dir, "source_priority.json")
+
+
+def _read_source_priority() -> list[str]:
+    """Load the persisted source priority list. Returns the default (opensky only)
+    if no file exists or the file is invalid. dump1090 is off by default."""
+    try:
+        with open(_source_priority_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, list):
+            normalized = []
+            for src in data:
+                if isinstance(src, str) and src in _supported_sources and src not in normalized:
+                    normalized.append(src)
+            if normalized:
+                return normalized
+    except Exception:
+        pass
+    return list(_DEFAULT_SOURCE_PRIORITY)
+
+
+def _write_source_priority(priority: list[str]) -> None:
+    try:
+        with open(_source_priority_path(), "w", encoding="utf-8") as fh:
+            json.dump(priority, fh)
+    except Exception:
+        pass
+
+
 def _read_filters() -> dict[str, float | None]:
     try:
         with open(_aircraft_filter_path(), "r", encoding="utf-8") as fh:
@@ -129,6 +163,7 @@ def _write_filters(filters: dict[str, float | None]) -> None:
 
 
 _aircraft_filters = _read_filters()
+_source_priority: list[str] = _read_source_priority()
 
 # Hamlib rotator
 _rotator: HamlibRotator | None = None
@@ -377,6 +412,7 @@ def handle(msg: dict) -> None:
             next_priority = _normalize_sources(params.get("sources"))
             with _source_priority_lock:
                 _source_priority = next_priority
+            _write_source_priority(next_priority)
             _start_configured_airscout_feed(force_restart=True)
             with _source_priority_lock:
                 priority = list(_source_priority)
