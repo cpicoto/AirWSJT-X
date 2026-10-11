@@ -189,7 +189,7 @@ jobs:
           }
 
           # 1. Package name matches Tauri identifier
-          EXPECTED_PKG="com.airwsjtx.app"
+          EXPECTED_PKG=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['identifier'])")
           ACTUAL_PKG=$(echo "$BADGING" | grep -oP "package: name='\K[^']+" || true)
           if [ "$ACTUAL_PKG" = "$EXPECTED_PKG" ]; then
             check "Package name = $EXPECTED_PKG" ok

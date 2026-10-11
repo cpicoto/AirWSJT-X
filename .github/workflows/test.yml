@@ -92,7 +92,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Create screenshots directory
-        run: mkdir -p screenshots
+        run: python -c "from pathlib import Path; Path('screenshots').mkdir(parents=True, exist_ok=True)"
 
       - name: Run Playwright tests
         run: npx playwright test --config playwright.config.ts --reporter=list

@@ -320,9 +320,14 @@ class AndroidCIWorkflowTests(unittest.TestCase):
 
     def test_workflow_validates_apk_package_name(self) -> None:
         self.assertIn(
-            "com.airwsjtx.app",
+            "EXPECTED_PKG=$(python3 -c",
             self.workflow_text,
-            "mobile.yml must validate the APK package name after build",
+            "mobile.yml must derive the expected APK package name from tauri.conf.json",
+        )
+        self.assertIn(
+            "identifier",
+            self.workflow_text,
+            "mobile.yml package validation should read the identifier from tauri.conf.json",
         )
 
     def test_workflow_validates_apk_signing(self) -> None:

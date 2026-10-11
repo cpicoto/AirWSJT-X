@@ -1,5 +1,8 @@
 name: Screenshots
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main]
@@ -28,7 +31,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Create screenshots directory
-        run: mkdir -p screenshots
+        run: python -c "from pathlib import Path; Path('screenshots').mkdir(parents=True, exist_ok=True)"
 
       - name: Run screenshot tests
         run: npx playwright test --config playwright.config.ts
@@ -50,5 +53,7 @@ jobs:
             git commit -m "Update screenshots from CI
 
           Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
-            git push
+            if ! git push; then
+              echo "Screenshot push skipped: repository permissions or branch rules rejected the bot push."
+            fi
           fi
