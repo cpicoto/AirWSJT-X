@@ -67,14 +67,26 @@ pub fn run() {
                         .expect("failed to create sidecar command");
                     let (mut rx, mut child) = sidecar_cmd.spawn().expect("failed to spawn sidecar");
 
-                    let restore_error = credentials::restore(&handle, &mut child).err();
-                    if let Some(message) = &restore_error {
-                        eprintln!("Aircraft credentials: {}", message);
-                        let payload = serde_json::json!({
-                            "event": "source_credentials_error", "data": { "message": message }
-                        });
-                        let _ = handle.emit("sidecar-message", payload.to_string());
-                    }
+                    let restore_result = credentials::restore(&handle, &mut child);
+                    let restore_error = match restore_result {
+                        Ok(None) => None,
+                        Ok(Some(warning)) => {
+                            eprintln!("Aircraft credentials warning: {}", warning);
+                            let payload = serde_json::json!({
+                                "event": "source_credentials_error", "data": { "message": warning }
+                            });
+                            let _ = handle.emit("sidecar-message", payload.to_string());
+                            Some(warning)
+                        }
+                        Err(message) => {
+                            eprintln!("Aircraft credentials: {}", message);
+                            let payload = serde_json::json!({
+                                "event": "source_credentials_error", "data": { "message": message }
+                            });
+                            let _ = handle.emit("sidecar-message", payload.to_string());
+                            Some(message)
+                        }
+                    };
 
                     {
                         let mut guard = state_clone.lock().await;
