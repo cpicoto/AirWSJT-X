@@ -1,4 +1,4 @@
-name: Mobile Build
+﻿name: Mobile Build
 
 on:
   push:
@@ -46,6 +46,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── Pre-build: static packaging tests (no SDK/NDK required) ──────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Android packaging static tests
+        run: python -m unittest tests.test_android_packaging -v
+
+      # ── Toolchain setup ───────────────────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -69,6 +78,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # ── Build ─────────────────────────────────────────────────────────────
       - name: Initialize Tauri Android
         run: npx tauri android init
 
@@ -77,52 +87,136 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── Locate APK ────────────────────────────────────────────────────────
       - name: Find APK
         id: find_apk
         run: |
           APK=$(find src-tauri/gen/android -name "*.apk" -type f | head -1)
+          if [ -z "$APK" ]; then
+            echo "No APK found under src-tauri/gen/android"
+            find src-tauri/gen/android -type f | head -20
+            exit 1
+          fi
           echo "apk_path=$APK" >> $GITHUB_OUTPUT
           cp "$APK" /tmp/AirWSJT-X-android.apk
+          echo "APK found: $APK"
 
-      - name: Validate APK (manifest + package name)
+      # ── Post-build APK validation ─────────────────────────────────────────
+      - name: Validate APK — manifest, version, signing, architectures
         run: |
+          set -euo pipefail
           APK=/tmp/AirWSJT-X-android.apk
-          # Use aapt2 from the Android SDK build-tools to inspect the APK.
-          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" | sort -V | tail -1)
-          echo "Using aapt2: $AAPT2"
+
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2"     | sort -V | tail -1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -1)
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign"  | sort -V | tail -1)
+          echo "aapt2:     $AAPT2"
+          echo "apksigner: $APKSIGNER"
+          echo "zipalign:  $ZIPALIGN"
+
           BADGING=$("$AAPT2" dump badging "$APK")
           echo "$BADGING"
-          # Verify the package name matches the Tauri identifier.
-          EXPECTED_PKG="com.airwsjtx.app"
-          if echo "$BADGING" | grep -q "package: name='$EXPECTED_PKG'"; then
-            echo "✅ Package name matches: $EXPECTED_PKG"
-          else
-            echo "❌ Package name mismatch! Expected '$EXPECTED_PKG'."
-            exit 1
-          fi
-          # Verify versionName is present and non-empty.
-          if echo "$BADGING" | grep -qE "versionName='[^']+'"; then
-            echo "✅ versionName is set"
-          else
-            echo "❌ versionName is missing or empty in APK manifest."
-            exit 1
-          fi
-          # Verify minSdkVersion is set (required to know device compatibility floor).
-          if echo "$BADGING" | grep -qE "sdkVersion:'[0-9]+'"; then
-            echo "✅ minSdkVersion is present"
-          else
-            echo "❌ minSdkVersion is missing in APK manifest."
-            exit 1
-          fi
-          # Check APK size is non-trivial (catches empty/corrupt builds).
-          SIZE=$(stat -c%s "$APK")
-          echo "APK size: $SIZE bytes"
-          if [ "$SIZE" -lt 100000 ]; then
-            echo "❌ APK is suspiciously small ($SIZE bytes); build may have failed silently."
-            exit 1
-          fi
-          echo "✅ APK size OK"
 
+          PASS=0; FAIL=0
+          check() {
+            local label="$1" result="$2"
+            if [ "$result" = "ok" ]; then
+              echo "  PASS  $label"; PASS=$((PASS+1))
+            else
+              echo "  FAIL  $label -- $result"; FAIL=$((FAIL+1))
+            fi
+          }
+
+          # 1. Package name matches Tauri identifier
+          EXPECTED_PKG="com.airwsjtx.app"
+          ACTUAL_PKG=$(echo "$BADGING" | grep -oP "package: name='\K[^']+" || true)
+          if [ "$ACTUAL_PKG" = "$EXPECTED_PKG" ]; then
+            check "Package name = $EXPECTED_PKG" ok
+          else
+            check "Package name = $EXPECTED_PKG" "got '$ACTUAL_PKG'"
+          fi
+
+          # 2. versionName present
+          VNAME=$(echo "$BADGING" | grep -oP "versionName='\K[^']+" || true)
+          if [ -n "$VNAME" ]; then
+            check "versionName present ($VNAME)" ok
+          else
+            check "versionName present" "missing or empty"
+          fi
+
+          # 3. versionName matches tauri.conf.json (source of truth for version)
+          EXPECTED_VER=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          if [ "$VNAME" = "$EXPECTED_VER" ]; then
+            check "versionName matches tauri.conf.json ($EXPECTED_VER)" ok
+          else
+            check "versionName matches tauri.conf.json ($EXPECTED_VER)" "APK has '$VNAME'"
+          fi
+
+          # 4. versionCode present
+          VCODE=$(echo "$BADGING" | grep -oP "versionCode='\K[^']+" || true)
+          if [ -n "$VCODE" ]; then
+            check "versionCode present ($VCODE)" ok
+          else
+            check "versionCode present" "missing"
+          fi
+
+          # 5. minSdkVersion present
+          MIN_SDK=$(echo "$BADGING" | grep -oP "sdkVersion:'\K[0-9]+" || true)
+          if [ -n "$MIN_SDK" ]; then
+            check "minSdkVersion present ($MIN_SDK)" ok
+          else
+            check "minSdkVersion present" "missing"
+          fi
+
+          # 6. targetSdkVersion present
+          TGT_SDK=$(echo "$BADGING" | grep -oP "targetSdkVersion:'\K[0-9]+" || true)
+          if [ -n "$TGT_SDK" ]; then
+            check "targetSdkVersion present ($TGT_SDK)" ok
+          else
+            check "targetSdkVersion present" "missing"
+          fi
+
+          # 7. APK is signed (debug signing is acceptable for CI)
+          if "$APKSIGNER" verify --verbose "$APK" 2>&1 | grep -q "Verified using"; then
+            check "APK is signed" ok
+          else
+            check "APK is signed" "apksigner verify failed — APK is unsigned or has invalid signature"
+          fi
+
+          # 8. APK is zip-aligned (required for efficient mmap; some installers reject unaligned APKs)
+          if "$ZIPALIGN" -c -v 4 "$APK" > /dev/null 2>&1; then
+            check "APK is zip-aligned (4-byte)" ok
+          else
+            check "APK is zip-aligned (4-byte)" "zipalign check failed"
+          fi
+
+          # 9. arm64-v8a native library present (dominant modern Android architecture)
+          if unzip -l "$APK" | grep -q "lib/arm64-v8a/"; then
+            check "arm64-v8a native library present" ok
+          else
+            check "arm64-v8a native library present" "missing — app will not run on most modern devices"
+          fi
+
+          # 10. armeabi-v7a native library present (older/32-bit Android devices)
+          if unzip -l "$APK" | grep -q "lib/armeabi-v7a/"; then
+            check "armeabi-v7a native library present" ok
+          else
+            check "armeabi-v7a native library present" "missing — app will not run on 32-bit ARM devices"
+          fi
+
+          # 11. APK size sanity (catches silent empty-build failures)
+          SIZE=$(stat -c%s "$APK")
+          if [ "$SIZE" -ge 100000 ]; then
+            check "APK size >= 100 KB ($SIZE bytes)" ok
+          else
+            check "APK size >= 100 KB" "only $SIZE bytes — possible empty/corrupt build"
+          fi
+
+          echo ""
+          echo "Results: $PASS passed, $FAIL failed"
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      # ── Artifacts & release ───────────────────────────────────────────────
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:

@@ -302,6 +302,43 @@ class AndroidCIWorkflowTests(unittest.TestCase):
             "(required for ARM64 devices, the dominant Android architecture)",
         )
 
+    def test_workflow_has_armv7_rust_target(self) -> None:
+        self.assertIn(
+            "armv7-linux-androideabi",
+            self.workflow_text,
+            "mobile.yml must include the armv7-linux-androideabi Rust target "
+            "(required for 32-bit ARM devices)",
+        )
+
+    def test_workflow_runs_static_packaging_tests(self) -> None:
+        self.assertIn(
+            "test_android_packaging",
+            self.workflow_text,
+            "mobile.yml must run test_android_packaging before the build "
+            "to catch config errors early without spending NDK/build time",
+        )
+
+    def test_workflow_validates_apk_package_name(self) -> None:
+        self.assertIn(
+            "com.airwsjtx.app",
+            self.workflow_text,
+            "mobile.yml must validate the APK package name after build",
+        )
+
+    def test_workflow_validates_apk_signing(self) -> None:
+        self.assertIn(
+            "apksigner",
+            self.workflow_text,
+            "mobile.yml must verify APK signing with apksigner",
+        )
+
+    def test_workflow_validates_zip_alignment(self) -> None:
+        self.assertIn(
+            "zipalign",
+            self.workflow_text,
+            "mobile.yml must check zip-alignment — some Android installers reject unaligned APKs",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
