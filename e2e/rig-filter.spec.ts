@@ -1,5 +1,106 @@
 import { test, expect } from "@playwright/test";
 
+test("shows remaining quota and server retry time without inventing ADS-B Exchange quota", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __mockQuotas: {
+      opensky: { remaining: 4000, checked_epoch_s: 1000, retry_epoch_s: 2000, check_interval_s: 1800 },
+    } });
+  });
+  await page.goto("/");
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  await expect(page.getByText(/Remaining credits: 4000/)).toBeVisible();
+  await expect(page.getByText(/refresh 30 min/)).toBeVisible();
+  await expect(page.getByText(/retry no earlier than/)).toBeVisible();
+  await expect(page.getByText("Remaining quota: not exposed by the documented API", { exact: true })).toBeVisible();
+});
+
+test("poll rates can be saved independently of secrets and enforce provider minimums", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 });
+  await page.goto("/");
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  const openSky = page.getByLabel("OpenSky poll interval (seconds)", { exact: true });
+  const adsb = page.getByLabel("ADS-B Exchange poll interval (seconds)", { exact: true });
+  await expect(openSky).toHaveValue("30");
+  await expect(adsb).toHaveValue("30");
+  await openSky.fill("9");
+  await page.getByRole("button", { name: "Set OpenSky poll rate", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("at least 10");
+  await openSky.fill("10");
+  await page.getByRole("button", { name: "Set OpenSky poll rate", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("10 seconds");
+  await adsb.fill("4");
+  await page.getByRole("button", { name: "Set ADS-B Exchange poll rate", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("at least 5");
+  await adsb.fill("5");
+  await page.getByRole("button", { name: "Set ADS-B Exchange poll rate", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("5 seconds");
+  await expect(page.getByLabel("OpenSky Client Secret", { exact: true })).toHaveValue("");
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  await expect(openSky).toHaveValue("10");
+  await expect(adsb).toHaveValue("5");
+});
+
+test("account fields save without browser persistence and clear masked secrets", async ({ page }) => {
+  await page.goto("/");
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  await page.getByLabel("OpenSky Client ID", { exact: true }).fill("test-client");
+  await page.getByLabel("OpenSky Client Secret", { exact: true }).fill("fake-test-secret");
+  await expect(page.getByLabel("OpenSky Client Secret", { exact: true })).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Save OpenSky", exact: true }).click();
+  await expect(page.getByText("OpenSky (account saved)", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("OpenSky Client Secret", { exact: true })).toHaveValue("");
+  await page.getByLabel("ADS-B Exchange API key", { exact: true }).fill("fake-test-key");
+  await expect(page.getByLabel("ADS-B Exchange API key", { exact: true })).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Save ADS-B Exchange", exact: true }).click();
+  await expect(page.getByLabel("ADS-B Exchange API key", { exact: true })).toHaveValue("");
+  const settings = await page.evaluate(() => JSON.stringify(localStorage));
+  expect(settings).not.toContain("fake-test-secret");
+  expect(settings).not.toContain("fake-test-key");
+  expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain("fake-test");
+  await page.getByRole("button", { name: "Clear OpenSky", exact: true }).click();
+  await expect(page.getByText("OpenSky (anonymous)", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Clear ADS-B Exchange", exact: true }).click();
+  await expect(page.getByText("ADS-B Exchange (API key saved)", { exact: true })).not.toBeVisible();
+});
+
+test("restores saved account status without populating secrets", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __mockCredentialStatus: {
+      opensky_client_id: "saved-client", opensky_configured: true, adsbexchange_configured: true,
+      opensky_poll_interval_s: 30, adsbexchange_poll_interval_s: 30,
+    } });
+  });
+  await page.goto("/");
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  await expect(page.getByLabel("OpenSky Client ID", { exact: true })).toHaveValue("saved-client");
+  await expect(page.getByLabel("OpenSky Client Secret", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("ADS-B Exchange API key", { exact: true })).toHaveValue("");
+});
+
+test("reports account save errors without claiming success", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __mockCredentialSaveError: "Aircraft backend is not ready" });
+  });
+  await page.goto("/");
+  await page.getByText("Aircraft accounts", { exact: true }).click();
+  await page.getByLabel("OpenSky Client ID", { exact: true }).fill("test-client");
+  await page.getByLabel("OpenSky Client Secret", { exact: true }).fill("fake-test-secret");
+  await page.getByRole("button", { name: "Save OpenSky", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Aircraft backend is not ready");
+  await expect(page.getByText("OpenSky (account saved)", { exact: true })).not.toBeVisible();
+});
+
+test("ADS-B Exchange can be enabled and selected as the online source", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "+ ADS-B Exchange", exact: true }).click();
+  const source = page.getByRole("button", { name: "✓ ADS-B Exchange", exact: true });
+  await expect(source).toBeVisible();
+  await source.locator("..").getByRole("button", { name: "↑", exact: true }).click();
+  await expect(page.locator(".topbar")).toContainText("adsbexchange");
+  await expect(page.locator(".topbar")).toContainText("NET ONLINE");
+});
+
 test("manual MY station works without WSJT-X and survives incoming status", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");

@@ -11,6 +11,7 @@ interface LockState {
   state: string;
   rotator_az?: number | null;
   rotator_el?: number | null;
+  position_updated_epoch_s?: number | null;
 }
 
 interface PlaneLockPanelProps {
@@ -26,6 +27,8 @@ interface PlaneLockPanelProps {
     az_b: number; el_b: number; off_path_deg: number;
   }[];
   sourceStatusText?: string;
+  nowEpochS: number;
+  pollIntervalS: number;
 }
 
 const STATE_LABELS: Record<string, { label: string; color: string }> = {
@@ -94,8 +97,14 @@ function AzElBadge({ label, az, el, rotAz, rotEl }:
 export default function PlaneLockPanel({
   locked, autoLock, sessionState, onAutoLockToggle, onUnlock, onLockAircraft, aircraft,
   sourceStatusText,
+  nowEpochS,
+  pollIntervalS,
 }: PlaneLockPanelProps) {
   const stateInfo = STATE_LABELS[sessionState] ?? STATE_LABELS.idle;
+  const updateAge = locked?.position_updated_epoch_s != null
+    ? Math.max(0, Math.floor(nowEpochS - locked.position_updated_epoch_s)) : null;
+  const positionStale = locked?.position_updated_epoch_s != null
+    && nowEpochS - locked.position_updated_epoch_s > pollIntervalS + 5;
 
   // State machine progression steps
   const steps = ["idle", "plane_locked", "tracking", "ready", "active_qso"];
@@ -199,6 +208,14 @@ export default function PlaneLockPanel({
                 </div>
               )}
             </div>
+          </div>
+          <div className="locked-update-age" style={{
+            marginTop: 8, fontSize: 11,
+            color: updateAge === null || positionStale ? "#d29922" : "#8b949e",
+          }}>
+            {updateAge === null
+              ? "Last aircraft position update: unknown"
+              : `Last aircraft position update: ${updateAge}s ago${positionStale ? " — stale" : ""}`}
           </div>
         </div>
       ) : (

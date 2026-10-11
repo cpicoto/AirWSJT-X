@@ -59,12 +59,66 @@ In **Stations**, enter **MY callsign** and **MY grid** and select **Apply** to u
 - Listener startup errors (for example, a port already in use) are reported as **WSJT-X error** in the application log and in the sidecar's stderr.
 - If the app reports **Rig discovery unavailable**, rebuild the Python sidecar and restart the desktop app. This indicates that the frontend is running with an older backend; the app remains usable, but discovered rigs cannot be listed until both are updated.
 
+### Aircraft Accounts and API Polling
+
+The desktop and mobile apps support the authenticated [ADS-B Exchange v2 API](https://gateway.adsbexchange.com/api/aircraft/v2/docs/index.html). An API key with access to the geographic radius endpoint is required; there is no anonymous access.
+
+Expand **Aircraft accounts** in the desktop aircraft panel or mobile **Settings** to paste and save credentials:
+
+- **OpenSky:** paste the `clientId` and `clientSecret` values from your OpenSky credential file into the separate fields. The app uses OAuth2 client-credentials authentication, caches the access token, renews it before expiry, and retries once with a new token on HTTP 401. Clear the account to return to anonymous requests.
+- **ADS-B Exchange:** paste the API key; this provider's documented v2 API does not use a Client ID/Client Secret pair.
+- **Save** uses Windows Credential Manager, macOS/iOS Keychain, Linux Secret Service (requires an unlocked desktop keyring), or Android Keystore-protected encrypted storage. Credentials are restored when the app starts. **Clear** removes the saved credentials. Secrets are masked, cleared from input fields after saving, and never returned to the frontend. Mobile API authentication and requests run in native code rather than exposing secrets to browser requests.
+- **Poll interval (seconds)** appears beside each provider's credentials. Set it independently without re-entering the secret. Both default to **30 seconds**; OpenSky requires at least **10 seconds**, ADS-B Exchange at least **5 seconds**. Intervals are saved separately in the app's configuration directory, restored on startup, and applied to the active feed. An in-progress desktop wait completes before the new cadence takes effect; rate-limit cooldowns take precedence. dump1090 remains at five seconds.
+- Existing environment-variable ADS-B Exchange keys remain a desktop fallback after clearing the saved key. Remove the environment variable and restart to disable that fallback.
+
+#### Where to Get Credentials
+
+**OpenSky Network**
+
+1. Create an account at [OpenSky Network](https://opensky-network.org/) and sign in.
+2. Open your [OpenSky Account page](https://opensky-network.org/my-opensky/account), create an API client, and download its credentials file (`credentials.json`).
+3. Open the file locally in a text editor. Copy the value of `clientId` into **OpenSky Client ID** and the value of `clientSecret` into **OpenSky Client Secret** under **Aircraft accounts**. Copy only the values, without quotation marks; do not paste the entire JSON file.
+4. Select **Save OpenSky**. The app handles access-token requests and renewal automatically; do not enter your OpenSky login password or an access token in these fields.
+
+**ADS-B Exchange**
+
+Visit [ADSBexchange.com on RapidAPI](https://rapidapi.com/adsbx/api/adsbexchange-com1) for the API listing, subscription options, and credentials offered through RapidAPI. There is a charge for a subscription.
+
+**Compatibility note:** the current app connects directly to the [ADS-B Exchange v2 gateway](https://gateway.adsbexchange.com/api/aircraft/v2/docs/index.html) using an `x-api-key` header. RapidAPI credentials use a different gateway and authentication headers; a RapidAPI `X-RapidAPI-Key` is not interchangeable with the direct-gateway key. Obtain a key entitled to the direct v2 geographic radius endpoint from ADS-B Exchange, paste it into **ADS-B Exchange API key**, and select **Save ADS-B Exchange**. RapidAPI gateway support is not currently implemented.
+
+#### Quota and Server Reset Handling
+
+- OpenSky's `X-Rate-Limit-Remaining` is a response header, not a separate quota-query endpoint. While OpenSky is active, the app samples it from ordinary aircraft responses initially and every **10 minutes** (at the next response if polling is slower). This adds **no extra API requests**.
+- The first HTTP 429 triggers an immediate quota sample. Aircraft polling and manual refresh then pause until the server's `X-Rate-Limit-Retry-After-Seconds` or `Retry-After` deadline, including when it is shorter than 30 minutes. Without a valid server deadline, the pause is **30 minutes**.
+- A successful aircraft response after the deadline confirms that requests are accepted again, clears the pause, and resumes the configured poll rate. Its quota header is sampled to confirm the reset; subsequent quota sampling uses **30-minute** intervals for that account session.
+- The account panel displays remaining credits, the last quota sample time, and the retry deadline. Missing or invalid headers are shown as unknown/error, never guessed.
+- The ADS-B Exchange v2 documentation exposes neither an equivalent quota endpoint nor a remaining-quota header. The app does not invent one or spend extra requests probing for it. It retains token-bucket backoff and honors `Retry-After` when supplied; the panel explicitly marks remaining quota as unavailable.
+
+Alternatively, set the ADS-B Exchange key in the environment **before launching the app**. For PowerShell, prompt for it without putting the key into command history:
+
+```powershell
+$key = Read-Host "ADS-B Exchange API key" -AsSecureString
+$env:ADSBEXCHANGE_API_KEY = [System.Net.NetworkCredential]::new('', $key).Password
+npm run tauri -- dev --config src-tauri\tauri.desktop.conf.json
+```
+
+Configure MY grid (and DX grid when available), enable **ADS-B Exchange** in the aircraft source controls, and move it above OpenSky/dump1090 using the priority arrows. Existing source defaults remain unchanged. The query uses a circle centered on MY station covering the station path plus a 400 km margin. Your API plan must permit the requested radius.
+
+- Polls every **30 seconds by default** (configurable above), with gzip compression and the `x-api-key` header.
+- Converts API altitude (feet), speed (knots), and vertical rate (feet/minute) to the shared aircraft model.
+- Preserves position age using the API server timestamp and `seen_pos`.
+- Backs off on HTTP 429; authentication/network errors are surfaced in source status and the app log, with fallback to the next enabled source.
+- Manual refresh is limited to at least five seconds between requests within a feed session. Your key's limits are shared with other applications.
+- Saved keys stay in the OS credential store and are passed privately to the backend; environment keys remain in the backend environment. They are not returned to the frontend.
+
+Rebuild the Python sidecar and restart the desktop app after updating. Rebuild native mobile packages for the new storage and authenticated-request commands; browser-only previews cannot access secure device storage. Android/iOS device builds require their respective SDKs.
+
 ### Mobile Mode
 
 The mobile app operates independently:
 
 - Enter your grid locator in settings
-- Aircraft in your area appear on the compass rose (via OpenSky Network)
+- Select OpenSky or ADS-B Exchange in Settings; aircraft in your area appear on the compass rose
 - Tap an aircraft to see its azimuth, elevation, and distance
 - Speech callouts guide antenna pointing hands-free
 - Offline callsign database via callook.info / IndexedDB
@@ -74,8 +128,8 @@ The mobile app operates independently:
 - **Frontend:** React 19, TypeScript
 - **Desktop shell:** Tauri 2.x (Rust)
 - **Backend (desktop):** Python — PyInstaller sidecar
-- **Backend (mobile):** TypeScript — standalone, no sidecar
-- **Aircraft data:** OpenSky Network REST API
+- **Backend (mobile):** TypeScript tracking with native Rust authenticated HTTP/secure storage, no Python sidecar
+- **Aircraft data:** OpenSky Network and ADS-B Exchange REST APIs, local dump1090/readsb on desktop
 - **Rotator control:** Hamlib
 - **Digital modes:** WSJT-X UDP protocol, Q65-15s
 
@@ -120,6 +174,8 @@ AirWSJT-X uses WSJT-X native reporting as the primary PSK Reporter path. The Air
 ### WSJT-X Status Strip TX Indicator
 
 The **Az / El** toolbar below the title bar is always available. Select **Panel** for an inline readout, **Overlay** for a floating readout, or **Hide** to dismiss it. The **Scale** slider adjusts the readout from 70% to 180%, even while hidden. Display mode and scale are remembered across restarts.
+
+The locked-aircraft tile refreshes callsign, altitude, both stations' Az/El, score, and off-path angle on aircraft feed updates. OpenSky and ADS-B Exchange default to a configurable 30-second polling cadence; dump1090 reports approximately every five seconds. The tile shows **Last aircraft position update** age, updated each second, and marks data **stale** only when its age is greater than the active source's configured poll interval plus five seconds. For a 30-second poll, 35 seconds is not stale; an age greater than 35 seconds is stale. For dump1090, the threshold is greater than 10 seconds. Changing a poll rate or switching sources updates the threshold immediately. This age comes from the aircraft position report, not from rereading cached data. Rate-limit pauses do not extend the configured freshness threshold; unknown timestamps are explicitly shown as unknown.
 
 - `TX○` — WSJT-X is idle (not transmitting)
 - Red `TX●` — WSJT-X is currently transmitting (PTT ON)

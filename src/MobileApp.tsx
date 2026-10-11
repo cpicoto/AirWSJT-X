@@ -6,7 +6,9 @@ import {
   haversineKm,
   slantRangeKm,
 } from "./lib/geo";
-import { Aircraft, OpenSkyPoller } from "./lib/opensky";
+import { Aircraft, OpenSkyPoller, fetchNativeAircraft } from "./lib/opensky";
+import { invoke } from "@tauri-apps/api/core";
+import AircraftAccounts from "./AircraftAccounts";
 import { downloadDb, getDbStatus, DbStatus } from "./lib/callsign";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -180,6 +182,7 @@ interface MobileSettings {
   dxCall: string;
   dxGrid: string;
   speechEnabled: boolean;
+  aircraftSource?: "opensky" | "adsbexchange";
 }
 
 function loadSettings(): MobileSettings {
@@ -199,6 +202,9 @@ export default function MobileApp() {
   const [lastUpdate, setLastUpdate] = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [dbBusy, setDbBusy] = useState(false);
+  const [accountRevision, setAccountRevision] = useState(0);
+  const accountsChanged = useCallback(() => setAccountRevision(value => value + 1), []);
+  const accountLog = useCallback((message: string) => setStatus(message), []);
   const pollerRef = useRef<OpenSkyPoller | null>(null);
   const speechLastRef = useRef<{ az: number; el: number; at: number } | null>(null);
 
@@ -232,12 +238,16 @@ export default function MobileApp() {
     }
 
     const bbox = 3;
+    const source = settings.aircraftSource ?? "opensky";
+    let disposed = false;
     const poller = new OpenSkyPoller({
-      latMin: myLat - bbox,
-      lonMin: myLon - bbox * 2,
-      latMax: myLat + bbox,
-      lonMax: myLon + bbox * 2,
+      latMin: Math.max(-90, myLat - bbox),
+      lonMin: Math.max(-180, myLon - bbox * 2),
+      latMax: Math.min(90, myLat + bbox),
+      lonMax: Math.min(180, myLon + bbox * 2),
       intervalMs: 30000,
+      minimumIntervalMs: source === "opensky" ? 10000 : 5000,
+      fetchAircraft: (latMin, lonMin, latMax, lonMax) => fetchNativeAircraft(source, latMin, lonMin, latMax, lonMax),
       onUpdate: (raw: Aircraft[]) => {
         const withPos = raw.filter(
           (a) => a.lat != null && a.lon != null && a.altitude_m != null && a.altitude_m > 0 && !a.on_ground,
@@ -269,12 +279,19 @@ export default function MobileApp() {
       onError: (msg) => setStatus(`Error: ${msg}`),
       onRateLimited: (ms) => setStatus(`Rate limited — retry in ${Math.round(ms / 1000)}s`),
     });
-    poller.start();
     pollerRef.current = poller;
-    setStatus("Fetching aircraft...");
+    setStatus("Loading aircraft settings...");
+    invoke<{ opensky_poll_interval_s: number; adsbexchange_poll_interval_s: number }>("get_source_credentials_status")
+      .then(value => {
+        if (disposed) return;
+        const interval = source === "opensky" ? value.opensky_poll_interval_s : value.adsbexchange_poll_interval_s;
+        poller.setInterval(interval * 1000);
+        poller.start();
+        setStatus("Fetching aircraft...");
+      }).catch(() => { if (!disposed) setStatus("Cannot read secure aircraft account settings"); });
 
-    return () => poller.stop();
-  }, [hasStation, settings.myGrid]);
+    return () => { disposed = true; poller.stop(); };
+  }, [hasStation, settings.myGrid, settings.aircraftSource, accountRevision]);
 
   // Speech
   useEffect(() => {
@@ -320,7 +337,7 @@ export default function MobileApp() {
           <span style={{ fontSize: 18, fontWeight: 700, color: "#c9d1d9" }}>Settings</span>
           <button style={backBtnStyle} onClick={() => setShowSettings(false)}>Done</button>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16, flex: 1, minHeight: 0, overflowY: "auto" }}>
           <SettingsField label="My Callsign" value={settings.myCall}
             onChange={(v) => saveSettings({ ...settings, myCall: v.toUpperCase() })} placeholder="AD7NP" />
           <SettingsField label="My Grid" value={settings.myGrid}
@@ -334,6 +351,14 @@ export default function MobileApp() {
               onChange={(e) => saveSettings({ ...settings, speechEnabled: e.target.checked })} />
             Speech callouts
           </label>
+          <label style={{ color: "#c9d1d9" }}>Aircraft source
+            <select aria-label="Aircraft source" value={settings.aircraftSource ?? "opensky"}
+              onChange={e => saveSettings({ ...settings, aircraftSource: e.target.value === "adsbexchange" ? "adsbexchange" : "opensky" })}>
+              <option value="opensky">OpenSky</option>
+              <option value="adsbexchange">ADS-B Exchange</option>
+            </select>
+          </label>
+          <AircraftAccounts onLog={accountLog} onChanged={accountsChanged} />
           <div style={{ borderTop: "1px solid #30363d", paddingTop: 16 }}>
             <div style={{ fontSize: 14, color: "#8b949e", marginBottom: 8 }}>Callsign Database</div>
             {dbStatus && (
@@ -368,7 +393,7 @@ export default function MobileApp() {
           }}>
             {status}
           </span>
-          <button style={settingsBtnStyle} onClick={() => setShowSettings(true)}>⚙</button>
+          <button style={settingsBtnStyle} aria-label="Settings" onClick={() => setShowSettings(true)}>⚙</button>
         </div>
       </div>
 

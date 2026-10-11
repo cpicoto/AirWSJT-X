@@ -1,11 +1,58 @@
 import time
 import unittest
+from unittest.mock import patch
 
 from airwsjtx.airscout import Aircraft
 from sidecar import airwsjtx_bridge
 
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
+    def test_poll_rate_change_emits_updated_source_status(self) -> None:
+        with patch.dict(airwsjtx_bridge._source_poll_intervals):
+            with patch.multiple(airwsjtx_bridge, _active_source="opensky", _opensky_feed=None):
+                with patch.object(airwsjtx_bridge, "_emit") as emit:
+                    airwsjtx_bridge.handle({
+                        "id": "interval", "method": "source_poll_interval_set",
+                        "params": {"provider": "opensky", "seconds": 60},
+                    })
+                    events = [call.args[0] for call in emit.call_args_list]
+                    status = next(event["data"] for event in events
+                                  if event.get("event") == "airscout_source_status")
+                    self.assertEqual(status["poll_intervals_s"]["opensky"], 60)
+
+    def test_source_status_reports_saved_poll_intervals_and_dump1090_cadence(self) -> None:
+        with patch.dict(airwsjtx_bridge._source_poll_intervals, {"opensky": 60, "adsbexchange": 10}):
+            with patch.object(airwsjtx_bridge, "_emit") as emit:
+                airwsjtx_bridge._emit_source_status()
+                self.assertEqual(emit.call_args.args[0]["data"]["poll_intervals_s"],
+                                 {"opensky": 60, "adsbexchange": 10, "dump1090": 5})
+            with patch.object(airwsjtx_bridge, "_ok") as reply:
+                airwsjtx_bridge.handle({"id": "sources", "method": "airscout_get_sources"})
+                self.assertEqual(reply.call_args.args[1]["poll_intervals_s"],
+                                 {"opensky": 60, "adsbexchange": 10, "dump1090": 5})
+
+    def test_tracking_emits_all_current_aircraft_fields_and_original_timestamp(self) -> None:
+        ac = Aircraft(
+            icao24="abc123", callsign="TEST1", lat=47.5, lon=-122.4,
+            altitude_m=10000, velocity_ms=200, heading_deg=90,
+            vertical_rate_ms=0, on_ground=False, position_updated_epoch_s=1000,
+        )
+        geo = {"az_a": 123, "el_a": 5, "az_b": 234, "el_b": 6,
+               "scatter_score": 0.8, "off_path_deg": 12}
+        with patch.multiple(airwsjtx_bridge, _locked_aircraft_id="abc123",
+                            _station_a_locator="CN87", _station_b_locator="CN89", _rotator=None):
+            with patch.object(airwsjtx_bridge, "scatter_geometry", return_value=geo):
+                with patch.object(airwsjtx_bridge, "_emit") as emit:
+                    airwsjtx_bridge._update_rotator_for_locked([ac])
+                    data = emit.call_args.args[0]["data"]
+                    self.assertEqual(data["altitude_ft"], 32808)
+                    for key, value in geo.items():
+                        self.assertEqual(data[key], value)
+                    self.assertEqual(data["callsign"], "TEST1")
+                    self.assertEqual(data["position_updated_epoch_s"], 1000)
+                    airwsjtx_bridge._update_rotator_for_locked([ac])
+                    self.assertEqual(emit.call_args.args[0]["data"]["position_updated_epoch_s"], 1000)
+
     def setUp(self) -> None:
         with airwsjtx_bridge._aircraft_lock:
             self._orig_cache = list(airwsjtx_bridge._aircraft_cache)

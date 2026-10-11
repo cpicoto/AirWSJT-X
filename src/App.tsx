@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
+import AircraftAccounts from "./AircraftAccounts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ interface AirscoutSourceState {
   active_source: string | null;
   priority: string[];
   sources: Record<string, { state: string; message: string | null }>;
+  poll_intervals_s?: Record<string, number>;
 }
 interface CallsignDbStatus {
   db_url: string;
@@ -258,6 +260,7 @@ export default function App() {
     az_a: number; el_a: number; az_b: number; el_b: number;
     scatter_score: number; off_path_deg: number; state: string;
     rotator_az?: number | null; rotator_el?: number | null;
+    position_updated_epoch_s?: number | null;
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number } | null>(null);
@@ -333,6 +336,8 @@ export default function App() {
           } else if (evt === "rotator_disconnected") {
             setRotatorConnected(false);
             addLog("Rotator disconnected");
+          } else if (evt === "source_credentials_error") {
+            addLog(`Aircraft credentials: ${evtData.message}`);
           } else if (evt === "rotator_error") {
             addLog(`Rotator: ${evtData.message}`);
           } else if (evt === "plane_locked") {
@@ -341,15 +346,22 @@ export default function App() {
             setStatus(s => s ? { ...s, state: (evtData.state as string) } : s);
             addLog(`🔒 Locked: ${evtData.callsign} FL${Math.round((evtData.altitude_ft as number)/100)} score=${((evtData.scatter_score as number)*100).toFixed(0)}%`);
           } else if (evt === "plane_tracking") {
-            setLockedPlane(prev => prev ? {
+            setLockedPlane(prev => prev && prev.icao24 === evtData.icao24 ? {
               ...prev,
+              callsign: typeof evtData.callsign === "string" ? evtData.callsign : prev.callsign,
+              altitude_ft: typeof evtData.altitude_ft === "number" ? evtData.altitude_ft : prev.altitude_ft,
               az_a: evtData.az_a as number,
               el_a: evtData.el_a as number,
+              az_b: typeof evtData.az_b === "number" ? evtData.az_b : prev.az_b,
+              el_b: typeof evtData.el_b === "number" ? evtData.el_b : prev.el_b,
+              off_path_deg: typeof evtData.off_path_deg === "number" ? evtData.off_path_deg : prev.off_path_deg,
+              position_updated_epoch_s: typeof evtData.position_updated_epoch_s === "number"
+                ? evtData.position_updated_epoch_s : null,
               scatter_score: evtData.scatter_score as number,
               state: evtData.state as string,
               rotator_az: evtData.rotator_az as number | null,
               rotator_el: evtData.rotator_el as number | null,
-            } : null);
+            } : prev);
             setStatus(s => s ? { ...s, state: evtData.state as string } : s);
           } else if (evt === "plane_unlocked" || evt === "plane_out_of_window") {
             setLockedPlane(null);
@@ -514,14 +526,19 @@ export default function App() {
     (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking"))
   );
   const activeSource = sourceStatus?.active_source ?? airscout?.active_source ?? null;
+  const configuredPollInterval = activeSource ? sourceStatus?.poll_intervals_s?.[activeSource] : undefined;
+  const activePollIntervalS = typeof configuredPollInterval === "number"
+    && Number.isFinite(configuredPollInterval) && configuredPollInterval > 0
+    ? configuredPollInterval : activeSource === "dump1090" ? 5 : 30;
   const activeSourceState = activeSource ? sourceStatus?.sources?.[activeSource]?.state ?? "unknown" : "stopped";
   const activeSourceMessage = activeSource ? sourceStatus?.sources?.[activeSource]?.message ?? null : null;
-  const openskyState = sourceStatus?.sources?.opensky?.state ?? "stopped";
+  const internetSourceState = activeSource === "adsbexchange"
+    ? activeSourceState : sourceStatus?.sources?.opensky?.state ?? "stopped";
   const connectivityState = activeSource === "dump1090" && activeSourceState === "connected"
     ? "local"
-    : openskyState === "connected"
+    : internetSourceState === "connected"
       ? "online"
-      : ["backoff", "connecting", "disconnected"].includes(openskyState)
+      : ["backoff", "connecting", "disconnected"].includes(internetSourceState)
         ? "degraded"
         : "offline";
   const connectivityColor = connectivityState === "online" || connectivityState === "local"
@@ -546,7 +563,7 @@ export default function App() {
     : activeSourceState === "backoff" || activeSourceState === "connecting"
       ? "var(--yellow)"
       : "var(--red)";
-  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090"];
+  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090", "adsbexchange"];
 
   const filteredAircraftCount = aircraft.length;
   const totalAircraftCount = airscout?.total ?? filteredAircraftCount;
@@ -1017,6 +1034,8 @@ export default function App() {
           <div className="card flex1">
             <PlaneLockPanel
               locked={lockedPlane}
+              nowEpochS={nowEpochS}
+              pollIntervalS={activePollIntervalS}
               autoLock={autoLock}
               sessionState={state}
               onAutoLockToggle={(v) => {
@@ -1084,7 +1103,7 @@ export default function App() {
         </div>
 
         {/* RIGHT: Decodes + Aircraft + Log */}
-        <div className="col">
+        <div className="col" style={{ overflowY: "auto" }}>
 
           {/* WSJT-X Decodes */}
           <div className="card" style={{ flexShrink: 0 }}>
@@ -1115,7 +1134,7 @@ export default function App() {
                 <button
                   style={{ marginLeft: 6, padding: "1px 6px", fontSize: 9, borderRadius: 3,
                     background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
-                  onClick={() => rpc("airscout_fetch_now", {}).catch(() => {})}>
+                  onClick={() => rpc("airscout_fetch_now", {}).catch(e => addLog(`Aircraft refresh error: ${e}`))}>
                   ↻
                 </button>
               </span>}
@@ -1195,7 +1214,7 @@ export default function App() {
                           }
                         }}
                       >
-                        {enabled ? "✓" : "+"} {source}
+                        {enabled ? "✓" : "+"} {source === "adsbexchange" ? "ADS-B Exchange" : source}
                       </button>
                       {enabled && (
                         <>
@@ -1229,6 +1248,12 @@ export default function App() {
                   );
                 })}
               </div>
+              <AircraftAccounts onLog={addLog} />
+              {sourceStatus?.sources?.adsbexchange?.message && (
+                <div style={{ fontSize: 10, color: "var(--yellow)" }}>
+                  ADS-B Exchange: {sourceStatus.sources.adsbexchange.message}
+                </div>
+              )}
             </div>
             {aircraft.length === 0 ? (
               <div style={{ color: "var(--text-muted)", fontSize: 11 }}>

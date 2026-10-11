@@ -16,6 +16,15 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--bg); overflow: hidden; height: 100vh; }
 
+.aircraft-accounts { font-size: 11px; }
+.aircraft-accounts summary { cursor: pointer; padding: 4px 0; }
+.account-fields { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; }
+.account-fields label { display: grid; gap: 3px; }
+.account-fields input { width: 100%; min-width: 0; padding: 4px 6px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+.account-fields button { margin-right: 6px; font-size: 10px; }
+.account-poll-rate { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }
+.account-poll-rate label { flex: 1; min-width: 100px; }
+
 /* ── Shell ──────────────────────────────────────────────────────────── */
 .app {
   display: grid;
