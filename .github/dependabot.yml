@@ -1,0 +1,66 @@
+version: 2
+updates:
+  # npm — frontend React/TypeScript dependencies
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      tauri:
+        patterns:
+          - "@tauri-apps/*"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+      vite-typescript:
+        patterns:
+          - "vite"
+          - "typescript"
+          - "@vitejs/*"
+      playwright:
+        patterns:
+          - "@playwright/test"
+
+  # cargo — Rust/Tauri backend
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      tauri:
+        patterns:
+          - "tauri*"
+          - "tauri-*"
+      serde:
+        patterns:
+          - "serde"
+          - "serde_json"
+
+  # pip — Python sidecar (pyinstaller + any third-party imports)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+
+  # GitHub Actions — workflow dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      actions-core:
+        patterns:
+          - "actions/*"
+      tauri-action:
+        patterns:
+          - "tauri-apps/*"
