@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- App Store Connect upload error 90869: the macOS bundle now declares `minimumSystemVersion` 12.0, which Apple accepts for arm64-only builds. The release workflow verifies `LSMinimumSystemVersion` and the binary architecture after each macOS build.
+- Restored the macOS Intel (x86_64) build using the supported `macos-15-intel` runner (the retired `macos-13` label never started).
+
 ## 0.3.12
 
 ### Fixed

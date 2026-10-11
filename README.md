@@ -20,7 +20,7 @@ All platforms are built from CI on every tagged release.
 
 | Platform | Format | Download |
 |----------|--------|----------|
-| **macOS** (Apple Silicon) | `.dmg` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
+| **macOS** (Apple Silicon / Intel) | `.dmg` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
 | **Windows** (x64) | `.msi` / `.exe` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
 | **Linux** (x64) | `.AppImage` / `.deb` / `.rpm` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
 | **Android** | `.apk` (signed) | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |

@@ -37,6 +37,7 @@
     ],
     "macOS": {
       "signingIdentity": null,
+      "minimumSystemVersion": "12.0",
       "providerShortName": "QJ2R7N9BRA",
       "entitlements": "Entitlements.plist"
     }

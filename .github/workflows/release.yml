@@ -29,6 +29,11 @@ jobs:
             sidecar_name: airwsjtx_bridge-aarch64-apple-darwin
             pyinstaller_name: airwsjtx_bridge
             bundles: ""
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            sidecar_name: airwsjtx_bridge-x86_64-apple-darwin
+            pyinstaller_name: airwsjtx_bridge
+            bundles: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             sidecar_name: airwsjtx_bridge-x86_64-pc-windows-msvc.exe
@@ -180,6 +185,7 @@ jobs:
 
             ### Downloads
             - **macOS (Apple Silicon):** `.dmg` file
+            - **macOS (Intel):** `.dmg` file (`x64`)
             - **Windows:** `.msi` installer or `.exe` setup
             - **Linux (x64):** `.AppImage`, `.deb` (Debian/Ubuntu/Mint), `.rpm` (Fedora/openSUSE)
             - **iOS:** `.tar.gz` (from mobile build workflow)
@@ -187,6 +193,19 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+      - name: Verify macOS bundle architecture and minimum version
+        if: runner.os == 'macOS'
+        run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/AirWSJT-X.app"
+          lipo -info "$APP/Contents/MacOS/"*
+          MIN=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist")
+          echo "LSMinimumSystemVersion=$MIN"
+          MAJOR=${MIN%%.*}
+          if [ "$MAJOR" -lt 12 ]; then
+            echo "LSMinimumSystemVersion must be >= 12.0 (App Store Connect error 90869)"
+            exit 1
+          fi
 
   deploy-site:
     needs: build
