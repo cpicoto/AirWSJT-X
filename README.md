@@ -151,20 +151,26 @@ pyinstaller --onefile --name airwsjtx_bridge --distpath src-tauri/binaries --pat
 npx tauri build --config src-tauri/tauri.desktop.conf.json
 ```
 
-#### VS Code on Linux (no package installation)
+#### Linux source workflow (no package installation)
 
-After installing the prerequisites and Node dependencies (`npm ci`), open this
-repository folder in VS Code and use **Terminal > Run Task**:
+After installing the prerequisites and Node dependencies (`npm ci`), run these
+commands from the repository root:
 
-- **AirWSJT-X: Build** builds the frontend and release desktop executable with
-  `npm run tauri -- build --no-bundle`. It does not generate or install a `.deb`.
-  This is also the default **Ctrl+Shift+B** task.
-- **AirWSJT-X: Run** launches `npm run tauri -- dev`. Build it first; this task does
-  not rebuild.
-- **AirWSJT-X: Build and Run** completes the build successfully before launching
-  the executable.
+```bash
+# Build a release executable without generating or installing a .deb
+npm run tauri -- build --no-bundle
 
-These tasks run from the repository root. The Linux source-sidecar wrapper
+# Run the previously built executable
+./src-tauri/target/release/airwsjtx
+
+# Build successfully, then run
+npm run tauri -- build --no-bundle && ./src-tauri/target/release/airwsjtx
+```
+
+VS Code tasks are local and platform-specific; `.vscode/tasks.json` is ignored
+by Git rather than shared between Linux and Windows.
+
+The Linux source-sidecar wrapper
 requires `python3` on PATH and the source checkout to remain available.
 Close the application to finish the Run task. For live frontend development
 instead, run `npm run tauri -- dev` from the repository root.
