@@ -84,6 +84,7 @@ _my_grid_override: str | None = None
 _wsjtx_de_call: str | None = None
 _wsjtx_de_grid: str | None = None
 _station_b_call: str | None = None
+_dx_grid_manual: bool = False
 
 # Aircraft display filters
 _DEFAULT_FILTERS = {
@@ -392,9 +393,11 @@ def handle(msg: dict) -> None:
         # ── AirScout methods ──────────────────────────────────────────────────
 
         elif method == "airscout_set_stations":
-            global _station_a_locator, _station_b_locator
+            global _station_a_locator, _station_b_locator, _dx_grid_manual
             _station_a_locator = params.get("locator_a")
             _station_b_locator = params.get("locator_b")
+            # A DX chosen in the app must not be clobbered by WSJT-X's DX grid.
+            _dx_grid_manual = bool(_station_b_locator)
             _start_configured_airscout_feed(force_restart=True)
             _ok(id_, {"locator_a": _station_a_locator, "locator_b": _station_b_locator})
 
@@ -1337,7 +1340,7 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
             _start_adsbexchange_feed()
         else:
             _start_configured_airscout_feed()
-    if st.dx_grid and st.dx_grid != _station_b_locator:
+    if st.dx_grid and not _dx_grid_manual and st.dx_grid != _station_b_locator:
         _station_b_locator = st.dx_grid
         with _source_status_lock:
             active_source = _active_source

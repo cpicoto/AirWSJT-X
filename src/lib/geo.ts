@@ -82,15 +82,18 @@ export function headingWithinTolerance(
   return headingDeltaDeg(aircraftHeading, pathBearing) <= Math.abs(tolerance);
 }
 
+/** Geometric elevation on a spherical Earth; negative when below the horizon. */
 export function elevationDeg(surfaceKm: number, altitudeM: number): number {
   if (surfaceKm <= 0) return 90.0;
-  const altKm = altitudeM / 1000.0;
-  return Math.atan2(altKm, surfaceKm) * RAD2DEG;
+  const theta = surfaceKm / R_KM;
+  const rP = R_KM + altitudeM / 1000.0;
+  return Math.atan2(rP * Math.cos(theta) - R_KM, rP * Math.sin(theta)) * RAD2DEG;
 }
 
 export function slantRangeKm(surfaceKm: number, altitudeM: number): number {
-  const altKm = altitudeM / 1000.0;
-  return Math.sqrt(surfaceKm ** 2 + altKm ** 2);
+  const theta = surfaceKm / R_KM;
+  const rP = R_KM + altitudeM / 1000.0;
+  return Math.sqrt(Math.max(0, R_KM ** 2 + rP ** 2 - 2 * R_KM * rP * Math.cos(theta)));
 }
 
 export interface ScatterResult {

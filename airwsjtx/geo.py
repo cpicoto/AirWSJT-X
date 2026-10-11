@@ -70,21 +70,21 @@ def heading_within_tolerance(path_bearing_deg: float, aircraft_heading_deg: floa
 
 
 def elevation_deg(surface_km: float, altitude_m: float) -> float:
-    """Elevation angle (degrees) from a station to an aircraft.
-    Accounts for Earth curvature for long distances.
+    """Geometric elevation angle (degrees) from a ground station to an aircraft
+    on a spherical Earth. Negative when the aircraft is below the horizon.
     """
     if surface_km <= 0:
         return 90.0
-    alt_km = altitude_m / 1000.0
-    # Straight-line distance
-    slant = math.sqrt(surface_km**2 + alt_km**2)
-    # Simple angle (valid for ranges < ~600 km)
-    return math.degrees(math.atan2(alt_km, surface_km))
+    theta = surface_km / _R_KM
+    r_p = _R_KM + altitude_m / 1000.0
+    return math.degrees(math.atan2(r_p * math.cos(theta) - _R_KM, r_p * math.sin(theta)))
 
 
 def slant_range_km(surface_km: float, altitude_m: float) -> float:
-    alt_km = altitude_m / 1000.0
-    return math.sqrt(surface_km**2 + alt_km**2)
+    """Straight-line distance (km) from a ground station to an aircraft on a spherical Earth."""
+    theta = surface_km / _R_KM
+    r_p = _R_KM + altitude_m / 1000.0
+    return math.sqrt(max(0.0, _R_KM**2 + r_p**2 - 2 * _R_KM * r_p * math.cos(theta)))
 
 
 # ─── Scatter geometry ─────────────────────────────────────────────────────────

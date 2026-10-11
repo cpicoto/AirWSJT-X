@@ -249,6 +249,23 @@ class WSJTXListenerSocketTests(unittest.TestCase):
                 self.assertEqual(bridge._station_a_call, "W1AW")
                 self.assertEqual(bridge._station_a_locator, "FN31PR")
 
+    def test_manual_dx_grid_survives_wsjtx_status(self) -> None:
+        from sidecar import airwsjtx_bridge as bridge
+
+        with patch.multiple(bridge, _my_call_override=None, _my_grid_override="CN87VP",
+                            _station_a_locator="CN87VP", _station_b_locator=None,
+                            _dx_grid_manual=False, _wsjtx_freq_hz=None, _wsjtx_band_mhz=None):
+            with patch.object(bridge, "_start_configured_airscout_feed"), \
+                    patch.object(bridge, "_start_opensky_feed"), patch.object(bridge, "_emit"):
+                status = _make_status("WSJT-X")
+                status.dx_grid = "JN34VJ"
+                bridge._on_wsjtx_status(status)
+                self.assertEqual(bridge._station_b_locator, "JN34VJ")
+                bridge.handle({"id": "dx", "method": "airscout_set_stations",
+                               "params": {"locator_a": "CN87VP", "locator_b": "CN89OH"}})
+                bridge._on_wsjtx_status(status)
+                self.assertEqual(bridge._station_b_locator, "CN89OH")
+
     def test_discovers_filtered_out_rigs_from_udp_messages(self) -> None:
         on_status = Mock()
         listener = WSJTXListener(rig_name_filter="Selected-Rig", on_status=on_status)

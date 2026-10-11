@@ -140,7 +140,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             callsign="VALID",
             lat=48.5,
             lon=2.0,
-            altitude_m=5000.0,
+            altitude_m=10000.0,
             velocity_ms=200.0,
             heading_deg=90.0,
             vertical_rate_ms=0.0,
@@ -149,7 +149,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
         with patch.object(airwsjtx_bridge, "_station_a_locator", "AA00"), \
              patch.object(airwsjtx_bridge, "_station_b_locator", "AA00"), \
              patch.object(airwsjtx_bridge, "locator_to_latlon",
-                          side_effect=[(50.0, 0.0), (50.0, 10.0)]):
+                          side_effect=[(50.0, 0.0), (50.0, 4.0)]):
             selected = airwsjtx_bridge._select_auto_lock_candidate([ac])
             self.assertIsNotNone(selected)
             self.assertEqual(selected.icao24, "valid123")
