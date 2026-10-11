@@ -218,7 +218,7 @@
     <header>
       <h1>Air<span>WSJT-X</span></h1>
       <p class="tagline">Aircraft Scatter contacts on 23 cm and above — automated</p>
-      <div class="badge">v__VERSION__ — Code-Signed macOS + Mobile Support</div>
+      <div class="badge">v__VERSION__ — Windows · macOS · Linux · Android</div>
     </header>
 
     <div class="screenshot">
@@ -231,13 +231,16 @@
     </div>
 
     <div class="whats-new">
-      <h2>What's New in v0.2.0</h2>
+      <h2>What's New in v0.3.0</h2>
       <ul>
-        <li><strong>Mobile app for Android</strong> — standalone aircraft tracker with OpenSky Network integration</li>
-        <li><strong>Compass rose &amp; elevation arc</strong> — visual Az/El display for hand-pointing antennas in the field</li>
-        <li><strong>Offline callsign database</strong> — callook.info DB stored locally on mobile via IndexedDB</li>
-        <li><strong>Speech callouts</strong> — audible Az/El announcements for selected aircraft while pointing</li>
-        <li><strong>Platform detection</strong> — desktop launches full WSJT-X supervisor; mobile launches standalone tracker</li>
+        <li><strong>Linux support</strong> — tested on Linux Mint 23 (Ubuntu 22.04 base), AppImage and .deb packages</li>
+        <li><strong>Rig dropdown</strong> — discovered WSJT-X rigs shown in a dropdown instead of free-text filter</li>
+        <li><strong>ADS-B Exchange feed</strong> — direct v2 API integration with priority/fallback source selection</li>
+        <li><strong>OpenSky OAuth2</strong> — optional authenticated access with token caching and quota tracking</li>
+        <li><strong>Aircraft account panel</strong> — unified credential storage for Windows, macOS, Linux, Android, iOS</li>
+        <li><strong>Compact locked plane tile</strong> — station/aircraft distances, altitude in feet, tighter layout</li>
+        <li><strong>Auto-lock fix</strong> — reliable auto-lock selection on all platforms</li>
+        <li><strong>WSJT-X loopback fix</strong> — active heartbeat query when passive UDP bind is unavailable</li>
       </ul>
     </div>
 
@@ -249,6 +252,7 @@
           <h3>macOS</h3>
           <div class="dl-links">
             <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X___VERSION___aarch64.dmg" class="download-btn">Apple Silicon (.dmg)</a>
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X___VERSION___x64.dmg" class="download-btn secondary">Intel (.dmg)</a>
             <div class="dl-meta">12 MB &middot; macOS 13+</div>
           </div>
         </div>
@@ -264,18 +268,20 @@
       </div>
       <div class="platform-group">
         <div class="platform-card">
+          <div class="platform-icon">&#128039;</div>
+          <h3>Linux <span class="new-badge">New</span></h3>
+          <div class="dl-links">
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X___VERSION___amd64.AppImage" class="download-btn">AppImage</a>
+            <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/airwsjtx___VERSION___amd64.deb" class="download-btn secondary">.deb package</a>
+            <div class="dl-meta">~14 MB &middot; Ubuntu 22.04 / Mint 23+ &middot; x64</div>
+          </div>
+        </div>
+        <div class="platform-card">
           <div class="platform-icon">&#128241;</div>
-          <h3>Android <span class="new-badge">New</span></h3>
+          <h3>Android</h3>
           <div class="dl-links">
             <a href="https://github.com/cpicoto/AirWSJT-X/releases/download/v__VERSION__/AirWSJT-X-android.apk" class="download-btn">Download APK</a>
             <div class="dl-meta">46 MB &middot; Android 8.0+</div>
-          </div>
-        </div>
-        <div class="platform-card" style="border-style: dashed;">
-          <div class="platform-icon">&#127822;</div>
-          <h3>iOS</h3>
-          <div class="dl-links">
-            <div class="dl-meta" style="color: var(--amber);">Coming soon — TestFlight beta planned</div>
           </div>
         </div>
       </div>
@@ -385,7 +391,8 @@
       <h2>Requirements</h2>
       <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem;">Desktop</h3>
       <ul class="req-list">
-        <li>Windows 10/11 (x64) or macOS 13+ (Apple Silicon)</li>
+        <li>Windows 10/11 (x64) or macOS 13+ (Apple Silicon or Intel)</li>
+        <li>Linux: Ubuntu 22.04 / Linux Mint 23 or newer (x64, AppImage or .deb)</li>
         <li>WSJT-X installed and configured for 23 cm+ operation</li>
         <li>Hamlib-compatible rotator (for automatic antenna tracking)</li>
         <li>Internet connection (for aircraft position data)</li>
