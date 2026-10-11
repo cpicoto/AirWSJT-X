@@ -164,6 +164,7 @@ const STATE_COLOR: Record<string, string> = {
 };
 
 const PORTABLE_GRID_OVERRIDES_KEY = "airwsjtx.portableGridOverrides";
+const REMOTE_DB_URL = "https://ad7np.us/RoverAIM/DB";
 const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
 const MY_CALL_OVERRIDE_KEY = "airwsjtx.myCallOverride";
 const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
@@ -229,6 +230,7 @@ export default function App() {
       return {};
     }
   });
+  const [remoteStationGrids, setRemoteStationGrids] = useState<Record<string, string>>({});
   const [myGridInput, setMyGridInput] = useState("");
   const [myCallOverride, setMyCallOverride] = useState(() => localStorage.getItem(MY_CALL_OVERRIDE_KEY) ?? "");
   const [myGridOverride, setMyGridOverride] = useState(() => localStorage.getItem(MY_GRID_OVERRIDE_KEY) ?? "");
@@ -272,6 +274,29 @@ export default function App() {
   const addLog = useCallback((msg: string) => {
     setLog((l) => [...l.slice(-49), `${new Date().toLocaleTimeString()} ${msg}`]);
   }, []);
+
+  useEffect(() => {
+    fetch(REMOTE_DB_URL)
+      .then(r => r.json())
+      .then((entries: Array<{ name: string; grid6: string }>) => {
+        const grids: Record<string, string> = {};
+        for (const e of entries) {
+          const at = e.name.indexOf("@");
+          if (at < 0 || !e.grid6) continue;
+          const call = e.name.slice(0, at).trim().toUpperCase();
+          if (call) grids[call] = e.grid6.toUpperCase();
+        }
+        setRemoteStationGrids(grids);
+        addLog(`Remote station DB loaded — ${Object.keys(grids).length} stations`);
+      })
+      .catch(() => addLog("Remote station DB unavailable"));
+  }, [addLog]);
+
+  function lookupGrid(callsign: string | null): string | null {
+    if (!callsign) return null;
+    const call = callsign.trim().toUpperCase();
+    return stationGridOverrides[call] ?? remoteStationGrids[call] ?? null;
+  }
 
   // Wire sidecar messages — handles both RPC responses and push events
   useEffect(() => {
@@ -590,8 +615,8 @@ export default function App() {
 
   const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
   const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
-  const myGrid = myGridOverride || (myCallsign ? stationGridOverrides[myCallsign] : null) || wsjtxLive.de_grid;
-  const selectedDxGrid = (dxCall ? stationGridOverrides[dxCall] : null) ?? dxGrid;
+  const myGrid = myGridOverride || lookupGrid(myCallsign) || wsjtxLive.de_grid;
+  const selectedDxGrid = lookupGrid(dxCall) ?? dxGrid;
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
@@ -933,7 +958,7 @@ export default function App() {
                     color: dxCall === s.call ? "var(--green)" : undefined }}
                   onClick={() => {
                     setDxCallsign(s.call); setDxGrid(s.grid.toUpperCase());
-                    const dxLocator = stationGridOverrides[s.call] ?? s.grid.toUpperCase();
+                    const dxLocator = lookupGrid(s.call) ?? s.grid.toUpperCase();
                     const locatorA = myGrid ?? wsjtxLive.de_grid;
                     if (myCallsign) {
                       rpc("set_station_calls", { call_a: myCallsign, call_b: s.call }).catch(() => {});
@@ -953,7 +978,7 @@ export default function App() {
                   const info = await rpc("callsign_lookup", { callsign: call }) as { callsign: string; grid: string | null; name: string | null };
                   const nextCall = info.callsign.trim().toUpperCase();
                   const lookedUpGrid = normalizeGrid(info.grid);
-                  const dxLocator = stationGridOverrides[nextCall] ?? lookedUpGrid;
+                  const dxLocator = lookupGrid(nextCall) ?? lookedUpGrid;
                   const locatorA = myGrid ?? wsjtxLive.de_grid;
                   setDxCallsign(nextCall);
                   setDxGrid(lookedUpGrid);
