@@ -330,11 +330,30 @@ class AndroidCIWorkflowTests(unittest.TestCase):
             "mobile.yml package validation should read the identifier from tauri.conf.json",
         )
 
+    def test_workflow_validates_min_sdk_with_exact_badging_field(self) -> None:
+        self.assertIn(
+            "minSdkVersion:'\\K[0-9]+",
+            self.workflow_text,
+            "mobile.yml must read minSdkVersion from the APK badging output using the exact field name",
+        )
+
     def test_workflow_validates_apk_signing(self) -> None:
         self.assertIn(
             "apksigner",
             self.workflow_text,
             "mobile.yml must verify APK signing with apksigner",
+        )
+
+    def test_workflow_uploads_signed_apk_output(self) -> None:
+        self.assertIn(
+            "signed_apk_path=/tmp/AirWSJT-X-android.apk",
+            self.workflow_text,
+            "mobile.yml must expose the signed APK path as a step output",
+        )
+        self.assertIn(
+            "path: ${{ steps.find_apk.outputs.signed_apk_path }}",
+            self.workflow_text,
+            "mobile.yml must upload the signed APK artifact, not the unsigned Gradle output",
         )
 
     def test_workflow_validates_zip_alignment(self) -> None:

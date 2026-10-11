@@ -160,13 +160,14 @@ jobs:
 
           # Verify
           "${BUILD_TOOLS}/apksigner" verify /tmp/AirWSJT-X-android.apk
+          echo "signed_apk_path=/tmp/AirWSJT-X-android.apk" >> $GITHUB_OUTPUT
           echo "APK found and signed: $APK"
 
       # ── Post-build APK validation ─────────────────────────────────────────
       - name: Validate APK — manifest, version, signing, architectures
         run: |
           set -euo pipefail
-          APK=/tmp/AirWSJT-X-android.apk
+          APK="${{ steps.find_apk.outputs.signed_apk_path }}"
 
           AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2"     | sort -V | tail -1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -1)
@@ -222,7 +223,7 @@ jobs:
           fi
 
           # 5. minSdkVersion present
-          MIN_SDK=$(echo "$BADGING" | grep -oP "sdkVersion:'\K[0-9]+" || true)
+          MIN_SDK=$(echo "$BADGING" | grep -oP "minSdkVersion:'\K[0-9]+" || true)
           if [ -n "$MIN_SDK" ]; then
             check "minSdkVersion present ($MIN_SDK)" ok
           else
@@ -279,15 +280,16 @@ jobs:
 
       # ── Artifacts & release ───────────────────────────────────────────────
       - name: Upload Android artifact
+        if: always() && steps.find_apk.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: android-build
-          path: /tmp/AirWSJT-X-android.apk
+          path: ${{ steps.find_apk.outputs.signed_apk_path }}
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          files: /tmp/AirWSJT-X-android.apk
+          files: ${{ steps.find_apk.outputs.signed_apk_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
