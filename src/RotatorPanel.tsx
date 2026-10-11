@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isSpeechSupported } from "./lib/speech";
 
 interface RotatorPanelProps {
   currentAz: number;
@@ -513,8 +514,12 @@ export default function RotatorPanel({
                 type="checkbox"
                 checked={speechEnabled}
                 onChange={(e) => onSpeechEnabledChange(e.target.checked)}
+                disabled={!isSpeechSupported()}
               />
               Speech
+              {!isSpeechSupported() && (
+                <span style={{ fontSize: 10, color: "#8b949e" }} title="Web Speech API not available on this platform">(unavailable)</span>
+              )}
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }} title="Minimum azimuth/elevation change to announce">
               Min Δ°

@@ -10,6 +10,7 @@ import { Aircraft, OpenSkyPoller, fetchNativeAircraft } from "./lib/opensky";
 import { invoke } from "@tauri-apps/api/core";
 import AircraftAccounts from "./AircraftAccounts";
 import { downloadDb, getDbStatus, DbStatus } from "./lib/callsign";
+import { isSpeechSupported, speak } from "./lib/speech";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -206,7 +207,7 @@ export default function MobileApp() {
   const accountsChanged = useCallback(() => setAccountRevision(value => value + 1), []);
   const accountLog = useCallback((message: string) => setStatus(message), []);
   const pollerRef = useRef<OpenSkyPoller | null>(null);
-  const speechLastRef = useRef<{ az: number; el: number; at: number } | null>(null);
+  const speechLastRef = useRef<{ az: number; el: number; at: number; icao24: string } | null>(null);
 
   const saveSettings = useCallback((next: MobileSettings) => {
     setSettings(next);
@@ -296,15 +297,16 @@ export default function MobileApp() {
   // Speech
   useEffect(() => {
     if (!settings.speechEnabled || !selectedAc) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (!isSpeechSupported()) return;
     const now = Date.now();
     const last = speechLastRef.current;
-    if (last && now - last.at < 3000) return;
-    if (last && Math.abs(selectedAc.az - last.az) < 3 && Math.abs(selectedAc.el - last.el) < 2) return;
-    const text = `${selectedAc.callsign}, Azimuth ${Math.round(selectedAc.az)}, Elevation ${Math.round(selectedAc.el)}`;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-    speechLastRef.current = { az: selectedAc.az, el: selectedAc.el, at: now };
+    // When the selected aircraft changes, bypass the time cooldown so the new
+    // aircraft is announced immediately (the position-delta guard still applies).
+    const sameAircraft = last?.icao24 === selectedAc.icao24;
+    if (sameAircraft && last && now - last.at < 3000) return;
+    if (sameAircraft && last && Math.abs(selectedAc.az - last.az) < 3 && Math.abs(selectedAc.el - last.el) < 2) return;
+    speak(`${selectedAc.callsign}, Azimuth ${Math.round(selectedAc.az)}, Elevation ${Math.round(selectedAc.el)}`);
+    speechLastRef.current = { az: selectedAc.az, el: selectedAc.el, at: now, icao24: selectedAc.icao24 };
   }, [selectedAc, settings.speechEnabled]);
 
   // Update selected aircraft position from latest data
@@ -348,8 +350,12 @@ export default function MobileApp() {
             onChange={(v) => saveSettings({ ...settings, dxGrid: v.toUpperCase() })} placeholder="CN89oh" />
           <label style={{ display: "flex", alignItems: "center", gap: 10, color: "#c9d1d9", fontSize: 15 }}>
             <input type="checkbox" checked={settings.speechEnabled}
+              disabled={!isSpeechSupported()}
               onChange={(e) => saveSettings({ ...settings, speechEnabled: e.target.checked })} />
             Speech callouts
+            {!isSpeechSupported() && (
+              <span style={{ fontSize: 11, color: "#8b949e" }} title="Web Speech API not available on this platform">(unavailable)</span>
+            )}
           </label>
           <label style={{ color: "#c9d1d9" }}>Aircraft source
             <select aria-label="Aircraft source" value={settings.aircraftSource ?? "opensky"}

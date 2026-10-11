@@ -5,6 +5,7 @@ import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
 import { haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
+import { isSpeechSupported, speak } from "./lib/speech";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -447,7 +448,7 @@ export default function App() {
   }, [rotatorSpeechIntervalSec]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (!isSpeechSupported()) return;
     if (!rotatorConnected || !rotatorSpeechEnabled) {
       if (rotatorSpeechLastAnnouncedRef.current) window.speechSynthesis.cancel();
       rotatorSpeechLastAnnouncedRef.current = null;
@@ -468,9 +469,7 @@ export default function App() {
     const elDelta = Math.abs(rotatorEl - last.el);
     if (Math.max(azDelta, elDelta) < rotatorSpeechThresholdDeg) return;
     if (now - last.at < rotatorSpeechIntervalSec * 1000) return;
-    const utterance = new SpeechSynthesisUtterance(speechText);
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
+    speak(speechText);
     rotatorSpeechLastAnnouncedRef.current = { az: rotatorAz, el: rotatorEl, at: now };
   }, [
     rotatorAz,
