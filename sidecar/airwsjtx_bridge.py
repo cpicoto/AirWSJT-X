@@ -979,11 +979,34 @@ def _do_unlock() -> None:
     _emit({"event": "plane_unlocked", "data": {}})
 
 
+def _select_auto_lock_candidate(aircraft: list[Aircraft]) -> Aircraft | None:
+    """Return the best candidate using the same filtered geometry path as the UI."""
+    if not _station_a_locator or not _station_b_locator:
+        return None
+
+    try:
+        lat_a, lon_a = locator_to_latlon(_station_a_locator)
+        lat_b, lon_b = locator_to_latlon(_station_b_locator)
+    except Exception:
+        return None
+
+    best_ac: Aircraft | None = None
+    best_score = 0.0
+    for ac in aircraft:
+        if not ac.has_position or not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
+            continue
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m)  # type: ignore[arg-type]
+        score = float(geo.get("scatter_score", 0.0))
+        if score > best_score and score >= 0.05:
+            best_score = score
+            best_ac = ac
+
+    return best_ac
+
+
 def _try_auto_lock(aircraft: list[Aircraft]) -> None:
     """Called on every aircraft update. Auto-locks the best plane if enabled."""
     if not _auto_lock_enabled:
-        return
-    if not _station_a_locator or not _station_b_locator:
         return
     from airwsjtx.state_machine import SessionState
     # Only auto-lock from idle/completed/aborted states
@@ -991,13 +1014,7 @@ def _try_auto_lock(aircraft: list[Aircraft]) -> None:
                                          SessionState.ABORTED):
         return
 
-    try:
-        lat_a, lon_a = locator_to_latlon(_station_a_locator)
-        lat_b, lon_b = locator_to_latlon(_station_b_locator)
-    except Exception:
-        return
-
-    best_ac, score = select_best_aircraft(aircraft, lat_a, lon_a, lat_b, lon_b, min_score=0.20)
+    best_ac = _select_auto_lock_candidate(aircraft)
     if best_ac:
         _do_lock(best_ac.icao24)
 
