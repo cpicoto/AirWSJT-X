@@ -29,11 +29,6 @@ jobs:
             sidecar_name: airwsjtx_bridge-aarch64-apple-darwin
             pyinstaller_name: airwsjtx_bridge
             bundles: ""
-          - os: macos-13
-            target: x86_64-apple-darwin
-            sidecar_name: airwsjtx_bridge-x86_64-apple-darwin
-            pyinstaller_name: airwsjtx_bridge
-            bundles: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             sidecar_name: airwsjtx_bridge-x86_64-pc-windows-msvc.exe
@@ -185,7 +180,6 @@ jobs:
 
             ### Downloads
             - **macOS (Apple Silicon):** `.dmg` file
-            - **macOS (Intel):** `.dmg` file
             - **Windows:** `.msi` installer or `.exe` setup
             - **Linux (x64):** `.AppImage`, `.deb` (Debian/Ubuntu/Mint), `.rpm` (Fedora/openSUSE)
             - **iOS:** `.tar.gz` (from mobile build workflow)

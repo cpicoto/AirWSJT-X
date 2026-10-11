@@ -388,6 +388,26 @@ class AndroidCIWorkflowTests(unittest.TestCase):
             "mobile.yml must persist the x86_64 unsigned APK between sequential flavor builds",
         )
 
+    def test_workflow_signs_with_persistent_release_key(self) -> None:
+        for secret in ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS"):
+            self.assertIn(
+                f"secrets.{secret}",
+                self.workflow_text,
+                f"mobile.yml must read the signing key from the {secret} secret",
+            )
+        self.assertNotIn(
+            "debug.keystore",
+            self.workflow_text,
+            "mobile.yml must not sign releases with a throwaway debug keystore — "
+            "a different key per release breaks in-place Android updates",
+        )
+        self.assertNotIn("pass:android", self.workflow_text)
+        self.assertIn("CN=Android Debug", self.workflow_text, "validation must reject debug-signed APKs")
+
+    def test_release_workflow_does_not_use_retired_intel_runner(self) -> None:
+        release = (_MOBILE_WORKFLOW.parent / "release.yml").read_text(encoding="utf-8")
+        self.assertNotIn("macos-13", release)
+
     def test_workflow_validates_zip_alignment(self) -> None:
         self.assertIn(
             "zipalign",

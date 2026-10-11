@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Android APKs are now signed with a persistent release key (repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`) instead of a throwaway debug key regenerated on every run. A different key per release made Android reject in-place updates with a signature mismatch. The workflow now fails if the secrets are missing, if an APK is debug-signed, or if the ARM and x86_64 APKs use different certificates.
+- Removed the macOS Intel build from the release workflow; the `macos-13` runner never started, which also blocked the website deploy job.
+
+> Upgrade note: devices with an earlier debug-signed APK (v0.3.9–v0.3.11) must uninstall once before installing a release signed with the new key.
+
 ## 0.3.11
 
 ### Fixed

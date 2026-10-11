@@ -163,18 +163,23 @@ jobs:
       # ── Align, sign, and validate APKs ───────────────────────────────────
       - name: Sign APK flavors
         id: find_apks
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          # Every release must be signed with the same persistent key, otherwise
+          # Android refuses to update an installed build ("signatures do not match").
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] || [ -z "${ANDROID_KEY_ALIAS:-}" ]; then
+            echo "::error::Missing ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS repository secrets"
+            exit 1
+          fi
+          KEYSTORE="$RUNNER_TEMP/release.keystore"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+
           mapfile -t APKS < <(printf '%s\n' \
             "${{ steps.capture_arm_apk.outputs.arm_apk_path }}" \
             "${{ steps.capture_x86_64_apk.outputs.x86_64_apk_path }}")
-
-          # Generate a debug keystore for signing
-          keytool -genkeypair -v \
-            -keystore /tmp/debug.keystore \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
 
           BUILD_TOOLS="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools/ | sort -V | tail -1)"
           mkdir -p /tmp/android-signed
@@ -189,10 +194,10 @@ jobs:
             "${BUILD_TOOLS}/zipalign" -f 4 "$APK" "$ALIGNED"
 
             "${BUILD_TOOLS}/apksigner" sign \
-              --ks /tmp/debug.keystore \
-              --ks-key-alias androiddebugkey \
-              --ks-pass pass:android \
-              --key-pass pass:android \
+              --ks "$KEYSTORE" \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+              --key-pass env:ANDROID_KEYSTORE_PASSWORD \
               --out "$SIGNED" \
               "$ALIGNED"
 
@@ -201,6 +206,7 @@ jobs:
             echo "APK found and signed: $APK -> $SIGNED"
           done
 
+          rm -f "$KEYSTORE"
           echo "signed_apk_dir=/tmp/android-signed" >> $GITHUB_OUTPUT
           echo "signed_apk_list=/tmp/android-signed/apk-list.txt" >> $GITHUB_OUTPUT
 
@@ -223,6 +229,7 @@ jobs:
           echo "zipalign:  $ZIPALIGN"
 
           PASS=0; FAIL=0
+          : > /tmp/signer-certs.txt
           check() {
             local label="$1" result="$2"
             if [ "$result" = "ok" ]; then
@@ -282,11 +289,21 @@ jobs:
               check "$NAME targetSdkVersion present" "missing"
             fi
 
-            if "$APKSIGNER" verify --verbose "$APK" 2>&1 | grep -q "Verified using"; then
-              check "$NAME is signed" ok
+            if "$APKSIGNER" verify --verbose --print-certs "$APK" > /tmp/verify.txt 2>&1 && grep -Eq "Verified using v(2|3) scheme.*true" /tmp/verify.txt; then
+              check "$NAME is signed (APK Signature Scheme v2/v3)" ok
             else
-              check "$NAME is signed" "apksigner verify failed — APK is unsigned or has invalid signature"
+              cat /tmp/verify.txt
+              check "$NAME is signed (APK Signature Scheme v2/v3)" "apksigner verify failed — APK is unsigned or has invalid signature"
             fi
+
+            if grep -q "CN=Android Debug" /tmp/verify.txt; then
+              check "$NAME is signed with the release key" "signed with a throwaway debug certificate"
+            else
+              check "$NAME is signed with the release key" ok
+            fi
+
+            CERT=$(grep -oP "certificate SHA-256 digest: \K[0-9a-f]+" /tmp/verify.txt | head -1 || true)
+            echo "$CERT" >> /tmp/signer-certs.txt
 
             if "$ZIPALIGN" -c -v 4 "$APK" > /dev/null 2>&1; then
               check "$NAME is zip-aligned (4-byte)" ok
@@ -325,6 +342,14 @@ jobs:
           done
 
           echo ""
+          UNIQUE_CERTS=$(sort -u /tmp/signer-certs.txt | grep -c . || true)
+          if [ "$UNIQUE_CERTS" -eq 1 ]; then
+            check "all APK flavors share one signing certificate" ok
+          else
+            check "all APK flavors share one signing certificate" "found $UNIQUE_CERTS distinct certificates"
+          fi
+          echo "Signing certificate SHA-256: $(sort -u /tmp/signer-certs.txt | head -1)"
+
           echo "Results: $PASS passed, $FAIL failed"
           [ "$FAIL" -eq 0 ] || exit 1
 
