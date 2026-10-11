@@ -277,7 +277,10 @@ export default function App() {
 
   useEffect(() => {
     fetch(REMOTE_DB_URL)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((entries: Array<{ name: string; grid6: string }>) => {
         const grids: Record<string, string> = {};
         for (const e of entries) {
