@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "AirWSJT-X",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "identifier": "us.ad7np.airwsjtx",
   "build": {
     "frontendDist": "../dist",

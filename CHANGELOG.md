@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.11
+
+### Fixed
+- Aircraft elevation and slant range now account for Earth curvature. Previously a flat-earth formula showed distant aircraft (e.g. FL369 at 8700 km) at ~0° EL instead of below the horizon, so unreachable aircraft were scored and auto-locked (#75).
+- A DX grid selected in the app is no longer overwritten by WSJT-X's DX grid, so scoring, lock, and "From DX Station" AZ/EL use the chosen DX station (#76).
+
+### Validation
+- `python -m unittest discover -s tests -v`
+- `npx tsc --noEmit`
+
 ## 0.3.10
 
 ### Fixed
