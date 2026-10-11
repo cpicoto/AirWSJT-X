@@ -1,4 +1,5 @@
-// Entry point — delegates to lib.rs
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 fn main() {
     airwsjtx_lib::run();
 }
