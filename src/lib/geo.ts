@@ -2,9 +2,14 @@ const R_KM = 6371.0;
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
+export function isValidLocator(locator: string | null | undefined): locator is string {
+  return typeof locator === "string"
+    && /^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?$/.test(locator.trim().toUpperCase());
+}
+
 export function locatorToLatlon(locator: string): [number, number] {
   const loc = locator.trim().toUpperCase();
-  if (loc.length < 4) throw new Error(`Locator too short: ${locator}`);
+  if (!isValidLocator(loc)) throw new Error(`Invalid locator: ${locator}`);
   let lon = (loc.charCodeAt(0) - 65) * 20 - 180;
   let lat = (loc.charCodeAt(1) - 65) * 10 - 90;
   lon += parseInt(loc[2]) * 2;
@@ -12,8 +17,13 @@ export function locatorToLatlon(locator: string): [number, number] {
   if (loc.length >= 6) {
     lon += (loc.charCodeAt(4) - 65) * (2.0 / 24);
     lat += (loc.charCodeAt(5) - 65) * (1.0 / 24);
-    lon += 1.0 / 24;
-    lat += 0.5 / 24;
+    if (loc.length === 8) {
+      lon += (parseInt(loc[6]) + 0.5) * (2 / 240);
+      lat += (parseInt(loc[7]) + 0.5) * (1 / 240);
+    } else {
+      lon += 1.0 / 24;
+      lat += 0.5 / 24;
+    }
   } else {
     lon += 1.0;
     lat += 0.5;

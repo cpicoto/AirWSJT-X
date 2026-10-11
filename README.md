@@ -190,6 +190,12 @@ AirWSJT-X uses WSJT-X native reporting as the primary PSK Reporter path. The Air
 
 ## UI Reference
 
+The **Stations** tile shows the total MY–DX great-circle distance in kilometers, using the centers of the active station grids (including manual overrides). Valid 4, 6, and 8 character Maidenhead locators are supported; missing or invalid grids show `-- km`.
+
+Beside **Aircraft altitude**, the locked-aircraft tile shows **Distance from MY** in kilometers. This is the altitude-inclusive slant range used by the candidate table and refreshes with each locked-aircraft position update. Rebuild the Python sidecar after updating to include this value; older sidecars show `-- km`.
+
+The locked-aircraft tile keeps **From My Station** and **From DX Station** side-by-side. The panel sizes to its contents rather than filling unused column space and scrolls when needed in shorter windows.
+
 ### WSJT-X Status Strip TX Indicator
 
 The **Az / El** toolbar below the title bar is always available. Select **Panel** for an inline readout, **Overlay** for a floating readout, or **Hide** to dismiss it. The **Scale** slider adjusts the readout from 70% to 180%, even while hidden. Display mode and scale are remembered across restarts.

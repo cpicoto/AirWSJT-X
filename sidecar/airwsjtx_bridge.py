@@ -875,6 +875,7 @@ def _locked_aircraft_info(ac: Aircraft, geo: dict) -> dict:
         "icao24": ac.icao24,
         "callsign": ac.callsign or ac.icao24,
         "altitude_ft": round((ac.altitude_m or 0) * 3.28084),
+        "range_a_km": geo["range_a_km"],
         "az_a": geo["az_a"],
         "el_a": geo["el_a"],
         "az_b": geo["az_b"],

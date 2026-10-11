@@ -10,7 +10,9 @@
 				"tauri",
 				"--",
 				"build",
-				"--no-bundle"
+				"--no-bundle",
+				"--config",
+				"src-tauri\\tauri.desktop.conf.json"
 			],
 			"isBackground": false,
 			"problemMatcher": [
@@ -26,8 +28,16 @@
 		},
 		{
 			"label": "AirWSJT-X: Run",
-			"type": "process",
-			"command": "${workspaceFolder}/src-tauri/target/release/airwsjtx",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"tauri",
+				"--",
+				"dev",
+				"--config",
+				"src-tauri\\tauri.desktop.conf.json"
+			],
 			"options": {
 				"cwd": "${workspaceFolder}"
 			},
@@ -36,10 +46,7 @@
 		{
 			"label": "AirWSJT-X: Build and Run",
 			"dependsOrder": "sequence",
-			"dependsOn": [
-				"AirWSJT-X: Build",
-				"AirWSJT-X: Run"
-			],
+			"dependsOn": ["AirWSJT-X: Run"],
 			"problemMatcher": []
 		}
 	]

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
+import { haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -261,6 +262,7 @@ export default function App() {
     scatter_score: number; off_path_deg: number; state: string;
     rotator_az?: number | null; rotator_el?: number | null;
     position_updated_epoch_s?: number | null;
+    range_a_km?: number | null;
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number } | null>(null);
@@ -350,6 +352,7 @@ export default function App() {
               ...prev,
               callsign: typeof evtData.callsign === "string" ? evtData.callsign : prev.callsign,
               altitude_ft: typeof evtData.altitude_ft === "number" ? evtData.altitude_ft : prev.altitude_ft,
+              range_a_km: typeof evtData.range_a_km === "number" ? evtData.range_a_km : null,
               az_a: evtData.az_a as number,
               el_a: evtData.el_a as number,
               az_b: typeof evtData.az_b === "number" ? evtData.az_b : prev.az_b,
@@ -590,6 +593,9 @@ export default function App() {
   const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
   const myGrid = myGridOverride || (myCallsign ? stationGridOverrides[myCallsign] : null) || wsjtxLive.de_grid;
   const selectedDxGrid = (dxCall ? stationGridOverrides[dxCall] : null) ?? dxGrid;
+  const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
+    ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
+    : null;
 
   useEffect(() => {
     if (!status || myStationRestored.current) return;
@@ -611,7 +617,7 @@ export default function App() {
       addLog("MY callsign must contain letters and digits, with optional /");
       return;
     }
-    if (grid && !/^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?$/.test(grid)) {
+    if (grid && !isValidLocator(grid)) {
       addLog("MY grid must be a valid 4, 6, or 8 character Maidenhead locator");
       return;
     }
@@ -840,6 +846,9 @@ export default function App() {
                 <div className="grid">{selectedDxGrid ?? "—"}</div>
               </div>
             </div>
+            <div className="station-distance" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
+              MY–DX distance: {stationDistanceKm === null ? "-- km" : `${stationDistanceKm.toFixed(1)} km`}
+            </div>
             <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
               <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>MY</span>
@@ -1030,8 +1039,8 @@ export default function App() {
             )}
           </div>
 
-          {/* Plane Lock — flex fills remaining space */}
-          <div className="card flex1">
+          {/* Plane Lock */}
+          <div className="card plane-lock-card" style={{ flex: "0 1 auto", overflowY: "auto" }}>
             <PlaneLockPanel
               locked={lockedPlane}
               nowEpochS={nowEpochS}
