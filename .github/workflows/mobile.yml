@@ -118,23 +118,55 @@ jobs:
 
       # ── Build ─────────────────────────────────────────────────────────────
       - name: Initialize Tauri Android
-        run: npx tauri android init
+        run: npx tauri android init --skip-targets-install
 
-      - name: Build Android APK flavors
-        run: npx tauri android build --apk
+      - name: Build Android ARM APK
+        run: |
+          rm -rf src-tauri/gen/android/app/build/outputs/apk
+          npx tauri android build --apk --target aarch64 armv7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Locate, align, and sign APKs ─────────────────────────────────────
-      - name: Find and sign APK flavors
-        id: find_apks
+      - name: Capture ARM APK
+        id: capture_arm_apk
         run: |
-          mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk -name "*-release-unsigned.apk" -type f | sort)
-          if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "No release APKs found under src-tauri/gen/android/app/build/outputs/apk"
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-release-unsigned.apk" -type f | head -1)
+          if [ -z "$APK" ]; then
+            echo "No ARM release APK found under src-tauri/gen/android/app/build/outputs/apk"
             find src-tauri/gen/android -type f | head -20
             exit 1
           fi
+          mkdir -p /tmp/android-unsigned
+          cp "$APK" /tmp/android-unsigned/AirWSJT-X-android-arm-unsigned.apk
+          echo "arm_apk_path=/tmp/android-unsigned/AirWSJT-X-android-arm-unsigned.apk" >> $GITHUB_OUTPUT
+
+      - name: Build Android x86_64 APK
+        run: |
+          rm -rf src-tauri/gen/android/app/build/outputs/apk
+          npx tauri android build --apk --target x86_64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capture x86_64 APK
+        id: capture_x86_64_apk
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-release-unsigned.apk" -type f | head -1)
+          if [ -z "$APK" ]; then
+            echo "No x86_64 release APK found under src-tauri/gen/android/app/build/outputs/apk"
+            find src-tauri/gen/android -type f | head -20
+            exit 1
+          fi
+          mkdir -p /tmp/android-unsigned
+          cp "$APK" /tmp/android-unsigned/AirWSJT-X-android-x86_64-unsigned.apk
+          echo "x86_64_apk_path=/tmp/android-unsigned/AirWSJT-X-android-x86_64-unsigned.apk" >> $GITHUB_OUTPUT
+
+      # ── Align, sign, and validate APKs ───────────────────────────────────
+      - name: Sign APK flavors
+        id: find_apks
+        run: |
+          mapfile -t APKS < <(printf '%s\n' \
+            "${{ steps.capture_arm_apk.outputs.arm_apk_path }}" \
+            "${{ steps.capture_x86_64_apk.outputs.x86_64_apk_path }}")
 
           # Generate a debug keystore for signing
           keytool -genkeypair -v \
@@ -263,26 +295,12 @@ jobs:
             fi
 
             case "$NAME" in
-              *universal*)
+              *arm*)
                 if unzip -l "$APK" | grep -q "lib/arm64-v8a/"; then
                   check "$NAME arm64-v8a native library present" ok
                 else
                   check "$NAME arm64-v8a native library present" "missing"
                 fi
-                if unzip -l "$APK" | grep -q "lib/armeabi-v7a/"; then
-                  check "$NAME armeabi-v7a native library present" ok
-                else
-                  check "$NAME armeabi-v7a native library present" "missing"
-                fi
-                ;;
-              *arm64*)
-                if unzip -l "$APK" | grep -q "lib/arm64-v8a/"; then
-                  check "$NAME arm64-v8a native library present" ok
-                else
-                  check "$NAME arm64-v8a native library present" "missing"
-                fi
-                ;;
-              *arm-release*)
                 if unzip -l "$APK" | grep -q "lib/armeabi-v7a/"; then
                   check "$NAME armeabi-v7a native library present" ok
                 else
