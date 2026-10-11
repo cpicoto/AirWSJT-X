@@ -5,10 +5,14 @@ __pycache__/
 node_modules/
 dist/
 
+# Local, platform-specific VS Code tasks
+.vscode/tasks.json
+
 # Rust / Tauri
 src-tauri/target/
 
 # PyInstaller
 *.spec
 build/
-
+src-tauri/gen/schemas/linux-schema.json
+src-tauri/binaries/airwsjtx_bridge-x86_64-unknown-linux-gnu
