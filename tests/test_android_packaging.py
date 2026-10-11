@@ -275,26 +275,21 @@ class AndroidCIWorkflowTests(unittest.TestCase):
 
     def test_workflow_runs_tauri_android_init(self) -> None:
         self.assertIn(
-            "tauri android init",
-            self.workflow_text,
-            "mobile.yml must initialize the full Tauri Android project before building APK flavors",
-        )
-        self.assertNotIn(
             "tauri android init --skip-targets-install",
             self.workflow_text,
-            "mobile.yml should not skip target installation when restoring the full Android flavor build",
+            "mobile.yml must initialize Android without reinstalling Rust targets already provisioned in CI",
         )
 
     def test_workflow_runs_tauri_android_build(self) -> None:
         self.assertIn(
-            "tauri android build --apk",
-            self.workflow_text,
-            "mobile.yml must build Android APKs in CI",
-        )
-        self.assertNotIn(
             "tauri android build --apk --target aarch64 armv7",
             self.workflow_text,
-            "mobile.yml should not limit Android CI back to the reduced ARM-only target set",
+            "mobile.yml must build the device ARM APK flavor set in CI",
+        )
+        self.assertIn(
+            "tauri android build --apk --target x86_64",
+            self.workflow_text,
+            "mobile.yml must also build the x86_64 Android APK flavor for emulator/testing use",
         )
 
     def test_workflow_uploads_artifact(self) -> None:
@@ -381,6 +376,16 @@ class AndroidCIWorkflowTests(unittest.TestCase):
             "path: ${{ steps.find_apks.outputs.signed_apk_dir }}/*.apk",
             self.workflow_text,
             "mobile.yml must upload all signed APK flavors, not just a single unsigned Gradle output",
+        )
+        self.assertIn(
+            "arm_apk_path=/tmp/android-unsigned/AirWSJT-X-android-arm-unsigned.apk",
+            self.workflow_text,
+            "mobile.yml must persist the ARM unsigned APK between sequential flavor builds",
+        )
+        self.assertIn(
+            "x86_64_apk_path=/tmp/android-unsigned/AirWSJT-X-android-x86_64-unsigned.apk",
+            self.workflow_text,
+            "mobile.yml must persist the x86_64 unsigned APK between sequential flavor builds",
         )
 
     def test_workflow_validates_zip_alignment(self) -> None:
