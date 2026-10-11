@@ -1,11 +1,14 @@
-from datetime import datetime, timedelta, timezone
+import struct
+import time
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from airwsjtx.models import AircraftSample, AircraftTrack, Station
 from airwsjtx.rotator import RotatorController
 from airwsjtx.state_machine import SessionState
 from airwsjtx.supervisor import AirWSJTXSupervisor
 from airwsjtx.tracker import AircraftTracker
+from airwsjtx.wsjtx_udp import WSJTXListener, parse_heartbeat
 
 
 def track(
@@ -33,6 +36,35 @@ class TrackerTests(unittest.TestCase):
         weak = track("B1", [60, 180, 260], [3, 10, 1], [420, 520, 590])
         ranked = AircraftTracker().rank_candidates([weak, strong])
         self.assertEqual(ranked[0].aircraft_id, "A1")
+
+
+class WSJTXXUDPListenerTests(unittest.TestCase):
+    def test_parse_heartbeat_is_valid(self) -> None:
+        app_id = "WSJT-X"
+        payload = bytearray()
+        payload.extend(struct.pack(">I", 0xADBCCBDA))
+        payload.extend(struct.pack(">I", 2))
+        payload.extend(struct.pack(">I", 0))
+        payload.extend(struct.pack(">I", len(app_id)))
+        payload.extend(app_id.encode("utf-8"))
+        payload.extend(struct.pack(">I", 2))
+        payload.extend(struct.pack(">I", 0xFFFFFFFF))
+        payload.extend(struct.pack(">I", 0xFFFFFFFF))
+        self.assertIsNotNone(parse_heartbeat(bytes(payload)))
+
+    def test_timeout_requires_explicit_quiet_period(self) -> None:
+        listener = WSJTXListener(heartbeat_timeout_s=0.05, socket_timeout_s=0.01)
+        disconnected = []
+        listener.on_disconnected = lambda: disconnected.append("offline")
+        listener._connected = True
+        listener._last_packet = time.monotonic() - 0.01
+        listener._check_connection_timeout(time.monotonic())
+        self.assertEqual(disconnected, [])
+
+        listener._last_packet = time.monotonic() - 0.2
+        listener._check_connection_timeout(time.monotonic())
+        self.assertEqual(disconnected, ["offline"])
+        self.assertFalse(listener._connected)
 
 
 class SupervisorTests(unittest.TestCase):
@@ -78,7 +110,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.session.state, SessionState.COMPLETED)
         self.assertFalse(self.supervisor.wsjtx.status.ptt_enabled)
 
-    def test_cannot_start_qso_without_ready_gate(self) -> None:
+    def test_start_qso_is_allowed_after_plane_lock(self) -> None:
         self.supervisor.begin_session(
             station_a=self.station_a,
             station_b=self.station_b,
@@ -86,6 +118,39 @@ class SupervisorTests(unittest.TestCase):
             frequency_hz=1296150000,
             tracks=[self.valid_track],
         )
+        self.supervisor.operator_start_qso()
+        self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
+        self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
+
+    def test_start_qso_rejects_invalid_session_state(self) -> None:
+        with self.assertRaises(ValueError):
+            self.supervisor.operator_start_qso()
+
+        self.supervisor.begin_session(
+            station_a=self.station_a,
+            station_b=self.station_b,
+            band_mhz=1296.0,
+            frequency_hz=1296150000,
+            tracks=[self.valid_track],
+        )
+        self.supervisor.finish_qso(abort=True)
+        with self.assertRaises(ValueError):
+            self.supervisor.operator_start_qso()
+
+    def test_start_qso_allowed_from_plane_locked(self) -> None:
+        self.supervisor.begin_session(
+            station_a=self.station_a,
+            station_b=self.station_b,
+            band_mhz=1296.0,
+            frequency_hz=1296150000,
+            tracks=[self.valid_track],
+        )
+        self.assertEqual(self.supervisor.session.state, SessionState.PLANE_LOCKED)
+        self.supervisor.operator_start_qso()
+        self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
+        self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
+
+    def test_start_qso_rejects_idle_state(self) -> None:
         with self.assertRaises(ValueError):
             self.supervisor.operator_start_qso()
 

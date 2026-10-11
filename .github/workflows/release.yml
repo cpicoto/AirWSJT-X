@@ -1,0 +1,229 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s tests -v
+
+  build:
+    needs: python-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            sidecar_name: airwsjtx_bridge-aarch64-apple-darwin
+            pyinstaller_name: airwsjtx_bridge
+            bundles: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            sidecar_name: airwsjtx_bridge-x86_64-apple-darwin
+            pyinstaller_name: airwsjtx_bridge
+            bundles: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            sidecar_name: airwsjtx_bridge-x86_64-pc-windows-msvc.exe
+            pyinstaller_name: airwsjtx_bridge.exe
+            bundles: ""
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            sidecar_name: airwsjtx_bridge-x86_64-unknown-linux-gnu
+            pyinstaller_name: airwsjtx_bridge
+            bundles: "appimage,deb,rpm"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync app versions from tag
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_VERSION"]
+          version = tag[1:] if tag.startswith("v") else tag
+
+          package_json = Path("package.json")
+          package_data = json.loads(package_json.read_text(encoding="utf-8"))
+          package_data["version"] = version
+          package_json.write_text(json.dumps(package_data, indent=2) + "\n", encoding="utf-8")
+
+          tauri_conf = Path("src-tauri/tauri.conf.json")
+          tauri_data = json.loads(tauri_conf.read_text(encoding="utf-8"))
+          tauri_data["version"] = version
+          tauri_conf.write_text(json.dumps(tauri_data, indent=2) + "\n", encoding="utf-8")
+
+          cargo_toml = Path("src-tauri/Cargo.toml")
+          cargo_text = cargo_toml.read_text(encoding="utf-8")
+          cargo_text, replaced = re.subn(
+              r'(?m)^version\s*=\s*"[^\"]+"$',
+              f'version = "{version}"',
+              cargo_text,
+              count=1,
+          )
+          if replaced != 1:
+              raise SystemExit("Failed to update src-tauri/Cargo.toml version")
+          cargo_toml.write_text(cargo_text, encoding="utf-8")
+          PY
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libssl-dev \
+            rpm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Bundle Python sidecar with PyInstaller
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
+
+      - name: Rename sidecar binary for Tauri target triple
+        shell: bash
+        run: |
+          cd src-tauri/binaries
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv airwsjtx_bridge.exe "${{ matrix.sidecar_name }}"
+          else
+            mv airwsjtx_bridge "${{ matrix.sidecar_name }}"
+            chmod +x "${{ matrix.sidecar_name }}"
+          fi
+
+      - name: Import Apple signing certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 12)
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Sign sidecar with entitlements
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime \
+            --entitlements src-tauri/Entitlements.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "src-tauri/binaries/${{ matrix.sidecar_name }}"
+          codesign -dv --verbose=2 "src-tauri/binaries/${{ matrix.sidecar_name }}"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "AirWSJT-X ${{ github.ref_name }}"
+          releaseBody: |
+            ## AirWSJT-X ${{ github.ref_name }}
+
+            ### What's New in this release
+            - **Mobile app** (iOS & Android) — standalone aircraft tracking with OpenSky Network
+            - Mobile compass rose and elevation arc for hand-pointing antennas
+            - Offline callsign database with IndexedDB on mobile
+            - Speech callouts for selected aircraft Az/El on mobile
+            - Platform detection: desktop launches full WSJT-X supervisor, mobile launches standalone tracker
+
+            ### Downloads
+            - **macOS (Apple Silicon):** `.dmg` file
+            - **macOS (Intel):** `.dmg` file
+            - **Windows:** `.msi` installer or `.exe` setup
+            - **Linux (x64):** `.AppImage`, `.deb` (Debian/Ubuntu/Mint), `.rpm` (Fedora/openSUSE)
+            - **iOS:** `.tar.gz` (from mobile build workflow)
+            - **Android:** `.apk` (from mobile build workflow)
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+  deploy-site:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Substitute version in site template
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/__VERSION__/$VERSION/g" site/index.html
+
+      - name: Deploy to Azure Static Website
+        env:
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: |
+          az storage blob upload \
+            --account-name ad7npus \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name '$web' \
+            --name AirWSJT-X/index.html \
+            --file site/index.html \
+            --content-type "text/html; charset=utf-8" \
+            --content-cache-control "no-store, no-cache, must-revalidate, max-age=0" \
+            --overwrite
+          az storage blob upload \
+            --account-name ad7npus \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name '$web' \
+            --name AirWSJT-X \
+            --file site/index.html \
+            --content-type "text/html; charset=utf-8" \
+            --content-cache-control "no-store, no-cache, must-revalidate, max-age=0" \
+            --overwrite

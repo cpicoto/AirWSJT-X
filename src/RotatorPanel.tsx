@@ -6,6 +6,15 @@ interface RotatorPanelProps {
   targetAz: number | null;
   targetEl: number | null;
   connected: boolean;
+  speechEnabled: boolean;
+  speechThresholdDeg: number;
+  speechIntervalSec: number;
+  onSpeechEnabledChange: (enabled: boolean) => void;
+  onSpeechThresholdDegChange: (deg: number) => void;
+  onSpeechIntervalSecChange: (sec: number) => void;
+  mode?: "rotator" | "manual";
+  aircraftLabel?: string | null;
+  targetLabel?: string | null;
   onSetPosition: (az: number, el: number) => void;
   onStop: () => void;
   onPark: () => void;
@@ -150,18 +159,6 @@ function CompassRose({
       {/* Center hub */}
       <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
       <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
-
-      {/* Current bearing text */}
-      <text x={cx} y={cy + innerR * 0.62} textAnchor="middle" fontSize={22} fontWeight={700}
-        fill="#c9d1d9" fontFamily="monospace">
-        {current.toFixed(1)}°
-      </text>
-      {target !== null && (
-        <text x={cx} y={cy + innerR * 0.62 + 22} textAnchor="middle" fontSize={12}
-          fill="#d29922" fontFamily="monospace">
-          ▶ {target.toFixed(1)}°
-        </text>
-      )}
     </svg>
   );
 }
@@ -181,14 +178,14 @@ function ElevationArc({
   height?: number;
   onClick?: (el: number) => void;
 }) {
-  const cx = width / 2;
+  const cx = 18;
   const cy = height - 16;
-  const R = height - 24;
+  const R = Math.max(22, Math.min(width - 30, height - 24));
 
-  // 0° = left end, 90° = top centre
+  // Quarter dial: 0° = horizon (right), 90° = zenith (up)
   function elToXY(el: number, r: number) {
-    const rad = Math.PI - (el / 90) * Math.PI;
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+    const rad = (el * Math.PI) / 180;
+    return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
   }
 
   // Arc path from 0° to 90°
@@ -225,9 +222,9 @@ function ElevationArc({
     if (!onClick) return;
     const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
     const dx = e.clientX - rect.left - cx;
-    const dy = e.clientY - rect.top - cy;
-    const angle = Math.atan2(-dy, -dx) * 180 / Math.PI; // 180° = left
-    const el = Math.max(0, Math.min(90, (180 - (angle + 180) % 360) * 90 / 180));
+    const dy = cy - (e.clientY - rect.top);
+    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+    const el = Math.max(0, Math.min(90, angle));
     onClick(Math.round(el));
   }
 
@@ -245,7 +242,7 @@ function ElevationArc({
         const fillEnd = elToXY(Math.max(0.5, current), R);
         return (
           <path
-            d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 ${current > 45 ? 1 : 0} 0 ${fillEnd.x} ${fillEnd.y}`}
+            d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${fillEnd.x} ${fillEnd.y}`}
             fill="none" stroke="rgba(88,166,255,0.25)" strokeWidth={18} strokeLinecap="round"
           />
         );
@@ -275,16 +272,9 @@ function ElevationArc({
       <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
 
       {/* Labels */}
-      <text x={arcStart.x - 4} y={cy + 12} textAnchor="end" fontSize={10} fill="#8b949e">0°</text>
-      <text x={arcEnd.x + 4} y={cy + 12} textAnchor="start" fontSize={10} fill="#8b949e">90°</text>
+      <text x={arcStart.x} y={cy + 12} textAnchor="middle" fontSize={10} fill="#8b949e">0°</text>
+      <text x={arcEnd.x} y={arcEnd.y - 8} textAnchor="middle" fontSize={10} fill="#8b949e">90°</text>
 
-      {/* Current value */}
-      <text x={cx} y={cy - R * 0.4} textAnchor="middle" fontSize={20} fontWeight={700}
-        fill="#c9d1d9" fontFamily="monospace">{current.toFixed(1)}°</text>
-      {target !== null && (
-        <text x={cx} y={cy - R * 0.4 + 20} textAnchor="middle" fontSize={11}
-          fill="#d29922" fontFamily="monospace">▶ {target.toFixed(1)}°</text>
-      )}
     </svg>
   );
 }
@@ -293,7 +283,15 @@ function ElevationArc({
 
 export default function RotatorPanel({
   currentAz, currentEl, targetAz, targetEl,
-  connected, onSetPosition, onStop, onPark, onConnect,
+  connected,
+  speechEnabled,
+  speechThresholdDeg,
+  speechIntervalSec,
+  onSpeechEnabledChange,
+  onSpeechThresholdDegChange,
+  onSpeechIntervalSecChange,
+  mode = "rotator", aircraftLabel = null, targetLabel = null,
+  onSetPosition, onStop, onPark, onConnect,
 }: RotatorPanelProps) {
   const [manualAz, setManualAz] = useState(currentAz.toFixed(1));
   const [manualEl, setManualEl] = useState(currentEl.toFixed(1));
@@ -310,9 +308,15 @@ export default function RotatorPanel({
 
   function handleCompassClick(az: number) {
     setManualAz(az.toFixed(1));
+    if (mode === "manual") {
+      onSetPosition(az, parseFloat(manualEl) || 0);
+    }
   }
   function handleElevationClick(el: number) {
     setManualEl(el.toFixed(1));
+    if (mode === "manual") {
+      onSetPosition(parseFloat(manualAz) || 0, el);
+    }
   }
   function handleGo() {
     onSetPosition(parseFloat(manualAz) || 0, parseFloat(manualEl) || 0);
@@ -322,108 +326,232 @@ export default function RotatorPanel({
   const azErr = targetAz !== null ? ((currentAz - targetAz + 540) % 360 - 180) : null;
   const elErr = targetEl !== null ? currentEl - targetEl : null;
 
-  const compassSize = 130;
-  const elevWidth = 130;
-  const elevHeight = 73;
+  const compassSize = 170;
+  const elevWidth = 170;
+  const elevHeight = 108;
+
+  const isManualMode = mode === "manual";
+  const displayAz = targetAz ?? currentAz;
+  const displayEl = targetEl ?? currentEl;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
       {/* Connection bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <div style={{
-          display: "flex", alignItems: "center", gap: 6,
-          padding: "3px 10px", borderRadius: 6, fontSize: 12,
-          background: connected ? "rgba(63,185,80,0.12)" : "rgba(248,81,73,0.12)",
-          border: `1px solid ${connected ? "#3fb950" : "#f85149"}`,
-          color: connected ? "#3fb950" : "#f85149", fontWeight: 600,
-        }}>
-          <span style={{ fontSize: 8 }}>{connected ? "●" : "○"}</span>
-          {connected ? "rotctld connected" : "rotctld offline"}
-        </div>
-        {!connected && (
-          <>
-            <input value={host} onChange={e => setHost(e.target.value)}
-              placeholder="host" style={inputStyle} />
-            <input value={port} onChange={e => setPort(e.target.value)}
-              placeholder="port" style={{ ...inputStyle, width: 60 }} />
-            <button className="btn-secondary" style={smBtn}
-              onClick={() => onConnect(host, parseInt(port) || 4533)}>
-              Connect
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Dials row */}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
-
-        {/* Azimuth compass */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-          <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            Azimuth
+      {!isManualMode && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "3px 10px", borderRadius: 6, fontSize: 12,
+            background: connected ? "rgba(63,185,80,0.12)" : "rgba(248,81,73,0.12)",
+            border: `1px solid ${connected ? "#3fb950" : "#f85149"}`,
+            color: connected ? "#3fb950" : "#f85149", fontWeight: 600,
+          }}>
+            <span style={{ fontSize: 8 }}>{connected ? "●" : "○"}</span>
+            {connected ? "rotctld connected" : "rotctld offline"}
           </div>
-          <CompassRose current={currentAz} target={targetAz} size={compassSize}
-            onClick={connected ? handleCompassClick : undefined} />
-          {azErr !== null && (
-            <div style={{ fontSize: 12, color: Math.abs(azErr) < 2 ? "#3fb950" : "#d29922", fontFamily: "monospace" }}>
-              Δ {azErr > 0 ? "+" : ""}{azErr.toFixed(1)}°
-            </div>
+          {!connected && (
+            <>
+              <input value={host} onChange={e => setHost(e.target.value)}
+                placeholder="host" style={inputStyle} />
+              <input value={port} onChange={e => setPort(e.target.value)}
+                placeholder="port" style={{ ...inputStyle, width: 60 }} />
+              <button className="btn-secondary" style={smBtn}
+                onClick={() => onConnect(host, parseInt(port) || 4533)}>
+                Connect
+              </button>
+            </>
           )}
         </div>
-
-        {/* Elevation arc */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-          <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            Elevation
+      )}
+      {isManualMode && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "3px 10px", borderRadius: 6, fontSize: 12,
+            background: "rgba(88,166,255,0.12)",
+            border: "1px solid #58a6ff44",
+            color: "#58a6ff", fontWeight: 600,
+          }}>
+            <span style={{ fontSize: 8 }}>●</span>
+            Manual pointing mode
           </div>
-          <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight}
-            onClick={connected ? handleElevationClick : undefined} />
-          {elErr !== null && (
-            <div style={{ fontSize: 12, color: Math.abs(elErr) < 2 ? "#3fb950" : "#d29922", fontFamily: "monospace" }}>
-              Δ {elErr > 0 ? "+" : ""}{elErr.toFixed(1)}°
-            </div>
-          )}
         </div>
-      </div>
+      )}
 
-      {/* Manual control row */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-        padding: "10px 12px", background: "rgba(255,255,255,0.02)",
-        borderRadius: 6, border: "1px solid #30363d",
+        display: "grid",
+        gap: 8,
+        padding: "8px 10px",
+        background: isManualMode ? "rgba(88,166,255,0.08)" : "rgba(255,255,255,0.02)",
+        borderRadius: 6,
+        border: isManualMode ? "1px solid #58a6ff44" : "1px solid #30363d",
       }}>
-        <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ color: "#8b949e", width: 20 }}>AZ</span>
-          <input value={manualAz} onChange={e => setManualAz(e.target.value)}
-            style={numInput} type="number" min={0} max={360} step={0.1} />
-          <span style={{ color: "#8b949e", fontSize: 11 }}>°</span>
-        </label>
-        <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ color: "#8b949e", width: 20 }}>EL</span>
-          <input value={manualEl} onChange={e => setManualEl(e.target.value)}
-            style={numInput} type="number" min={0} max={90} step={0.1} />
-          <span style={{ color: "#8b949e", fontSize: 11 }}>°</span>
-        </label>
-        <button className="btn-primary" style={smBtn} disabled={!connected} onClick={handleGo}>
-          ▶ Go
-        </button>
-        <button className="btn-secondary" style={smBtn} disabled={!connected} onClick={onStop}>
-          ■ Stop
-        </button>
-        <button className="btn-secondary" style={smBtn} disabled={!connected} onClick={onPark}>
-          ⌂ Park
-        </button>
+        <div>
+          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Rotator"}</div>
+        </div>
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          alignItems: "baseline",
+          rowGap: 2,
+          columnGap: 8,
+          fontFamily: "monospace",
+        }}>
+          <div style={{ fontSize: 11, color: "#8b949e" }}>AZ</div>
+          <div style={{ fontSize: 28, lineHeight: 1.05, fontWeight: 700, color: "#58a6ff" }}>{displayAz.toFixed(1)}°</div>
+          <div style={{ fontSize: 11, color: "#8b949e" }}>EL</div>
+          <div style={{ fontSize: 28, lineHeight: 1.05, fontWeight: 700, color: "#3fb950" }}>{displayEl.toFixed(1)}°</div>
+        </div>
       </div>
+
+      {isManualMode && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
+              <CompassRose current={currentAz} target={targetAz} size={compassSize} onClick={isManualMode ? handleCompassClick : connected ? handleCompassClick : undefined} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Elevation</div>
+              <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight} onClick={isManualMode ? handleElevationClick : connected ? handleElevationClick : undefined} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isManualMode && (
+        <>
+          {/* Dials row */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
+
+            {/* Azimuth compass */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                Azimuth
+              </div>
+              <CompassRose current={currentAz} target={targetAz} size={compassSize}
+                onClick={connected ? handleCompassClick : undefined} />
+            </div>
+
+            {/* Elevation arc */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                Elevation
+              </div>
+              <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight}
+                onClick={connected ? handleElevationClick : undefined} />
+            </div>
+          </div>
+
+          {(azErr !== null || elErr !== null) && (
+            <div style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              justifyContent: "center",
+              fontSize: 12,
+              fontFamily: "monospace",
+              color: "#8b949e",
+            }}>
+              {azErr !== null && (
+                <span style={{ color: Math.abs(azErr) < 2 ? "#3fb950" : "#d29922" }}>
+                  ΔAZ {azErr > 0 ? "+" : ""}{azErr.toFixed(1)}°
+                </span>
+              )}
+              {elErr !== null && (
+                <span style={{ color: Math.abs(elErr) < 2 ? "#3fb950" : "#d29922" }}>
+                  ΔEL {elErr > 0 ? "+" : ""}{elErr.toFixed(1)}°
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {!isManualMode && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          padding: "10px 12px", background: "rgba(255,255,255,0.02)",
+          borderRadius: 6, border: "1px solid #30363d",
+        }}>
+          <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ color: "#8b949e", width: 20 }}>AZ</span>
+            <input value={manualAz} onChange={e => setManualAz(e.target.value)}
+              style={numInput} type="number" min={0} max={360} step={0.1} />
+            <span style={{ color: "#8b949e", fontSize: 11 }}>°</span>
+          </label>
+          <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ color: "#8b949e", width: 20 }}>EL</span>
+            <input value={manualEl} onChange={e => setManualEl(e.target.value)}
+              style={numInput} type="number" min={0} max={90} step={0.1} />
+            <span style={{ color: "#8b949e", fontSize: 11 }}>°</span>
+          </label>
+          <button className="btn-primary" style={smBtn} disabled={!connected} onClick={handleGo}>
+            ▶ Go
+          </button>
+          <button className="btn-secondary" style={smBtn} disabled={!connected} onClick={onStop}>
+            ■ Stop
+          </button>
+          <button className="btn-secondary" style={smBtn} disabled={!connected} onClick={onPark}>
+            ⌂ Park
+          </button>
+        </div>
+      )}
 
       {/* Hint */}
       {connected && (
-        <div style={{ fontSize: 11, color: "#8b949e" }}>
-          Click the compass or elevation arc to set target position.
-          Orange dashed = target · Blue solid = current.
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+            padding: "8px 10px", borderRadius: 6, border: "1px solid #30363d",
+            background: "rgba(255,255,255,0.02)", fontSize: 11,
+          }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#c9d1d9" }}>
+              <input
+                type="checkbox"
+                checked={speechEnabled}
+                onChange={(e) => onSpeechEnabledChange(e.target.checked)}
+              />
+              Speech
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }} title="Minimum azimuth/elevation change to announce">
+              Min Δ°
+              <input
+                type="number"
+                min={0.1}
+                step={0.1}
+                value={speechThresholdDeg}
+                style={{ ...numInput, width: 58 }}
+                onChange={(e) => onSpeechThresholdDegChange(parseFloat(e.target.value) || 0.1)}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#8b949e" }} title="Minimum time between speech announcements">
+              Min interval (s)
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={speechIntervalSec}
+                style={{ ...numInput, width: 58 }}
+                onChange={(e) => onSpeechIntervalSecChange(Math.max(0, parseFloat(e.target.value) || 0))}
+              />
+            </label>
+          </div>
+          <div style={{ fontSize: 11, color: "#8b949e" }}>
+            {isManualMode
+              ? "Use the compass or arc for quick hand-pointing. Orange = target · Blue = current."
+              : "Click the compass or elevation arc to set target position. Orange dashed = target · Blue solid = current."}
+          </div>
         </div>
       )}
-      {!connected && (
+      {!connected && isManualMode && (
+        <div style={{ fontSize: 11, color: "#8b949e" }}>
+          Manual mode does not require rotctld; use the compass and arc to keep the antenna aligned.
+        </div>
+      )}
+      {!connected && !isManualMode && (
         <div style={{ fontSize: 11, color: "#8b949e" }}>
           Start rotctld: <code style={{ background: "#161b22", padding: "1px 5px", borderRadius: 3 }}>
             rotctld -m 1 -r /dev/ttyUSB0 -s 9600 -T 127.0.0.1 -t 4533

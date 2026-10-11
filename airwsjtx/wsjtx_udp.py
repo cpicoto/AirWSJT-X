@@ -4,9 +4,11 @@ Parses multicast datagrams from a running WSJT-X instance.
 """
 from __future__ import annotations
 
+import logging
 import socket
 import struct
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -83,7 +85,7 @@ class WSJTXStatus:
     fast_mode: bool
     special_op_mode: int
     freq_tolerance: int
-    tr_period: int
+    tr_period: float | None
     config_name: str | None
 
     @property
@@ -124,6 +126,26 @@ def _parse_header(d: bytes) -> tuple[int, int, int, str | None, int]:
     return magic, schema, msg_type, app_id, o
 
 
+def _normalize_tr_period(mode: str | None, tr_period: int) -> float | None:
+    """Normalize WSJT-X T/R period.
+
+    Positive wire values are passed through as seconds. WSJT-X may emit
+    non-positive values (including 0 and -1) for unset periods where timing is
+    implied by mode, so known fixed-period modes are mapped to defaults;
+    unknown or missing modes return None.
+    """
+    if tr_period > 0:
+        return float(tr_period)
+    if not mode:
+        return None
+    return {
+        "FT8": 15.0,
+        "FT4": 7.5,
+        "FT2": 2.5,
+        "JT65": 60.0,
+    }.get(mode.upper())
+
+
 def parse_status(d: bytes) -> WSJTXStatus | None:
     try:
         magic, schema, msg_type, app_id, o = _parse_header(d)
@@ -147,7 +169,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
         fast, o = _bool(d, o)
         spec_op, o = _u8(d, o)
         freq_tol, o = _u32(d, o)
-        tr_period, o = _u32(d, o)
+        tr_period, o = _i32(d, o)
         config, o = _str(d, o)
         return WSJTXStatus(
             app_id=app_id or "",
@@ -169,7 +191,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
             fast_mode=fast,
             special_op_mode=spec_op,
             freq_tolerance=freq_tol,
-            tr_period=tr_period,
+            tr_period=_normalize_tr_period(mode, tr_period),
             config_name=config,
         )
     except Exception:
@@ -229,20 +251,37 @@ class WSJTXListener:
         self,
         port: int = WSJTX_PORT,
         multicast: str = WSJTX_MULTICAST,
+        wsjtx_host: str = "127.0.0.1",
+        client_id: str = "AirWSJTX",
         on_status: Callable[[WSJTXStatus], None] | None = None,
         on_decode: Callable[[WSJTXDecode], None] | None = None,
         on_connected: Callable[[str], None] | None = None,
         on_disconnected: Callable[[], None] | None = None,
+        heartbeat_timeout_s: float = 30.0,
+        socket_timeout_s: float = 2.0,
+        rig_name_filter: str | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         self.port = port
         self.multicast = multicast
+        self.wsjtx_host = wsjtx_host
+        self.client_id = client_id
         self.on_status = on_status
         self.on_decode = on_decode
         self.on_connected = on_connected
         self.on_disconnected = on_disconnected
+        self.heartbeat_timeout_s = heartbeat_timeout_s
+        self.socket_timeout_s = socket_timeout_s
+        self.on_error = on_error
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
+        self._last_packet = 0.0
+        self._state_lock = threading.Lock()
+        self._rig_name_filter = self._normalize_rig_name(rig_name_filter)
+        self._active_app_id: str | None = None
+        self._active_query_mode = False
+        self._known_rigs: dict[str, str | None] = {}
 
     def start(self) -> None:
         self._stop.clear()
@@ -252,70 +291,237 @@ class WSJTXListener:
     def stop(self) -> None:
         self._stop.set()
 
+    @staticmethod
+    def _normalize_rig_name(rig_name: str | None) -> str | None:
+        if rig_name is None:
+            return None
+        value = rig_name.strip()
+        return value or None
+
+    def set_rig_name_filter(self, rig_name: str | None) -> str | None:
+        with self._state_lock:
+            self._rig_name_filter = self._normalize_rig_name(rig_name)
+            self._active_app_id = None
+            was_connected = self._connected
+            self._connected = False
+            configured_filter = self._rig_name_filter
+        if was_connected and self.on_disconnected:
+            self.on_disconnected()
+        return configured_filter
+
+    def get_rig_name_filter(self) -> str | None:
+        with self._state_lock:
+            return self._rig_name_filter
+
+    def _remember_rig(self, app_id: str, config_name: str | None = None) -> None:
+        if not app_id:
+            return
+        with self._state_lock:
+            self._known_rigs[app_id] = config_name or self._known_rigs.get(app_id)
+
+    def get_known_rigs(self) -> list[dict[str, str | None]]:
+        with self._state_lock:
+            return [
+                {"app_id": app_id, "config_name": config_name}
+                for app_id, config_name in sorted(
+                    self._known_rigs.items(), key=lambda item: item[0].casefold()
+                )
+            ]
+
+    def _matches_source(self, app_id: str, status: WSJTXStatus | None = None) -> bool:
+        with self._state_lock:
+            rig_name_filter = self._rig_name_filter
+            active_app_id = self._active_app_id
+
+        if active_app_id and app_id != active_app_id:
+            return False
+        if not rig_name_filter:
+            return True
+
+        candidates = [app_id]
+        if status and status.config_name:
+            candidates.append(status.config_name)
+        expected = rig_name_filter.casefold()
+        return any(candidate.casefold() == expected for candidate in candidates if candidate)
+
+    def _mark_connected(self, app_id: str) -> None:
+        with self._state_lock:
+            if self._active_app_id is None:
+                self._active_app_id = app_id
+            was_connected = self._connected
+            self._connected = True
+        if not was_connected and self.on_connected:
+            self.on_connected(app_id or "WSJT-X")
+
+    def _mark_disconnected(self) -> None:
+        with self._state_lock:
+            was_connected = self._connected
+            self._connected = False
+            self._active_app_id = None
+        if was_connected and self.on_disconnected:
+            self.on_disconnected()
+
+    def _check_connection_timeout(self, now: float | None = None) -> None:
+        if not self._connected or not self._last_packet:
+            return
+        if now is None:
+            now = time.monotonic()
+        if (now - self._last_packet) > self.heartbeat_timeout_s:
+            self._mark_disconnected()
+
     def _make_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        # SO_REUSEPORT is not available/reliable on all Windows builds.
-        # Best effort only; lack of support must not break WSJT-X listening.
-        try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        except (AttributeError, OSError):
-            pass
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except OSError:
+                pass
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(2.0)
-        s.bind(("", self.port))
-        # Multicast join is optional for localhost-unicast WSJT-X setups.
-        # If join fails, keep socket alive for unicast traffic on the same port.
+        s.settimeout(min(self.socket_timeout_s, 0.2))
         try:
-            mreq = struct.pack("4sL", socket.inet_aton(self.multicast), socket.INADDR_ANY)
-            s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            s.bind(("", self.port))
+            self._active_query_mode = False
         except OSError:
-            pass
+            # If WSJT-X already owns the port, try loopback fallback (active query mode).
+            try:
+                s.bind(("127.0.0.1", 0))
+                self._active_query_mode = True
+            except OSError:
+                s.close()
+                raise
+        if not self._active_query_mode:
+            try:
+                mreq = socket.inet_aton(self.multicast) + socket.inet_aton("0.0.0.0")
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            except OSError:
+                pass
         return s
+
+    def _pack_str(self, value: str | None) -> bytes:
+        if value is None:
+            return struct.pack(">I", 0xFFFFFFFF)
+        encoded = value.encode("utf-8")
+        return struct.pack(">I", len(encoded)) + encoded
+
+    def _build_heartbeat(self) -> bytes:
+        return b"".join(
+            [
+                struct.pack(">I", WSJTX_MAGIC),
+                struct.pack(">I", 2),
+                struct.pack(">I", MSG_HEARTBEAT),
+                self._pack_str(self.client_id),
+                struct.pack(">I", 2),
+                self._pack_str("2.0"),
+                self._pack_str(""),
+            ]
+        )
+
+    def _handle_datagram(self, data: bytes) -> bool:
+        if len(data) < 12:
+            return False
+        try:
+            magic, _, msg_type, app_id, _ = _parse_header(data)
+        except Exception:
+            return False
+
+        if magic != WSJTX_MAGIC:
+            return False
+
+        if app_id == self.client_id:
+            return False
+
+        if msg_type == MSG_STATUS:
+            st = parse_status(data)
+            if st:
+                self._remember_rig(st.app_id, st.config_name)
+            if st and self._matches_source(st.app_id, st):
+                self._last_packet = time.monotonic()
+                self._mark_connected(st.app_id)
+                if self.on_status:
+                    self.on_status(st)
+                return True
+        elif msg_type == MSG_DECODE:
+            dec = parse_decode(data)
+            if dec:
+                self._remember_rig(dec.app_id)
+            if dec and self._matches_source(dec.app_id):
+                self._last_packet = time.monotonic()
+                self._mark_connected(dec.app_id)
+                if self.on_decode:
+                    self.on_decode(dec)
+                return True
+        elif msg_type == MSG_CLOSE and self._matches_source(app_id or ""):
+            self._mark_disconnected()
+            return True
+        elif msg_type == MSG_HEARTBEAT:
+            hb = parse_heartbeat(data)
+            if hb:
+                self._remember_rig(hb.app_id)
+            if self._matches_source(app_id or ""):
+                self._last_packet = time.monotonic()
+                self._mark_connected(app_id or "WSJT-X")
+                return True
+        return False
 
     def _run(self) -> None:
         try:
             sock = self._make_socket()
-        except Exception as e:
+        except OSError as e:
+            message = f"Cannot listen for WSJT-X UDP on port {self.port}: {e}"
+            logging.getLogger(__name__).error(message)
+            if self.on_error:
+                self.on_error(message)
             if self.on_disconnected:
                 self.on_disconnected()
             return
 
-        last_packet = 0.0
-        import time
+        query_sock: socket.socket | None = None
+        if not self._active_query_mode:
+            try:
+                query_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                query_sock.settimeout(0.05)
+                query_sock.bind(("127.0.0.1", 0))
+            except OSError:
+                query_sock = None
+
+        heartbeat = self._build_heartbeat()
+        last_heartbeat = 0.0
 
         while not self._stop.is_set():
+            now = time.monotonic()
+            if now - last_heartbeat >= 2.0:
+                tx_sock = sock if self._active_query_mode else query_sock
+                if tx_sock is not None:
+                    try:
+                        tx_sock.sendto(heartbeat, (self.wsjtx_host, self.port))
+                    except OSError:
+                        pass
+                last_heartbeat = now
+
             try:
                 data, _ = sock.recvfrom(4096)
-                last_packet = time.monotonic()
-
-                if not self._connected:
-                    self._connected = True
-                    magic, _, msg_type, app_id, _ = _parse_header(data)
-                    if self.on_connected:
-                        self.on_connected(app_id or "WSJT-X")
-
-                if len(data) < 12:
-                    continue
-                _, _, msg_type = struct.unpack_from(">III", data, 0)[:3]
-
-                if msg_type == MSG_STATUS:
-                    st = parse_status(data)
-                    if st and self.on_status:
-                        self.on_status(st)
-                elif msg_type == MSG_DECODE:
-                    dec = parse_decode(data)
-                    if dec and self.on_decode:
-                        self.on_decode(dec)
-                elif msg_type == MSG_CLOSE:
-                    self._connected = False
-                    if self.on_disconnected:
-                        self.on_disconnected()
-
+                self._handle_datagram(data)
             except socket.timeout:
-                import time
-                if self._connected and last_packet and (time.monotonic() - last_packet) > 10:
-                    self._connected = False
-                    if self.on_disconnected:
-                        self.on_disconnected()
+                pass
+            except OSError:
+                if self._stop.is_set():
+                    break
+            except Exception:
+                pass
+
+            if query_sock is not None:
+                try:
+                    q_data, _ = query_sock.recvfrom(4096)
+                    self._handle_datagram(q_data)
+                except socket.timeout:
+                    pass
+                except OSError:
+                    pass
+                except Exception:
+                    pass
+
+            self._check_connection_timeout(now)
 
         sock.close()
+        if query_sock is not None:
+            query_sock.close()

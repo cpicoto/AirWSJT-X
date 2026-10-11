@@ -41,6 +41,16 @@ class WSJTXAdapter:
         self.status.frequency_hz = frequency_hz
         self.status.psk_reporter_enabled = psk_reporter_enabled
 
+    def is_ready_for_qso(self) -> bool:
+        return (
+            self.status.configured
+            and self.status.mode == "Q65"
+            and self.status.period_s == 15
+            and self.status.band_mhz is not None
+            and self.status.band_mhz >= self.MIN_AUTOMATION_BAND_MHZ
+            and self.status.frequency_hz is not None
+        )
+
     def set_ptt(self, enabled: bool) -> None:
         if not self.status.configured:
             raise ValueError("WSJT-X must be configured before PTT control.")

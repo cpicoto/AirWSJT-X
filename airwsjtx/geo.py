@@ -10,7 +10,7 @@ import math
 # ─── Maidenhead ───────────────────────────────────────────────────────────────
 
 def locator_to_latlon(locator: str) -> tuple[float, float]:
-    """Convert Maidenhead grid locator (4 or 6 chars) to (lat, lon) centre."""
+    """Convert Maidenhead grid locator (4, 6 or 8 chars) to (lat, lon) centre."""
     loc = locator.strip().upper()
     if len(loc) < 4:
         raise ValueError(f"Locator too short: {locator!r}")
@@ -21,8 +21,12 @@ def locator_to_latlon(locator: str) -> tuple[float, float]:
     if len(loc) >= 6:
         lon += (ord(loc[4]) - ord("A")) * (2.0 / 24)
         lat += (ord(loc[5]) - ord("A")) * (1.0 / 24)
-        lon += 1.0 / 24        # centre of sub-square
-        lat += 0.5 / 24
+        if len(loc) == 8:
+            lon += (int(loc[6]) + 0.5) * (2.0 / 240)
+            lat += (int(loc[7]) + 0.5) * (1.0 / 240)
+        else:
+            lon += 1.0 / 24        # centre of sub-square
+            lat += 0.5 / 24
     else:
         lon += 1.0             # centre of 2° square
         lat += 0.5
@@ -53,6 +57,16 @@ def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         lat2r
     ) * math.cos(dlon)
     return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def heading_delta_deg(source_deg: float, target_deg: float) -> float:
+    """Angular difference between headings in degrees."""
+    return abs((source_deg - target_deg + 180.0) % 360.0 - 180.0)
+
+
+def heading_within_tolerance(path_bearing_deg: float, aircraft_heading_deg: float, tolerance_deg: float = 30.0) -> bool:
+    """Return True when an aircraft heading is within the allowed path corridor."""
+    return heading_delta_deg(aircraft_heading_deg, path_bearing_deg) <= abs(tolerance_deg)
 
 
 def elevation_deg(surface_km: float, altitude_m: float) -> float:

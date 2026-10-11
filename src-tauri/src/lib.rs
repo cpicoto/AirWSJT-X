@@ -3,9 +3,19 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 use tokio::sync::Mutex;
 use std::sync::Arc;
+use std::collections::HashMap;
+mod credentials;
+#[cfg(target_os = "android")]
+mod mobile_storage;
+#[cfg(any(mobile, test))]
+#[cfg_attr(not(mobile), allow(dead_code))]
+mod mobile_aircraft;
 
 pub struct SidecarState {
     pub tx: Option<tauri_plugin_shell::process::CommandChild>,
+    pub credential_updates: HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
+    pub credential_error: Option<String>,
+    pub rate_limits: HashMap<String, serde_json::Value>,
 }
 
 #[tauri::command]
@@ -24,95 +34,135 @@ async fn send_to_sidecar(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(mobile)]
+    let builder = builder.manage(mobile_aircraft::MobileAircraftState::default());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(mobile_storage::init());
+    let builder = builder
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                if let Some(icon) = app.default_window_icon().cloned() {
-                    let _ = window.set_icon(icon);
-                }
-            }
-
-            let sidecar_state = Arc::new(Mutex::new(SidecarState { tx: None }));
+            let sidecar_state = Arc::new(Mutex::new(SidecarState {
+                tx: None,
+                credential_updates: HashMap::new(),
+                credential_error: None,
+                rate_limits: HashMap::new(),
+            }));
             let state_clone = sidecar_state.clone();
             app.manage(sidecar_state);
 
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let sidecar_result = handle
-                    .shell()
-                    .sidecar("airwsjtx_bridge")
-                    .and_then(|cmd| cmd.spawn());
+            // On mobile, skip sidecar — the frontend runs standalone
+            #[cfg(not(mobile))]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Some(version) = &app.config().version {
+                        window.set_title(&format!("AirWSJT-X v{version}"))?;
+                    }
+                }
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let sidecar_cmd = handle
+                        .shell()
+                        .sidecar("airwsjtx_bridge")
+                        .expect("failed to create sidecar command");
+                    let (mut rx, mut child) = sidecar_cmd.spawn().expect("failed to spawn sidecar");
 
-                let (mut rx, child) = match sidecar_result {
-                    Ok(spawned) => spawned,
-                    Err(sidecar_err) => {
-                        eprintln!("failed to spawn packaged sidecar: {}", sidecar_err);
-
-                        let bridge_script = concat!(env!("CARGO_MANIFEST_DIR"), "\\..\\sidecar\\airwsjtx_bridge.py");
-                        let mut launched = None;
-
-                        let attempts: [(&str, &[&str]); 3] = [
-                            (
-                                "C:\\Users\\cpico\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-                                &[bridge_script],
-                            ),
-                            ("py", &["-3", bridge_script]),
-                            ("python", &[bridge_script]),
-                        ];
-
-                        for (program, args) in attempts {
-                            match handle.shell().command(program).args(args).spawn() {
-                                Ok(spawned) => {
-                                    launched = Some(spawned);
-                                    eprintln!("launched python bridge via {}", program);
-                                    break;
-                                }
-                                Err(err) => {
-                                    eprintln!("python bridge attempt failed ({}): {}", program, err);
-                                }
-                            }
+                    let restore_result = credentials::restore(&handle, &mut child);
+                    let restore_error = match restore_result {
+                        Ok(None) => None,
+                        Ok(Some(warning)) => {
+                            eprintln!("Aircraft credentials warning: {}", warning);
+                            let payload = serde_json::json!({
+                                "event": "source_credentials_error", "data": { "message": warning }
+                            });
+                            let _ = handle.emit("sidecar-message", payload.to_string());
+                            Some(warning)
                         }
+                        Err(message) => {
+                            eprintln!("Aircraft credentials: {}", message);
+                            let payload = serde_json::json!({
+                                "event": "source_credentials_error", "data": { "message": message }
+                            });
+                            let _ = handle.emit("sidecar-message", payload.to_string());
+                            Some(message)
+                        }
+                    };
 
-                        match launched {
-                            Some(spawned) => spawned,
-                            None => {
-                                eprintln!("python sidecar fallback unavailable");
-                                return;
+                    {
+                        let mut guard = state_clone.lock().await;
+                        guard.tx = Some(child);
+                        guard.credential_error = restore_error;
+                    }
+
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            CommandEvent::Stdout(line) => {
+                                if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&line) {
+                                    let mut guard = state_clone.lock().await;
+                                    if let Some(id) = payload.get("id").and_then(|id| id.as_str()) {
+                                        if let Some(reply) = guard.credential_updates.remove(id) {
+                                            let result = if payload.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                                                Ok(())
+                                            } else {
+                                                Err("Credentials stored, but the backend rejected the update. Rebuild the sidecar and restart the app.".into())
+                                            };
+                                            guard.credential_error = result.as_ref().err().cloned();
+                                            let _ = reply.send(result);
+                                            continue;
+                                        }
+                                    }
+                                    if payload.get("event").and_then(|v| v.as_str()) == Some("source_credentials_error") {
+                                        guard.credential_error = Some("Unable to apply saved aircraft credentials. Check the backend and restart the app.".into());
+                                    }
+                                    if payload.get("event").and_then(|v| v.as_str()) == Some("source_rate_limit_update") {
+                                        if let Some(provider) = payload["data"]["provider"].as_str() {
+                                            guard.rate_limits.insert(provider.to_string(), payload["data"].clone());
+                                        }
+                                    }
+                                }
+                                let _ = handle.emit("sidecar-message", String::from_utf8_lossy(&line).to_string());
                             }
+                            CommandEvent::Stderr(line) => {
+                                eprintln!("sidecar stderr: {}", String::from_utf8_lossy(&line));
+                            }
+                            CommandEvent::Error(e) => {
+                                eprintln!("sidecar error: {}", e);
+                                break;
+                            }
+                            CommandEvent::Terminated(_) => {
+                                eprintln!("sidecar terminated");
+                                break;
+                            }
+                            _ => {}
                         }
                     }
-                };
-
-                {
                     let mut guard = state_clone.lock().await;
-                    guard.tx = Some(child);
-                }
-
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(line) => {
-                            let _ = handle.emit("sidecar-message", String::from_utf8_lossy(&line).to_string());
-                        }
-                        CommandEvent::Stderr(line) => {
-                            eprintln!("sidecar stderr: {}", String::from_utf8_lossy(&line));
-                        }
-                        CommandEvent::Error(e) => {
-                            eprintln!("sidecar error: {}", e);
-                            break;
-                        }
-                        CommandEvent::Terminated(_) => {
-                            eprintln!("sidecar terminated");
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            });
+                    guard.tx = None;
+                    guard.credential_updates.clear();
+                });
+            }
+            #[cfg(mobile)]
+            let _ = state_clone;
 
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![send_to_sidecar])
-        .run(tauri::generate_context!())
+        });
+    #[cfg(not(mobile))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+            send_to_sidecar,
+            credentials::get_source_credentials_status,
+            credentials::save_source_credentials,
+            credentials::set_source_poll_interval,
+            credentials::get_source_rate_limit_status,
+        ]);
+    #[cfg(mobile)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        send_to_sidecar,
+        credentials::get_source_credentials_status,
+        credentials::save_source_credentials,
+        credentials::set_source_poll_interval,
+        credentials::get_source_rate_limit_status,
+        mobile_aircraft::fetch_mobile_aircraft,
+    ]);
+    builder.run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

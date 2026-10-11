@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build:safe"
   },
   "app": {
     "windows": [
@@ -28,21 +28,18 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "category": "Utility",
-    "externalBin": [
-      "binaries/airwsjtx_bridge"
-    ],
-    "macOS": {
-      "minimumSystemVersion": "12.0",
-      "entitlements": "entitlements-mas.plist"
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": null,
+      "providerShortName": "QJ2R7N9BRA",
+      "entitlements": "Entitlements.plist"
+    }
   },
   "plugins": {
     "shell": {

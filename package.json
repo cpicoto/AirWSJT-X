@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "wsjtx:test": "python -m unittest tests.test_wsjtx_udp",
+    "build:safe": "npm run wsjtx:test && npm run build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -15,6 +17,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@tauri-apps/cli": "^2.5.0",
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.6",
