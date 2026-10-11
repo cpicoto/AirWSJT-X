@@ -275,16 +275,16 @@ class AndroidCIWorkflowTests(unittest.TestCase):
 
     def test_workflow_runs_tauri_android_init(self) -> None:
         self.assertIn(
-            "tauri android init",
+            "tauri android init --skip-targets-install",
             self.workflow_text,
-            "mobile.yml must call 'tauri android init' before building",
+            "mobile.yml must initialize Android without reinstalling Rust targets already provisioned in CI",
         )
 
     def test_workflow_runs_tauri_android_build(self) -> None:
         self.assertIn(
-            "tauri android build",
+            "tauri android build --apk --target aarch64 armv7",
             self.workflow_text,
-            "mobile.yml must call 'tauri android build' to produce an APK/AAB",
+            "mobile.yml must explicitly build only the ARM Android targets used by real devices",
         )
 
     def test_workflow_uploads_artifact(self) -> None:
@@ -308,6 +308,18 @@ class AndroidCIWorkflowTests(unittest.TestCase):
             self.workflow_text,
             "mobile.yml must include the armv7-linux-androideabi Rust target "
             "(required for 32-bit ARM devices)",
+        )
+
+    def test_workflow_omits_emulator_rust_targets(self) -> None:
+        self.assertNotIn(
+            "x86_64-linux-android",
+            self.workflow_text,
+            "mobile.yml should not preinstall emulator-only Rust targets for release APKs",
+        )
+        self.assertNotIn(
+            "i686-linux-android",
+            self.workflow_text,
+            "mobile.yml should not build 32-bit x86 emulator targets for release APKs",
         )
 
     def test_workflow_runs_static_packaging_tests(self) -> None:

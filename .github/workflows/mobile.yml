@@ -105,7 +105,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - name: Install Android NDK
         run: |
@@ -118,10 +118,10 @@ jobs:
 
       # ── Build ─────────────────────────────────────────────────────────────
       - name: Initialize Tauri Android
-        run: npx tauri android init
+        run: npx tauri android init --skip-targets-install
 
       - name: Build Android APK
-        run: npx tauri android build --apk
+        run: npx tauri android build --apk --target aarch64 armv7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
