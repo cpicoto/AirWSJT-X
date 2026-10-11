@@ -18,6 +18,13 @@ pub struct SidecarState {
     pub rate_limits: HashMap<String, serde_json::Value>,
 }
 
+/// Frames an RPC message for the sidecar by appending a newline terminator.
+/// The sidecar reads newline-delimited JSON from stdin, so every message
+/// must end with exactly one `\n`.
+pub(crate) fn frame_rpc_message(message: &str) -> String {
+    format!("{}\n", message)
+}
+
 #[tauri::command]
 async fn send_to_sidecar(
     message: String,
@@ -26,7 +33,7 @@ async fn send_to_sidecar(
     let mut guard = state.lock().await;
     if let Some(child) = &mut guard.tx {
         child
-            .write(format!("{}\n", message).as_bytes())
+            .write(frame_rpc_message(&message).as_bytes())
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -165,4 +172,42 @@ pub fn run() {
     ]);
     builder.run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_rpc_message;
+
+    #[test]
+    fn frame_message_appends_newline() {
+        assert_eq!(frame_rpc_message("hello"), "hello\n");
+    }
+
+    #[test]
+    fn frame_message_preserves_json_content() {
+        let json = r#"{"id":"1","method":"get_status","params":{}}"#;
+        let framed = frame_rpc_message(json);
+        assert!(framed.ends_with('\n'));
+        assert_eq!(&framed[..framed.len() - 1], json);
+    }
+
+    #[test]
+    fn frame_message_empty_string_gives_newline_only() {
+        assert_eq!(frame_rpc_message(""), "\n");
+    }
+
+    #[test]
+    fn frame_message_unicode_content_is_preserved() {
+        let msg = "日本語テスト";
+        let framed = frame_rpc_message(msg);
+        assert!(framed.starts_with(msg));
+        assert!(framed.ends_with('\n'));
+    }
+
+    #[test]
+    fn frame_message_does_not_strip_existing_content() {
+        // Framing is additive — it always appends exactly one '\n'.
+        let framed = frame_rpc_message("a\nb");
+        assert_eq!(framed, "a\nb\n");
+    }
 }

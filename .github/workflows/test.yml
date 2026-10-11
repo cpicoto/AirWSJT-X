@@ -40,3 +40,67 @@ jobs:
           python-version: "3.12"
       - name: Run Android packaging static tests
         run: python -m unittest tests.test_android_packaging -v
+
+  cargo-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    name: Rust tests (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux system dependencies (Tauri 2 / WebKit2GTK 4.1)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+  playwright-ui-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    name: Playwright UI tests (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browser (Chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Create screenshots directory
+        run: mkdir -p screenshots
+
+      - name: Run Playwright tests
+        run: npx playwright test --config playwright.config.ts --reporter=list
+
+      - name: Upload screenshots as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ matrix.os }}
+          path: screenshots/
+          if-no-files-found: ignore
