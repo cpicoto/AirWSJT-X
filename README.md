@@ -159,8 +159,7 @@ repository folder in VS Code and use **Terminal > Run Task**:
 - **AirWSJT-X: Build** builds the frontend and release desktop executable with
   `npm run tauri -- build --no-bundle`. It does not generate or install a `.deb`.
   This is also the default **Ctrl+Shift+B** task.
-- **AirWSJT-X: Run** launches the existing
-  `src-tauri/target/release/airwsjtx` executable. Build it first; this task does
+- **AirWSJT-X: Run** launches `npm run tauri -- dev`. Build it first; this task does
   not rebuild.
 - **AirWSJT-X: Build and Run** completes the build successfully before launching
   the executable.
