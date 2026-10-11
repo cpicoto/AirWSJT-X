@@ -125,8 +125,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Locate APK ────────────────────────────────────────────────────────
-      - name: Find APK
+      # ── Locate, align, and sign APK ──────────────────────────────────────
+      - name: Find and sign APK
         id: find_apk
         run: |
           APK=$(find src-tauri/gen/android -name "*.apk" -type f | head -1)
@@ -136,8 +136,31 @@ jobs:
             exit 1
           fi
           echo "apk_path=$APK" >> $GITHUB_OUTPUT
-          cp "$APK" /tmp/AirWSJT-X-android.apk
-          echo "APK found: $APK"
+
+          # Generate a debug keystore for signing
+          keytool -genkeypair -v \
+            -keystore /tmp/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          # Zipalign
+          BUILD_TOOLS="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools/ | sort -V | tail -1)"
+          "${BUILD_TOOLS}/zipalign" -f 4 "$APK" /tmp/AirWSJT-X-aligned.apk
+
+          # Sign the APK
+          "${BUILD_TOOLS}/apksigner" sign \
+            --ks /tmp/debug.keystore \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out /tmp/AirWSJT-X-android.apk \
+            /tmp/AirWSJT-X-aligned.apk
+
+          # Verify
+          "${BUILD_TOOLS}/apksigner" verify /tmp/AirWSJT-X-android.apk
+          echo "APK found and signed: $APK"
 
       # ── Post-build APK validation ─────────────────────────────────────────
       - name: Validate APK — manifest, version, signing, architectures
