@@ -2,6 +2,7 @@ interface LockState {
   icao24: string;
   callsign: string;
   altitude_ft: number;
+  range_a_km?: number | null;
   az_a: number;
   el_a: number;
   az_b: number;
@@ -11,6 +12,7 @@ interface LockState {
   state: string;
   rotator_az?: number | null;
   rotator_el?: number | null;
+  position_updated_epoch_s?: number | null;
 }
 
 interface PlaneLockPanelProps {
@@ -26,6 +28,8 @@ interface PlaneLockPanelProps {
     az_b: number; el_b: number; off_path_deg: number;
   }[];
   sourceStatusText?: string;
+  nowEpochS: number;
+  pollIntervalS: number;
 }
 
 const STATE_LABELS: Record<string, { label: string; color: string }> = {
@@ -46,7 +50,7 @@ function ScoreRing({ score }: { score: number }) {
   const dash = score * circ;
   const color = score >= 0.5 ? "#3fb950" : score >= 0.3 ? "#d29922" : "#f85149";
   return (
-    <svg width={64} height={64}>
+    <svg width={44} height={44} viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1c2128" strokeWidth={6} />
       <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={6}
         strokeDasharray={`${dash} ${circ}`}
@@ -66,13 +70,13 @@ function AzElBadge({ label, az, el, rotAz, rotEl }:
   const elErr = rotEl != null ? Math.abs(rotEl - el) : null;
   const onTarget = azErr != null && elErr != null && azErr < 3 && elErr < 3;
   return (
-    <div style={{
-      padding: "6px 10px", borderRadius: 6, border: "1px solid #30363d",
+    <div className="locked-station" style={{
+      padding: "4px 5px", borderRadius: 6, border: "1px solid #30363d",
       background: onTarget ? "rgba(63,185,80,0.08)" : "#0d1117",
-      minWidth: 118,
+      minWidth: 0,
     }}>
-      <div style={{ fontSize: 10, color: "#8b949e", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontFamily: "monospace", fontSize: 13, whiteSpace: "nowrap" }}>
+      <div style={{ fontSize: 10, color: "#8b949e", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontFamily: "monospace", fontSize: 13 }}>
         <span style={{ color: "#c9d1d9" }}>AZ </span>
         <span style={{ color: "#58a6ff", fontWeight: 700 }}>{az.toFixed(1)}°</span>
       </div>
@@ -88,15 +92,21 @@ function AzElBadge({ label, az, el, rotAz, rotEl }:
 export default function PlaneLockPanel({
   locked, autoLock, sessionState, onAutoLockToggle, onUnlock, onLockAircraft, aircraft,
   sourceStatusText,
+  nowEpochS,
+  pollIntervalS,
 }: PlaneLockPanelProps) {
   const stateInfo = STATE_LABELS[sessionState] ?? STATE_LABELS.idle;
+  const updateAge = locked?.position_updated_epoch_s != null
+    ? Math.max(0, Math.floor(nowEpochS - locked.position_updated_epoch_s)) : null;
+  const positionStale = locked?.position_updated_epoch_s != null
+    && nowEpochS - locked.position_updated_epoch_s > pollIntervalS + 5;
 
   // State machine progression steps
   const steps = ["idle", "plane_locked", "tracking", "ready", "active_qso"];
   const stepIdx = steps.indexOf(sessionState);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
 
       {/* State machine progress bar */}
       <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
@@ -149,48 +159,64 @@ export default function PlaneLockPanel({
 
       {/* Locked aircraft card */}
       {locked ? (
-        <div style={{
-          padding: "12px 14px", borderRadius: 8,
+        <div className="locked-plane" style={{
+          padding: "6px 8px", borderRadius: 8,
           border: `2px solid ${sessionState === "ready" ? "#3fb950" : "#58a6ff"}44`,
           background: sessionState === "ready"
             ? "rgba(63,185,80,0.06)" : "rgba(88,166,255,0.06)",
         }}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <ScoreRing score={locked.scatter_score} />
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#58a6ff" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span title={locked.callsign} style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#58a6ff",
+                  flex: 1, minWidth: 0, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {locked.callsign}
-                </span>
-                <span style={{ fontSize: 12, color: "#8b949e" }}>
-                  FL{Math.round(locked.altitude_ft / 100)} · {locked.off_path_deg.toFixed(0)}° off-path
                 </span>
                 <button
                   style={{
-                    marginLeft: "auto", padding: "2px 8px", fontSize: 10, borderRadius: 4,
+                    flexShrink: 0, padding: "2px 5px", fontSize: 10, borderRadius: 4,
                     background: "#f8514922", color: "#f85149", border: "1px solid #f8514944",
                     cursor: "pointer",
                   }}
                   onClick={onUnlock}
                 >✕ Unlock</button>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <AzElBadge label="From My Station"
-                  az={locked.az_a} el={locked.el_a}
-                  rotAz={locked.rotator_az} rotEl={locked.rotator_el} />
-                <AzElBadge label="From DX Station"
-                  az={locked.az_b} el={locked.el_b} />
+              <div style={{ fontSize: 11, color: "#8b949e", marginTop: 2 }}>
+                {locked.off_path_deg.toFixed(0)}° off-path
               </div>
-              {sessionState === "ready" && (
-                <div style={{
-                  marginTop: 8, padding: "6px 10px", borderRadius: 4,
-                  background: "rgba(63,185,80,0.15)", color: "#3fb950",
-                  fontSize: 13, fontWeight: 700,
-                }}>
-                  ✓ Rotator on target — ready to start QSO
-                </div>
-              )}
             </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#8b949e", marginTop: 4 }}>
+            Aircraft altitude: {Number.isFinite(locked.altitude_ft) ? `${Math.round(locked.altitude_ft).toLocaleString("en-US")} ft` : "-- ft"}
+            {" · "}Distance from MY: {locked.range_a_km != null && Number.isFinite(locked.range_a_km)
+              ? `${locked.range_a_km.toFixed(1)} km` : "-- km"}
+          </div>
+          <div className="locked-stations" style={{
+            display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, marginTop: 6,
+          }}>
+            <AzElBadge label="From My Station"
+              az={locked.az_a} el={locked.el_a}
+              rotAz={locked.rotator_az} rotEl={locked.rotator_el} />
+            <AzElBadge label="From DX Station"
+              az={locked.az_b} el={locked.el_b} />
+          </div>
+          {sessionState === "ready" && (
+            <div style={{
+              marginTop: 6, padding: "4px 6px", borderRadius: 4,
+              background: "rgba(63,185,80,0.15)", color: "#3fb950",
+              fontSize: 12, fontWeight: 700,
+            }}>
+              ✓ Rotator on target — ready to start QSO
+            </div>
+          )}
+          <div className="locked-update-age" style={{
+            marginTop: 4, fontSize: 11,
+            color: updateAge === null || positionStale ? "#d29922" : "#8b949e",
+          }}>
+            {updateAge === null
+              ? "Last aircraft position update: unknown"
+              : `Last aircraft position update: ${updateAge}s ago${positionStale ? " — stale" : ""}`}
           </div>
         </div>
       ) : (
@@ -216,10 +242,11 @@ export default function PlaneLockPanel({
               return (
                 <div
                   key={ac.icao24}
+                  className="plane-candidate"
                   onClick={() => onLockAircraft(ac.icao24)}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "24px 1fr 50px 60px 60px 50px",
+                    gridTemplateColumns: "18px minmax(0, 1fr) auto auto",
                     gap: 6, alignItems: "center",
                     padding: "5px 8px", borderRadius: 6, cursor: "pointer",
                     border: `1px solid ${isLocked ? "#58a6ff" : "#30363d"}`,
@@ -228,23 +255,25 @@ export default function PlaneLockPanel({
                   }}
                 >
                   <span style={{ color: "#8b949e", textAlign: "center" }}>{i + 1}</span>
-                  <span style={{ fontFamily: "monospace", fontWeight: isLocked ? 700 : 400,
+                  <span title={ac.callsign} style={{ fontFamily: "monospace", fontWeight: isLocked ? 700 : 400,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     color: isLocked ? "#58a6ff" : "#c9d1d9" }}>
                     {ac.callsign}
                   </span>
-                  <span style={{ color: "#8b949e", textAlign: "center" }}>
-                    FL{Math.round(ac.altitude_ft / 100)}
+                  <span title="Altitude in feet" style={{ color: "#8b949e", textAlign: "center", whiteSpace: "nowrap" }}>
+                    {Number.isFinite(ac.altitude_ft) ? `${Math.round(ac.altitude_ft).toLocaleString("en-US")} ft` : "-- ft"}
                   </span>
                   <span style={{ fontFamily: "monospace", color: scoreColor, fontWeight: 600,
                     textAlign: "center" }}>
                     {(ac.scatter_score * 100).toFixed(0)}%
                   </span>
-                  <span style={{ color: "#8b949e", fontFamily: "monospace", textAlign: "center" }}>
-                    {ac.az_a.toFixed(0)}°/{ac.el_a.toFixed(0)}°
+                  <span style={{ color: "#8b949e", fontFamily: "monospace", gridColumn: "2 / 4" }}>
+                    AZ/EL {ac.az_a.toFixed(0)}°/{ac.el_a.toFixed(0)}°
                   </span>
                   <span style={{ color: ac.off_path_deg < 20 ? "#3fb950"
                     : ac.off_path_deg < 40 ? "#d29922" : "#8b949e",
-                    fontFamily: "monospace", textAlign: "center" }}>
+                    fontFamily: "monospace", textAlign: "right", gridColumn: "4" }}
+                    title="Off-path angle">
                     {ac.off_path_deg.toFixed(0)}°
                   </span>
                 </div>

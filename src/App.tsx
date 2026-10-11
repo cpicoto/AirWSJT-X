@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
+import AircraftAccounts from "./AircraftAccounts";
+import { haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +30,16 @@ interface WsjtxDecodeEntry {
   delta_freq_hz: number;
   mode: string | null;
   ts: string;
+}
+interface WsjtxRig {
+  app_id: string;
+  config_name: string | null;
+}
+function isWsjtxRig(value: unknown): value is WsjtxRig {
+  if (typeof value !== "object" || value === null) return false;
+  return "app_id" in value && typeof value.app_id === "string"
+    && "config_name" in value
+    && (value.config_name === null || typeof value.config_name === "string");
 }
 interface AircraftEntry {
   icao24: string;
@@ -60,6 +72,7 @@ interface AirscoutSourceState {
   active_source: string | null;
   priority: string[];
   sources: Record<string, { state: string; message: string | null }>;
+  poll_intervals_s?: Record<string, number>;
 }
 interface CallsignDbStatus {
   db_url: string;
@@ -151,6 +164,8 @@ const STATE_COLOR: Record<string, string> = {
 
 const PORTABLE_GRID_OVERRIDES_KEY = "airwsjtx.portableGridOverrides";
 const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
+const MY_CALL_OVERRIDE_KEY = "airwsjtx.myCallOverride";
+const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
 const PORTABLE_SCALE_KEY = "airwsjtx.portableScale";
 const PORTABLE_MIN_FONT_PX = 28;
 const PORTABLE_BASE_FONT_PX = 72;
@@ -214,13 +229,22 @@ export default function App() {
     }
   });
   const [myGridInput, setMyGridInput] = useState("");
+  const [myCallOverride, setMyCallOverride] = useState(() => localStorage.getItem(MY_CALL_OVERRIDE_KEY) ?? "");
+  const [myGridOverride, setMyGridOverride] = useState(() => localStorage.getItem(MY_GRID_OVERRIDE_KEY) ?? "");
+  const [myCallInput, setMyCallInput] = useState(() => localStorage.getItem(MY_CALL_OVERRIDE_KEY) ?? "");
+  const myCallEditing = useRef(false);
+  const [myStationBusy, setMyStationBusy] = useState(false);
+  const myStationRestored = useRef(false);
   const [dxGridInput, setDxGridInput] = useState("");
-  const [myGridEditing, setMyGridEditing] = useState(false);
-  const [dxGridEditing, setDxGridEditing] = useState(false);
+  const myGridEditing = useRef(false);
+  const dxGridEditing = useRef(false);
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
   const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
   const [wsjtxRigFilter, setWsjtxRigFilter] = useState("");
+  const [wsjtxKnownRigs, setWsjtxKnownRigs] = useState<WsjtxRig[]>([]);
+  const [wsjtxRigDiscoveryError, setWsjtxRigDiscoveryError] = useState<string | null>(null);
+  const [wsjtxRigFilterBusy, setWsjtxRigFilterBusy] = useState(false);
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
     const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
     return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
@@ -237,6 +261,8 @@ export default function App() {
     az_a: number; el_a: number; az_b: number; el_b: number;
     scatter_score: number; off_path_deg: number; state: string;
     rotator_az?: number | null; rotator_el?: number | null;
+    position_updated_epoch_s?: number | null;
+    range_a_km?: number | null;
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number } | null>(null);
@@ -262,6 +288,9 @@ export default function App() {
             setWsjtxLive(w => ({ ...w, connected: true, app_id: evtData.app_id as string }));
           } else if (evt === "wsjtx_disconnected") {
             addLog("WSJT-X disconnected");
+            setWsjtxLive(w => ({ ...w, connected: false }));
+          } else if (evt === "wsjtx_error") {
+            addLog(`WSJT-X error: ${evtData.message}`);
             setWsjtxLive(w => ({ ...w, connected: false }));
           } else if (evt === "wsjtx_status") {
             setWsjtxLive(w => ({
@@ -309,6 +338,8 @@ export default function App() {
           } else if (evt === "rotator_disconnected") {
             setRotatorConnected(false);
             addLog("Rotator disconnected");
+          } else if (evt === "source_credentials_error") {
+            addLog(`Aircraft credentials: ${evtData.message}`);
           } else if (evt === "rotator_error") {
             addLog(`Rotator: ${evtData.message}`);
           } else if (evt === "plane_locked") {
@@ -317,15 +348,23 @@ export default function App() {
             setStatus(s => s ? { ...s, state: (evtData.state as string) } : s);
             addLog(`🔒 Locked: ${evtData.callsign} FL${Math.round((evtData.altitude_ft as number)/100)} score=${((evtData.scatter_score as number)*100).toFixed(0)}%`);
           } else if (evt === "plane_tracking") {
-            setLockedPlane(prev => prev ? {
+            setLockedPlane(prev => prev && prev.icao24 === evtData.icao24 ? {
               ...prev,
+              callsign: typeof evtData.callsign === "string" ? evtData.callsign : prev.callsign,
+              altitude_ft: typeof evtData.altitude_ft === "number" ? evtData.altitude_ft : prev.altitude_ft,
+              range_a_km: typeof evtData.range_a_km === "number" ? evtData.range_a_km : null,
               az_a: evtData.az_a as number,
               el_a: evtData.el_a as number,
+              az_b: typeof evtData.az_b === "number" ? evtData.az_b : prev.az_b,
+              el_b: typeof evtData.el_b === "number" ? evtData.el_b : prev.el_b,
+              off_path_deg: typeof evtData.off_path_deg === "number" ? evtData.off_path_deg : prev.off_path_deg,
+              position_updated_epoch_s: typeof evtData.position_updated_epoch_s === "number"
+                ? evtData.position_updated_epoch_s : null,
               scatter_score: evtData.scatter_score as number,
               state: evtData.state as string,
               rotator_az: evtData.rotator_az as number | null,
               rotator_el: evtData.rotator_el as number | null,
-            } : null);
+            } : prev);
             setStatus(s => s ? { ...s, state: evtData.state as string } : s);
           } else if (evt === "plane_unlocked" || evt === "plane_out_of_window") {
             setLockedPlane(null);
@@ -349,12 +388,25 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const s = await rpc("get_status") as { state: string };
+        const s = await rpc("get_status") as { state: string; wsjtx_known_rigs?: unknown };
         setStatus(s);
+        const rigs = s.wsjtx_known_rigs;
+        if (Array.isArray(rigs) && rigs.every(isWsjtxRig)) {
+          setWsjtxKnownRigs(rigs);
+          setWsjtxRigDiscoveryError(null);
+        } else {
+          setWsjtxRigDiscoveryError(rigs === undefined
+            ? "Rig discovery unavailable: rebuild the Python sidecar and restart the app."
+            : "Invalid WSJT-X rig list received from the Python sidecar.");
+        }
       } catch { /* sidecar may not be up yet */ }
     }, 2000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (wsjtxRigDiscoveryError) addLog(wsjtxRigDiscoveryError);
+  }, [wsjtxRigDiscoveryError, addLog]);
 
   useEffect(() => {
     const saved = localStorage.getItem("wsjtxRigNameFilter") ?? "";
@@ -447,6 +499,7 @@ export default function App() {
 
   async function applyWsjtxRigFilter(rawValue: string) {
     const value = rawValue.trim();
+    setWsjtxRigFilterBusy(true);
     try {
       await rpc("wsjtx_set_rig_name_filter", { rig_name: value || null });
       localStorage.setItem("wsjtxRigNameFilter", value);
@@ -454,6 +507,8 @@ export default function App() {
       addLog(value ? `WSJT-X rig filter: ${value}` : "WSJT-X rig filter cleared");
     } catch (e) {
       addLog(`WSJT-X filter error: ${e}`);
+    } finally {
+      setWsjtxRigFilterBusy(false);
     }
   }
 
@@ -474,14 +529,19 @@ export default function App() {
     (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking"))
   );
   const activeSource = sourceStatus?.active_source ?? airscout?.active_source ?? null;
+  const configuredPollInterval = activeSource ? sourceStatus?.poll_intervals_s?.[activeSource] : undefined;
+  const activePollIntervalS = typeof configuredPollInterval === "number"
+    && Number.isFinite(configuredPollInterval) && configuredPollInterval > 0
+    ? configuredPollInterval : activeSource === "dump1090" ? 5 : 30;
   const activeSourceState = activeSource ? sourceStatus?.sources?.[activeSource]?.state ?? "unknown" : "stopped";
   const activeSourceMessage = activeSource ? sourceStatus?.sources?.[activeSource]?.message ?? null : null;
-  const openskyState = sourceStatus?.sources?.opensky?.state ?? "stopped";
+  const internetSourceState = activeSource === "adsbexchange"
+    ? activeSourceState : sourceStatus?.sources?.opensky?.state ?? "stopped";
   const connectivityState = activeSource === "dump1090" && activeSourceState === "connected"
     ? "local"
-    : openskyState === "connected"
+    : internetSourceState === "connected"
       ? "online"
-      : ["backoff", "connecting", "disconnected"].includes(openskyState)
+      : ["backoff", "connecting", "disconnected"].includes(internetSourceState)
         ? "degraded"
         : "offline";
   const connectivityColor = connectivityState === "online" || connectivityState === "local"
@@ -506,7 +566,7 @@ export default function App() {
     : activeSourceState === "backoff" || activeSourceState === "connecting"
       ? "var(--yellow)"
       : "var(--red)";
-  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090"];
+  const availableSources = sourceStatus ? Object.keys(sourceStatus.sources) : ["opensky", "dump1090", "adsbexchange"];
 
   const filteredAircraftCount = aircraft.length;
   const totalAircraftCount = airscout?.total ?? filteredAircraftCount;
@@ -529,10 +589,55 @@ export default function App() {
     rpc("airscout_apply_filters", { filters: normalized }).catch(() => {});
   }, [airscout?.station_a, airscout?.station_b]);
 
-  const myCallsign = wsjtxLive.de_call?.trim().toUpperCase() ?? null;
+  const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
   const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
-  const myGrid = (myCallsign ? stationGridOverrides[myCallsign] : null) ?? wsjtxLive.de_grid;
+  const myGrid = myGridOverride || (myCallsign ? stationGridOverrides[myCallsign] : null) || wsjtxLive.de_grid;
   const selectedDxGrid = (dxCall ? stationGridOverrides[dxCall] : null) ?? dxGrid;
+  const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
+    ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
+    : null;
+
+  useEffect(() => {
+    if (!status || myStationRestored.current) return;
+    myStationRestored.current = true;
+    if (myCallOverride || myGridOverride) {
+      rpc("set_my_station_override", { callsign: myCallOverride || null, grid: myGridOverride || null })
+        .catch(e => addLog(`MY station restore error: ${e}`));
+    }
+  }, [status, myCallOverride, myGridOverride, addLog]);
+
+  useEffect(() => {
+    if (!myCallEditing.current) setMyCallInput(myCallOverride || wsjtxLive.de_call || "");
+  }, [myCallOverride, wsjtxLive.de_call]);
+
+  async function applyMyStation(reset = false) {
+    const call = reset ? "" : myCallInput.trim().toUpperCase();
+    const grid = reset ? "" : myGridInput.trim().toUpperCase();
+    if (call && (!/^[A-Z0-9/]+$/.test(call) || !/[A-Z]/.test(call) || !/[0-9]/.test(call))) {
+      addLog("MY callsign must contain letters and digits, with optional /");
+      return;
+    }
+    if (grid && !isValidLocator(grid)) {
+      addLog("MY grid must be a valid 4, 6, or 8 character Maidenhead locator");
+      return;
+    }
+    setMyStationBusy(true);
+    try {
+      await rpc("set_my_station_override", { callsign: call || null, grid: grid || null });
+      localStorage.setItem(MY_CALL_OVERRIDE_KEY, call);
+      localStorage.setItem(MY_GRID_OVERRIDE_KEY, grid);
+      if (reset) savePortableGrid(myCallsign, null);
+      setMyCallOverride(call);
+      setMyGridOverride(grid);
+      setMyCallInput(call || wsjtxLive.de_call || "");
+      setMyGridInput(grid || wsjtxLive.de_grid || "");
+      addLog(reset ? "MY station reset to WSJT-X" : `MY station override: ${call || "WSJT-X"} ${grid || "WSJT-X"}`);
+    } catch (e) {
+      addLog(`MY station error: ${e}`);
+    } finally {
+      setMyStationBusy(false);
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem(PORTABLE_VIEW_KEY, portableView);
@@ -543,11 +648,11 @@ export default function App() {
   }, [portableScale]);
 
   useEffect(() => {
-    if (!myGridEditing) setMyGridInput(myGrid ?? "");
-  }, [myGrid, myGridEditing]);
+    if (!myGridEditing.current) setMyGridInput(myGrid ?? "");
+  }, [myGrid]);
   useEffect(() => {
-    if (!dxGridEditing) setDxGridInput(selectedDxGrid ?? "");
-  }, [selectedDxGrid, dxGridEditing]);
+    if (!dxGridEditing.current) setDxGridInput(selectedDxGrid ?? "");
+  }, [selectedDxGrid]);
   useEffect(() => {
     const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
     setAircraftFilters(stored);
@@ -574,11 +679,6 @@ export default function App() {
   <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
     <div className="portable-header">
       <span>Az / El</span>
-      <div className="portable-controls">
-        <button className="portable-mode" onClick={() => setPortableView("panel")}>Panel</button>
-        <button className="portable-mode" onClick={() => setPortableView("overlay")}>Overlay</button>
-        <button className="portable-mode" onClick={() => setPortableView("hidden")}>Hide</button>
-      </div>
     </div>
     <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
       <div className="portable-readout">
@@ -590,26 +690,13 @@ export default function App() {
         <span className="portable-value">{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
       </div>
     </div>
-    <div className="portable-footer">
-      <label>
-        Scale
-        <input
-          type="range"
-          min={70}
-          max={180}
-          step={5}
-          value={portableScale}
-          onChange={(e) => setPortableScale(Number(e.target.value))}
-        />
-      </label>
-    </div>
   </div>
   );
 
   const portableDisplay = portableView === "hidden" ? null : portableReadout;
 
   return (
-    <div className="app">
+    <div className={`app${portableView === "panel" ? " has-portable-panel" : ""}`}>
       {portableView === "overlay" && portableDisplay}
 
       {/* ── Top bar ── */}
@@ -667,11 +754,11 @@ export default function App() {
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
             Rig
-            <input
+            <select
               value={wsjtxRigFilter}
-              placeholder="all"
+              disabled={wsjtxRigFilterBusy}
               style={{
-                width: 92,
+                width: 180,
                 fontSize: 10,
                 padding: "2px 6px",
                 borderRadius: 4,
@@ -679,16 +766,24 @@ export default function App() {
                 background: "var(--surface)",
                 color: "var(--text)",
               }}
-              onChange={(e) => setWsjtxRigFilter(e.target.value)}
-              onBlur={() => { void applyWsjtxRigFilter(wsjtxRigFilter); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  (e.currentTarget as HTMLInputElement).blur();
-                }
-              }}
-            />
+              onChange={(e) => { void applyWsjtxRigFilter(e.target.value); }}
+            >
+              <option value="">Any rig</option>
+              {wsjtxRigFilter && !wsjtxKnownRigs.some(rig => rig.app_id === wsjtxRigFilter) && (
+                <option value={wsjtxRigFilter}>{wsjtxRigFilter} (saved)</option>
+              )}
+              {wsjtxKnownRigs.map(rig => (
+                <option key={rig.app_id} value={rig.app_id}>
+                  {rig.config_name ? `${rig.app_id} (${rig.config_name})` : rig.app_id}
+                </option>
+              ))}
+            </select>
           </label>
+          {wsjtxRigDiscoveryError && (
+            <span title={wsjtxRigDiscoveryError} style={{ fontSize: 10, color: "var(--yellow)" }}>
+              Rig discovery unavailable
+            </span>
+          )}
           <span style={{ fontSize: 10, color: connectivityColor, fontWeight: 600 }}>
             {connectivityLabel}
           </span>
@@ -705,6 +800,27 @@ export default function App() {
           )}
         </div>
       </header>
+
+      <div className="portable-toolbar" role="group" aria-label="Az / El display controls">
+        <span>Az / El</span>
+        <div className="portable-controls">
+          <button className="portable-mode" aria-pressed={portableView === "panel"} onClick={() => setPortableView("panel")}>Panel</button>
+          <button className="portable-mode" aria-pressed={portableView === "overlay"} onClick={() => setPortableView("overlay")}>Overlay</button>
+          <button className="portable-mode" aria-pressed={portableView === "hidden"} onClick={() => setPortableView("hidden")}>Hide</button>
+        </div>
+        <label>
+          Scale
+          <input
+            type="range"
+            min={70}
+            max={180}
+            step={5}
+            value={portableScale}
+            onChange={(e) => setPortableScale(Number(e.target.value))}
+          />
+          <span>{portableScale}%</span>
+        </label>
+      </div>
 
       {portableView === "panel" && portableDisplay}
 
@@ -730,14 +846,28 @@ export default function App() {
                 <div className="grid">{selectedDxGrid ?? "—"}</div>
               </div>
             </div>
+            <div className="station-distance" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
+              MY–DX distance: {stationDistanceKm === null ? "-- km" : `${stationDistanceKm.toFixed(1)} km`}
+            </div>
             <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
               <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>MY</span>
                 <input
+                  aria-label="MY callsign"
+                  value={myCallInput}
+                  onChange={e => setMyCallInput(e.target.value.toUpperCase())}
+                  onFocus={() => { myCallEditing.current = true; }}
+                  onBlur={() => { myCallEditing.current = false; }}
+                  placeholder="Callsign"
+                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
+                    borderRadius: 4, padding: "2px 6px", fontSize: 11, width: 86, fontFamily: "monospace" }}
+                />
+                <input
+                  aria-label="MY grid"
                   value={myGridInput}
                   onChange={(e) => setMyGridInput(e.target.value.toUpperCase())}
-                  onFocus={() => setMyGridEditing(true)}
-                  onBlur={() => setMyGridEditing(false)}
+                  onFocus={() => { myGridEditing.current = true; }}
+                  onBlur={() => { myGridEditing.current = false; }}
                   placeholder={wsjtxLive.de_grid ?? "Grid"}
                   style={{
                     background: "var(--surface)",
@@ -750,26 +880,20 @@ export default function App() {
                     fontFamily: "monospace",
                   }}
                 />
-                <button className="btn-secondary" style={{ fontSize: 10, padding: "2px 8px" }}
-                  onClick={() => {
-                    const grid = normalizeGrid(myGridInput);
-                    const locatorA = grid ?? wsjtxLive.de_grid;
-                    savePortableGrid(myCallsign, grid);
-                    if (locatorA && selectedDxGrid) {
-                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: selectedDxGrid }).catch(() => {});
-                    }
-                    addLog(`MY grid ${grid ? `override → ${grid}` : "reset to WSJT-X"}`);
-                  }}>
+                <button className="btn-secondary" aria-label="Apply MY station" disabled={myStationBusy}
+                  style={{ fontSize: 10, padding: "2px 8px" }} onClick={() => { void applyMyStation(); }}>
                   Apply
                 </button>
+                <button className="btn-secondary" disabled={myStationBusy} style={{ fontSize: 10, padding: "2px 8px" }}
+                  onClick={() => { void applyMyStation(true); }}>Use WSJT-X</button>
               </div>
               <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>DX</span>
                 <input
                   value={dxGridInput}
                   onChange={(e) => setDxGridInput(e.target.value.toUpperCase())}
-                  onFocus={() => setDxGridEditing(true)}
-                  onBlur={() => setDxGridEditing(false)}
+                  onFocus={() => { dxGridEditing.current = true; }}
+                  onBlur={() => { dxGridEditing.current = false; }}
                   placeholder={dxGrid ?? "Grid"}
                   style={{
                     background: "var(--surface)",
@@ -790,7 +914,7 @@ export default function App() {
                     }
                     const grid = normalizeGrid(dxGridInput);
                     const locatorB = grid ?? dxGrid;
-                    const locatorA = normalizeGrid(myGridInput) ?? wsjtxLive.de_grid;
+                    const locatorA = myGrid;
                     savePortableGrid(dxCall, grid);
                     if (locatorA && locatorB) {
                       rpc("airscout_set_stations", { locator_a: locatorA, locator_b: locatorB }).catch(() => {});
@@ -915,10 +1039,12 @@ export default function App() {
             )}
           </div>
 
-          {/* Plane Lock — flex fills remaining space */}
-          <div className="card flex1">
+          {/* Plane Lock */}
+          <div className="card plane-lock-card" style={{ flex: "0 1 auto", overflowY: "auto" }}>
             <PlaneLockPanel
               locked={lockedPlane}
+              nowEpochS={nowEpochS}
+              pollIntervalS={activePollIntervalS}
               autoLock={autoLock}
               sessionState={state}
               onAutoLockToggle={(v) => {
@@ -986,7 +1112,7 @@ export default function App() {
         </div>
 
         {/* RIGHT: Decodes + Aircraft + Log */}
-        <div className="col">
+        <div className="col" style={{ overflowY: "auto" }}>
 
           {/* WSJT-X Decodes */}
           <div className="card" style={{ flexShrink: 0 }}>
@@ -1017,7 +1143,7 @@ export default function App() {
                 <button
                   style={{ marginLeft: 6, padding: "1px 6px", fontSize: 9, borderRadius: 3,
                     background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}
-                  onClick={() => rpc("airscout_fetch_now", {}).catch(() => {})}>
+                  onClick={() => rpc("airscout_fetch_now", {}).catch(e => addLog(`Aircraft refresh error: ${e}`))}>
                   ↻
                 </button>
               </span>}
@@ -1097,7 +1223,7 @@ export default function App() {
                           }
                         }}
                       >
-                        {enabled ? "✓" : "+"} {source}
+                        {enabled ? "✓" : "+"} {source === "adsbexchange" ? "ADS-B Exchange" : source}
                       </button>
                       {enabled && (
                         <>
@@ -1131,6 +1257,12 @@ export default function App() {
                   );
                 })}
               </div>
+              <AircraftAccounts onLog={addLog} />
+              {sourceStatus?.sources?.adsbexchange?.message && (
+                <div style={{ fontSize: 10, color: "var(--yellow)" }}>
+                  ADS-B Exchange: {sourceStatus.sources.adsbexchange.message}
+                </div>
+              )}
             </div>
             {aircraft.length === 0 ? (
               <div style={{ color: "var(--text-muted)", fontSize: 11 }}>

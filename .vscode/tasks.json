@@ -1,0 +1,53 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "AirWSJT-X: Build",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"tauri",
+				"--",
+				"build",
+				"--no-bundle",
+				"--config",
+				"src-tauri\\tauri.desktop.conf.json"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "AirWSJT-X: Run",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"tauri",
+				"--",
+				"dev",
+				"--config",
+				"src-tauri\\tauri.desktop.conf.json"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "AirWSJT-X: Build and Run",
+			"dependsOrder": "sequence",
+			"dependsOn": ["AirWSJT-X: Run"],
+			"problemMatcher": []
+		}
+	]
+}

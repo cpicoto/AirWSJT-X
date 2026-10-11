@@ -4,6 +4,7 @@ Parses multicast datagrams from a running WSJT-X instance.
 """
 from __future__ import annotations
 
+import logging
 import socket
 import struct
 import threading
@@ -259,6 +260,7 @@ class WSJTXListener:
         heartbeat_timeout_s: float = 30.0,
         socket_timeout_s: float = 2.0,
         rig_name_filter: str | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         self.port = port
         self.multicast = multicast
@@ -270,6 +272,7 @@ class WSJTXListener:
         self.on_disconnected = on_disconnected
         self.heartbeat_timeout_s = heartbeat_timeout_s
         self.socket_timeout_s = socket_timeout_s
+        self.on_error = on_error
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
@@ -278,6 +281,7 @@ class WSJTXListener:
         self._rig_name_filter = self._normalize_rig_name(rig_name_filter)
         self._active_app_id: str | None = None
         self._active_query_mode = False
+        self._known_rigs: dict[str, str | None] = {}
 
     def start(self) -> None:
         self._stop.clear()
@@ -308,6 +312,21 @@ class WSJTXListener:
     def get_rig_name_filter(self) -> str | None:
         with self._state_lock:
             return self._rig_name_filter
+
+    def _remember_rig(self, app_id: str, config_name: str | None = None) -> None:
+        if not app_id:
+            return
+        with self._state_lock:
+            self._known_rigs[app_id] = config_name or self._known_rigs.get(app_id)
+
+    def get_known_rigs(self) -> list[dict[str, str | None]]:
+        with self._state_lock:
+            return [
+                {"app_id": app_id, "config_name": config_name}
+                for app_id, config_name in sorted(
+                    self._known_rigs.items(), key=lambda item: item[0].casefold()
+                )
+            ]
 
     def _matches_source(self, app_id: str, status: WSJTXStatus | None = None) -> bool:
         with self._state_lock:
@@ -352,26 +371,27 @@ class WSJTXListener:
 
     def _make_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        # SO_REUSEPORT is not available/reliable on all Windows builds.
-        # Best effort only; lack of support must not break WSJT-X listening.
-        try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        except (AttributeError, OSError):
-            pass
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except OSError:
+                pass
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.settimeout(min(self.socket_timeout_s, 0.2))
         try:
             s.bind(("", self.port))
             self._active_query_mode = False
         except OSError:
-            # If WSJT-X already owns 2237 on loopback, continue in query mode.
-            s.bind(("127.0.0.1", 0))
-            self._active_query_mode = True
-        # Multicast join is optional for localhost-unicast WSJT-X setups.
-        # If join fails, keep socket alive for unicast traffic on the same port.
+            # If WSJT-X already owns the port, try loopback fallback (active query mode).
+            try:
+                s.bind(("127.0.0.1", 0))
+                self._active_query_mode = True
+            except OSError:
+                s.close()
+                raise
         if not self._active_query_mode:
             try:
-                mreq = struct.pack("4sL", socket.inet_aton(self.multicast), socket.INADDR_ANY)
+                mreq = socket.inet_aton(self.multicast) + socket.inet_aton("0.0.0.0")
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             except OSError:
                 pass
@@ -412,6 +432,8 @@ class WSJTXListener:
 
         if msg_type == MSG_STATUS:
             st = parse_status(data)
+            if st:
+                self._remember_rig(st.app_id, st.config_name)
             if st and self._matches_source(st.app_id, st):
                 self._last_packet = time.monotonic()
                 self._mark_connected(st.app_id)
@@ -420,6 +442,8 @@ class WSJTXListener:
                 return True
         elif msg_type == MSG_DECODE:
             dec = parse_decode(data)
+            if dec:
+                self._remember_rig(dec.app_id)
             if dec and self._matches_source(dec.app_id):
                 self._last_packet = time.monotonic()
                 self._mark_connected(dec.app_id)
@@ -429,16 +453,24 @@ class WSJTXListener:
         elif msg_type == MSG_CLOSE and self._matches_source(app_id or ""):
             self._mark_disconnected()
             return True
-        elif msg_type == MSG_HEARTBEAT and self._matches_source(app_id or ""):
-            self._last_packet = time.monotonic()
-            self._mark_connected(app_id or "WSJT-X")
-            return True
+        elif msg_type == MSG_HEARTBEAT:
+            hb = parse_heartbeat(data)
+            if hb:
+                self._remember_rig(hb.app_id)
+            if self._matches_source(app_id or ""):
+                self._last_packet = time.monotonic()
+                self._mark_connected(app_id or "WSJT-X")
+                return True
         return False
 
     def _run(self) -> None:
         try:
             sock = self._make_socket()
-        except Exception:
+        except OSError as e:
+            message = f"Cannot listen for WSJT-X UDP on port {self.port}: {e}"
+            logging.getLogger(__name__).error(message)
+            if self.on_error:
+                self.on_error(message)
             if self.on_disconnected:
                 self.on_disconnected()
             return
