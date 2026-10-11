@@ -28,18 +28,22 @@ jobs:
             target: aarch64-apple-darwin
             sidecar_name: airwsjtx_bridge-aarch64-apple-darwin
             pyinstaller_name: airwsjtx_bridge
+            bundles: ""
           - os: macos-13
             target: x86_64-apple-darwin
             sidecar_name: airwsjtx_bridge-x86_64-apple-darwin
             pyinstaller_name: airwsjtx_bridge
+            bundles: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             sidecar_name: airwsjtx_bridge-x86_64-pc-windows-msvc.exe
             pyinstaller_name: airwsjtx_bridge.exe
+            bundles: ""
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             sidecar_name: airwsjtx_bridge-x86_64-unknown-linux-gnu
             pyinstaller_name: airwsjtx_bridge
+            bundles: "appimage,deb,rpm"
 
     runs-on: ${{ matrix.os }}
 
@@ -93,7 +97,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             libgtk-3-dev \
-            libssl-dev
+            libssl-dev \
+            rpm
 
       - uses: actions/setup-node@v4
         with:
@@ -182,12 +187,12 @@ jobs:
             - **macOS (Apple Silicon):** `.dmg` file
             - **macOS (Intel):** `.dmg` file
             - **Windows:** `.msi` installer or `.exe` setup
-            - **Linux:** `.AppImage` and `.deb` package
+            - **Linux (x64):** `.AppImage`, `.deb` (Debian/Ubuntu/Mint), `.rpm` (Fedora/openSUSE)
             - **iOS:** `.tar.gz` (from mobile build workflow)
             - **Android:** `.apk` (from mobile build workflow)
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
 
   deploy-site:
     needs: build
