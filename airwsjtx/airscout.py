@@ -220,7 +220,7 @@ class OpenSkyFeed:
                 "Content-Type": "application/x-www-form-urlencoded",
             })
             try:
-                with urllib.request.urlopen(req, timeout=15) as response:
+                with urllib.request.urlopen(req, timeout=15, context=self._ssl_context()) as response:
                     raw: object = json.loads(response.read())
             except urllib.error.HTTPError as e:
                 raise ValueError(f"OpenSky authentication failed (HTTP {e.code})") from None
@@ -255,13 +255,14 @@ class OpenSkyFeed:
             f"{self.URL}?lamin={self.lat_min}&lomin={self.lon_min}"
             f"&lamax={self.lat_max}&lomax={self.lon_max}"
         )
+        ctx = self._ssl_context()
         for attempt in range(2):
             headers = {"User-Agent": "AirWSJT-X/0.1 (ham radio scatter tool)"}
             if self._client_id:
                 headers["Authorization"] = f"Bearer {self._get_token()}"
             req = urllib.request.Request(url, headers=headers)
             try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
                     self._observe_quota(dict(resp.headers.items()), 200)
                     data = json.loads(resp.read())
                 break
@@ -396,7 +397,7 @@ class ADSBExchangeFeed(OpenSkyFeed):
                 },
             )
             try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=15, context=self._ssl_context()) as resp:
                     self._observe_quota(dict(resp.headers.items()), 200)
                     body = resp.read()
                     if resp.headers.get("Content-Encoding", "").lower() == "gzip":
