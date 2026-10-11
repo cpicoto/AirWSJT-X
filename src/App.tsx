@@ -276,23 +276,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetch(REMOTE_DB_URL)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((entries: Array<{ name: string; grid6: string }>) => {
-        const grids: Record<string, string> = {};
-        for (const e of entries) {
-          const at = e.name.indexOf("@");
-          if (at < 0 || !e.grid6) continue;
-          const call = e.name.slice(0, at).trim().toUpperCase();
-          if (call) grids[call] = e.grid6.toUpperCase();
-        }
+    function parseEntries(entries: Array<{ name: string; grid6: string }>) {
+      const grids: Record<string, string> = {};
+      for (const e of entries) {
+        const at = e.name.indexOf("@");
+        if (at < 0 || !e.grid6) continue;
+        const call = e.name.slice(0, at).trim().toUpperCase();
+        if (call) grids[call] = e.grid6.toUpperCase();
+      }
+      return grids;
+    }
+
+    invoke<string>("fetch_remote_db")
+      .then(text => {
+        const grids = parseEntries(JSON.parse(text));
         setRemoteStationGrids(grids);
         addLog(`Remote station DB loaded — ${Object.keys(grids).length} stations`);
       })
-      .catch(() => addLog("Remote station DB unavailable"));
+      .catch(() => {
+        fetch(REMOTE_DB_URL)
+          .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+          .then((entries: Array<{ name: string; grid6: string }>) => {
+            const grids = parseEntries(entries);
+            setRemoteStationGrids(grids);
+            addLog(`Remote station DB loaded — ${Object.keys(grids).length} stations`);
+          })
+          .catch(() => addLog("Remote station DB unavailable"));
+      });
   }, [addLog]);
 
   function lookupGrid(callsign: string | null): string | null {

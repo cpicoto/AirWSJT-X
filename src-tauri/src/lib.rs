@@ -11,6 +11,19 @@ mod mobile_storage;
 #[cfg_attr(not(mobile), allow(dead_code))]
 mod mobile_aircraft;
 
+const REMOTE_DB_URL: &str = "https://ad7np.us/RoverAIM/DB";
+
+#[tauri::command]
+async fn fetch_remote_db() -> Result<String, String> {
+    let resp = reqwest::get(REMOTE_DB_URL)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| e.to_string())
+}
+
 pub struct SidecarState {
     pub tx: Option<tauri_plugin_shell::process::CommandChild>,
     pub credential_updates: HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
@@ -156,6 +169,7 @@ pub fn run() {
     #[cfg(not(mobile))]
     let builder = builder.invoke_handler(tauri::generate_handler![
             send_to_sidecar,
+            fetch_remote_db,
             credentials::get_source_credentials_status,
             credentials::save_source_credentials,
             credentials::set_source_poll_interval,
@@ -164,6 +178,7 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         send_to_sidecar,
+        fetch_remote_db,
         credentials::get_source_credentials_status,
         credentials::save_source_credentials,
         credentials::set_source_poll_interval,
