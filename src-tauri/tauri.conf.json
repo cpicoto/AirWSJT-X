@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "AirWSJT-X",
-  "version": "0.1.0",
-  "identifier": "com.airwsjtx.radio",
+  "version": "0.3.4",
+  "identifier": "us.ad7np.airwsjt-x",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -28,9 +28,14 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Utility",
     "externalBin": [
       "binaries/airwsjtx_bridge"
     ],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "entitlements-mas.plist"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -150,8 +150,8 @@ def handle(msg: dict) -> None:
 
         elif method == "airscout_set_stations":
             global _station_a_locator, _station_b_locator
-            _station_a_locator = params.get("locator_a")
-            _station_b_locator = params.get("locator_b")
+            _station_a_locator = _clean_locator(params.get("locator_a"))
+            _station_b_locator = _clean_locator(params.get("locator_b"))
             _start_opensky_feed()
             _ok(id_, {"locator_a": _station_a_locator, "locator_b": _station_b_locator})
 
@@ -263,22 +263,41 @@ def handle(msg: dict) -> None:
 
 # ─── AirScout feed helpers ────────────────────────────────────────────────────
 
-def _bbox_for_locators() -> tuple[float, float, float, float] | None:
-    """Compute a bounding box covering both stations + 400 km margin."""
-    if not _station_a_locator:
+def _clean_locator(value: object) -> str | None:
+    """Normalize station locator input from UI/WSJT-X."""
+    if value is None:
         return None
+    cleaned = str(value).strip().upper()
+    if not cleaned or not any(ch.isdigit() for ch in cleaned) or len(cleaned) < 4:
+        return None
+    return cleaned
+
+
+def _bbox_for_locators() -> tuple[float, float, float, float] | None:
+    """Compute a bounding box covering either station, or both if available."""
+    primary = _clean_locator(_station_a_locator) or _clean_locator(_station_b_locator)
+    if not primary:
+        return None
+
     try:
-        lat_a, lon_a = locator_to_latlon(_station_a_locator)
-        lats = [lat_a]
-        lons = [lon_a]
-        if _station_b_locator:
-            lat_b, lon_b = locator_to_latlon(_station_b_locator)
-            lats.append(lat_b)
-            lons.append(lon_b)
-        # ~4° ≈ 400 km margin
-        margin = 4.0
-        return (min(lats) - margin, min(lons) - margin,
-                max(lats) + margin, max(lons) + margin)
+        lat_primary, lon_primary = locator_to_latlon(primary)
+        lats = [lat_primary]
+        lons = [lon_primary]
+
+        if _station_a_locator and _station_b_locator:
+            lat_a, lon_a = locator_to_latlon(_clean_locator(_station_a_locator) or primary)
+            lat_b, lon_b = locator_to_latlon(_clean_locator(_station_b_locator) or primary)
+            lats.extend([lat_a, lat_b])
+            lons.extend([lon_a, lon_b])
+
+        # One station: use a wider margin so OpenSky still sees nearby aircraft.
+        margin = 8.0 if not (_station_a_locator and _station_b_locator) else 4.0
+        return (
+            min(lats) - margin,
+            min(lons) - margin,
+            max(lats) + margin,
+            max(lons) + margin,
+        )
     except Exception:
         return None
 

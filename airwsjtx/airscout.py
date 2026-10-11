@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable
+
+try:
+    import certifi
+except Exception:  # pragma: no cover
+    certifi = None
 
 
 # ─── Aircraft state ───────────────────────────────────────────────────────────
@@ -54,6 +60,16 @@ class OpenSkyFeed:
 
     URL = "https://opensky-network.org/api/states/all"
 
+    @staticmethod
+    def _ssl_context() -> ssl.SSLContext:
+        """Use the installed CA bundle so packaged macOS builds validate OpenSky TLS."""
+        if certifi is not None:
+            try:
+                return ssl.create_default_context(cafile=certifi.where())
+            except Exception:
+                pass
+        return ssl.create_default_context()
+
     def __init__(
         self,
         lat_min: float,
@@ -89,9 +105,14 @@ class OpenSkyFeed:
         )
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "AirWSJT-X/0.1 (ham radio scatter tool)"},
+            headers={
+                "User-Agent": "AirWSJT-X/0.1 (ham radio scatter tool)",
+                "Accept": "application/json",
+                "Referer": "https://airwsjt-x.local/",
+            },
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        context = self._ssl_context()
+        with urllib.request.urlopen(req, timeout=15, context=context) as resp:
             data = json.loads(resp.read())
 
         aircraft = []
