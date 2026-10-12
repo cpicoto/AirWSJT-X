@@ -1,5 +1,4 @@
 const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown> = {
-  fetch_remote_db: () => "[]",
   get_status: () => {
     const mock = window as unknown as Record<string, unknown>;
     return {
@@ -39,6 +38,7 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
 
 export async function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   if (cmd === "plugin:shell|open") return;
+  if (cmd === "fetch_remote_db") return "[]";
   if (cmd === "get_source_rate_limit_status") {
     return (window as unknown as Record<string, unknown>).__mockQuotas ?? {};
   }
