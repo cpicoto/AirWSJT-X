@@ -174,7 +174,7 @@ jobs:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
           # Write the API key for altool/notarytool
-          API_KEY_DIR="$HOME/.private_keys"
+          API_KEY_DIR="$HOME/.appstoreconnect/private_keys"
           mkdir -p "$API_KEY_DIR"
           echo -n "$APPLE_API_KEY_P8" | base64 --decode -o "$API_KEY_DIR/AuthKey_${APPLE_API_KEY}.p8"
 
