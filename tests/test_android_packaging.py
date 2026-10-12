@@ -282,7 +282,7 @@ class AndroidCIWorkflowTests(unittest.TestCase):
 
     def test_workflow_runs_tauri_android_build(self) -> None:
         self.assertIn(
-            "tauri android build --apk --target aarch64 armv7",
+            "tauri android build --apk --target aarch64 --target armv7",
             self.workflow_text,
             "mobile.yml must build the device ARM APK flavor set in CI",
         )
