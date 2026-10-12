@@ -1,4 +1,5 @@
 const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown> = {
+  fetch_remote_db: () => "[]",
   get_status: () => {
     const mock = window as unknown as Record<string, unknown>;
     return {
