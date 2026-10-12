@@ -19,8 +19,7 @@ const DEG = Math.PI / 180;
  * upright to aim at the sky, alpha is dominated by gimbal coupling with beta/gamma
  * and swings wildly. Instead the device axes are rotated into the world frame and
  * the horizontal parts of the screen-top axis (flat) and the rear camera axis
- * (upright) are summed. Both point the same way for every tilt in between, so the
- * heading stays continuous from flat to upright.
+ * (upright) are blended across a small transition around vertical.
  */
 export function headingFromOrientation(
   alphaDeg: number,
@@ -42,8 +41,13 @@ export function headingFromOrientation(
 
   const s = Math.sin(screenAngleDeg * DEG);
   const c = Math.cos(screenAngleDeg * DEG);
-  const east = s * xAxis[0] + c * yAxis[0] - zAxis[0];
-  const north = s * xAxis[1] + c * yAxis[1] - zAxis[1];
+  const topEast = s * xAxis[0] + c * yAxis[0];
+  const topNorth = s * xAxis[1] + c * yAxis[1];
+  const screenNormalVertical = cB * cG;
+  const transition = Math.max(0, Math.min(1, (0.15 - screenNormalVertical) / 0.3));
+  const cameraWeight = transition * transition * (3 - 2 * transition);
+  const east = (1 - cameraWeight) * topEast - cameraWeight * zAxis[0];
+  const north = (1 - cameraWeight) * topNorth - cameraWeight * zAxis[1];
 
   if (Math.hypot(east, north) < 0.1) return null;
   return normalizeDegrees(Math.atan2(east, north) / DEG);

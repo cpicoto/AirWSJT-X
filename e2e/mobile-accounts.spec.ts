@@ -74,9 +74,13 @@ test("mobile compass tracks device heading and landscape focuses on the dials", 
   await page.addInitScript(() => {
     class FakeDeviceOrientationEvent extends Event {
       alpha: number | null;
-      constructor(type: string, init: { alpha?: number } = {}) {
+      beta: number | null;
+      gamma: number | null;
+      constructor(type: string, init: { alpha?: number; beta?: number; gamma?: number } = {}) {
         super(type);
         this.alpha = init.alpha ?? null;
+        this.beta = init.beta ?? null;
+        this.gamma = init.gamma ?? null;
       }
     }
     Object.defineProperty(window, "DeviceOrientationEvent", { value: FakeDeviceOrientationEvent, configurable: true });
@@ -90,7 +94,13 @@ test("mobile compass tracks device heading and landscape focuses on the dials", 
   await expect(page.getByRole("group", { name: "Tracking dials" })).toBeVisible();
   await page.evaluate(() => {
     const EventCtor = (window as unknown as { DeviceOrientationEvent: new (type: string, init?: { alpha?: number }) => Event }).DeviceOrientationEvent;
-    window.dispatchEvent(new EventCtor("deviceorientation", { alpha: 270 }));
+    window.dispatchEvent(new EventCtor("deviceorientationabsolute", { alpha: 270 }));
+  });
+  await expect(page.getByText("Phone 90°", { exact: true })).toBeVisible();
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    const EventCtor = (window as unknown as { DeviceOrientationEvent: new (type: string, init?: { alpha?: number }) => Event }).DeviceOrientationEvent;
+    window.dispatchEvent(new EventCtor("deviceorientation", { alpha: 0 }));
   });
   await expect(page.getByText("Phone 90°", { exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Tracking dials" })).toHaveCSS("flex-direction", "row");

@@ -25,7 +25,7 @@ test.describe("compass helpers", () => {
     // Held upright (beta ~ 90) facing east: alpha 270.
     expect(headingFromOrientation(270, 90, 0)).toBeCloseTo(90, 6);
     // Tilting the phone slightly towards/away from vertical keeps the heading steady.
-    for (const beta of [60, 75, 90, 105, 120]) {
+    for (const beta of [60, 75, 90, 105, 120, 135, 140]) {
       expect(headingFromOrientation(270, beta, 0)).toBeCloseTo(90, 6);
     }
     // Small roll must not move the heading much.

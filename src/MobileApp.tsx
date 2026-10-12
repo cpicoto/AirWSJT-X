@@ -342,8 +342,10 @@ export default function MobileApp() {
     setCompassPermissionState((current) => current === "unsupported" ? "listening" : current);
   }, []);
 
+  const compassEnabled = compassPermissionState === "listening" || compassPermissionState === "active";
+
   useEffect(() => {
-    if (compassPermissionState !== "listening" && compassPermissionState !== "active") return;
+    if (!compassEnabled) return;
 
     const smoother = new HeadingSmoother();
     // Android fires both events; "deviceorientation" is relative there (arbitrary zero),
@@ -378,7 +380,7 @@ export default function MobileApp() {
       window.removeEventListener("deviceorientationabsolute", onAbsolute, true);
       window.removeEventListener("deviceorientation", onRelative, true);
     };
-  }, [compassPermissionState]);
+  }, [compassEnabled]);
 
   useEffect(() => {
     pollerRef.current?.stop();
