@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import AircraftAccounts from "./AircraftAccounts";
 import { downloadDb, getDbStatus, DbStatus } from "./lib/callsign";
 import { isSpeechSupported, speak } from "./lib/speech";
+import { HeadingSmoother, headingFromOrientation, normalizeDegrees, signedHeadingDelta } from "./lib/compass";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,14 +35,6 @@ interface MobileAircraft {
   distance_km: number;
 }
 
-function normalizeDegrees(value: number): number {
-  return ((value % 360) + 360) % 360;
-}
-
-function signedHeadingDelta(target: number, current: number): number {
-  return ((target - current + 540) % 360) - 180;
-}
-
 function getScreenOrientationAngle(): number {
   if (typeof window === "undefined") return 0;
   if (typeof window.screen?.orientation?.angle === "number") {
@@ -59,7 +52,9 @@ function extractCompassHeading(event: OrientationEventWithCompass): number | nul
     return normalizeDegrees(event.webkitCompassHeading);
   }
   if (typeof event.alpha === "number" && Number.isFinite(event.alpha)) {
-    return normalizeDegrees(event.alpha - getScreenOrientationAngle());
+    const beta = Number.isFinite(event.beta) ? (event.beta as number) : 0;
+    const gamma = Number.isFinite(event.gamma) ? (event.gamma as number) : 0;
+    return headingFromOrientation(event.alpha, beta, gamma, getScreenOrientationAngle());
   }
   return null;
 }
@@ -350,24 +345,38 @@ export default function MobileApp() {
   useEffect(() => {
     if (compassPermissionState !== "listening" && compassPermissionState !== "active") return;
 
-    const onOrientation = (event: Event) => {
-      const heading = extractCompassHeading(event as OrientationEventWithCompass);
+    const smoother = new HeadingSmoother();
+    // Android fires both events; "deviceorientation" is relative there (arbitrary zero),
+    // so once absolute data is seen the relative stream must be ignored or the two fight.
+    let sawAbsolute = false;
+
+    const handle = (event: Event, absolute: boolean) => {
+      const orientation = event as OrientationEventWithCompass;
+      const isNorthReferenced = absolute || orientation.absolute === true
+        || typeof orientation.webkitCompassHeading === "number";
+      if (isNorthReferenced && !sawAbsolute) {
+        sawAbsolute = true;
+        smoother.reset();
+      } else if (!isNorthReferenced && sawAbsolute) {
+        return;
+      }
+      const heading = extractCompassHeading(orientation);
       if (heading === null) return;
-      const previous = compassHeadingRef.current;
-      const smoothed = previous === null
-        ? heading
-        : normalizeDegrees(previous + signedHeadingDelta(heading, previous) * 0.35);
-      compassHeadingRef.current = smoothed;
-      setDeviceHeading(smoothed);
+      const next = smoother.push(heading, performance.now());
+      if (next === null) return;
+      compassHeadingRef.current = next;
+      setDeviceHeading(next);
       setCompassPermissionState("active");
     };
+    const onAbsolute = (event: Event) => handle(event, true);
+    const onRelative = (event: Event) => handle(event, false);
 
-    window.addEventListener("deviceorientationabsolute", onOrientation, true);
-    window.addEventListener("deviceorientation", onOrientation, true);
+    window.addEventListener("deviceorientationabsolute", onAbsolute, true);
+    window.addEventListener("deviceorientation", onRelative, true);
 
     return () => {
-      window.removeEventListener("deviceorientationabsolute", onOrientation, true);
-      window.removeEventListener("deviceorientation", onOrientation, true);
+      window.removeEventListener("deviceorientationabsolute", onAbsolute, true);
+      window.removeEventListener("deviceorientation", onRelative, true);
     };
   }, [compassPermissionState]);
 

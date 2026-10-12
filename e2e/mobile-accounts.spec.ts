@@ -90,7 +90,7 @@ test("mobile compass tracks device heading and landscape focuses on the dials", 
   await expect(page.getByRole("group", { name: "Tracking dials" })).toBeVisible();
   await page.evaluate(() => {
     const EventCtor = (window as unknown as { DeviceOrientationEvent: new (type: string, init?: { alpha?: number }) => Event }).DeviceOrientationEvent;
-    window.dispatchEvent(new EventCtor("deviceorientation", { alpha: 90 }));
+    window.dispatchEvent(new EventCtor("deviceorientation", { alpha: 270 }));
   });
   await expect(page.getByText("Phone 90°", { exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Tracking dials" })).toHaveCSS("flex-direction", "row");
