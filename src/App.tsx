@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
-import { haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
+import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
+import SkyDome from "./SkyDome";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -221,6 +222,7 @@ export default function App() {
     const value = Number(raw);
     return Number.isFinite(value) && value >= 0 ? value : 2;
   });
+  const [showSkyDome, setShowSkyDome] = useState(() => localStorage.getItem("airwsjtx.showSkyDome") === "true");
   const [dxCallsign, setDxCallsign] = useState<string | null>(null);
   const [dxGrid, setDxGrid] = useState<string | null>(null);
   const [stationGridOverrides, setStationGridOverrides] = useState<Record<string, string>>(() => {
@@ -677,6 +679,9 @@ export default function App() {
   const selectedDxGrid = lookupGrid(dxCall) ?? dxGrid;
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
+    : null;
+  const pathBearing = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
+    ? bearingDeg(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
 
   useEffect(() => {
@@ -1208,6 +1213,53 @@ export default function App() {
               onPark={() => { setRotatorTargetAz(0); setRotatorTargetEl(0); rpc("rotator_park", {}).catch(e => addLog(`Rotator: ${e}`)); }}
               onConnect={(host, port) => rpc("rotator_connect", { host, port }).catch(e => addLog(`Rotator: ${e}`))}
             />
+          </div>
+
+          {/* Sky Dome (experimental) */}
+          <div className="card" style={{ width: "100%", alignSelf: "stretch" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <h3 style={{ margin: 0 }}>Sky Dome</h3>
+              <button
+                className="btn-secondary"
+                style={{ fontSize: 10, padding: "2px 8px" }}
+                onClick={() => {
+                  const next = !showSkyDome;
+                  setShowSkyDome(next);
+                  localStorage.setItem("airwsjtx.showSkyDome", String(next));
+                }}
+              >
+                {showSkyDome ? "Hide" : "Show"}
+              </button>
+            </div>
+            {showSkyDome && (
+              <SkyDome
+                aircraft={aircraft.slice(0, 20).map(ac => ({
+                  icao24: ac.icao24,
+                  callsign: ac.callsign,
+                  az_a: ac.az_a,
+                  el_a: ac.el_a,
+                  scatter_score: ac.scatter_score,
+                  heading_deg: ac.heading_deg,
+                  velocity_kts: ac.velocity_kts,
+                  altitude_ft: ac.altitude_ft,
+                  range_a_km: ac.range_a_km,
+                  off_path_deg: ac.off_path_deg,
+                  locked: lockedPlane?.icao24 === ac.icao24,
+                }))}
+                rotatorAz={rotatorAz}
+                rotatorEl={rotatorEl}
+                targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
+                targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
+                pathBearing={pathBearing}
+                size={340}
+                onClickAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
+                onClickSky={(az, el) => {
+                  setRotatorTargetAz(az);
+                  setRotatorTargetEl(el);
+                  rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
+                }}
+              />
+            )}
           </div>
         </div>
 
