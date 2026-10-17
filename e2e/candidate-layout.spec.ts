@@ -43,7 +43,7 @@ for (const { source, interval } of [
 test(`locked tile becomes stale only beyond ${source} ${interval}s poll plus 5s`, async ({ page }) => {
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   await page.goto("/");
-  await expect(page.getByRole("combobox", { name: "Rig", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
   await page.clock.pauseAt(new Date("2026-01-01T00:01:00Z"));
   await expect(page.getByText("opensky", { exact: true })).toBeVisible();
   await page.evaluate(({ source, interval }) => {
@@ -121,7 +121,7 @@ test(`locked tile becomes stale only beyond ${source} ${interval}s poll plus 5s`
 test("candidate text stays within the outline at the minimum window width", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 720 });
   await page.goto("/");
-  await expect(page.getByRole("combobox", { name: "Rig", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
   await page.evaluate(() => {
     const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
     emit("sidecar-message", JSON.stringify({

@@ -19,3 +19,4 @@ src-tauri/binaries/airwsjtx_bridge-*
 
 # Generated Tauri schemas
 src-tauri/gen/schemas/windows-schema.json
+test-results/.last-run.json

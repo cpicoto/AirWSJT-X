@@ -738,7 +738,7 @@ export default function MobileApp() {
       {(
       <div style={listContainerStyle}>
         <div style={{ fontSize: 12, color: "#8b949e", padding: "4px 12px", borderBottom: "1px solid #21262d" }}>
-          {aircraft.length} aircraft · sorted by distance · tap to track
+          {aircraft.length} aircraft · sorted by score · tap to track
         </div>
         {aircraft.map((ac) => (
           <div

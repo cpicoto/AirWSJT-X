@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
+import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
-import { haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
+import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -193,6 +194,7 @@ type PortableViewMode = "hidden" | "panel" | "overlay";
 const ROTATOR_SPEECH_ENABLED_KEY = "airwsjtx.rotatorSpeech.enabled";
 const ROTATOR_SPEECH_THRESHOLD_KEY = "airwsjtx.rotatorSpeech.thresholdDeg";
 const ROTATOR_SPEECH_INTERVAL_KEY = "airwsjtx.rotatorSpeech.intervalSec";
+const ROTATOR_CONTROL_KEY = "airwsjtx.rotatorControlEnabled";
 const ROTATOR_SPEECH_MIGRATED_KEY = "airwsjtx.rotatorSpeech.threshold1degMigrated";
 
 function normalizeGrid(grid: string | null | undefined): string | null {
@@ -218,6 +220,9 @@ export default function App() {
   const dump1090LogRef = useRef<{ signature: string; at: number } | null>(null);
   const dump1090BusyLogRef = useRef<{ signature: string; at: number } | null>(null);
   const [rotatorConnected, setRotatorConnected] = useState(false);
+  const [rotatorControlEnabled, setRotatorControlEnabled] = useState(
+    () => localStorage.getItem(ROTATOR_CONTROL_KEY) !== "false",
+  );
   const [rotatorAz, setRotatorAz] = useState(0);
   const [rotatorEl, setRotatorEl] = useState(0);
   const [rotatorTargetAz, setRotatorTargetAz] = useState<number | null>(null);
@@ -535,7 +540,7 @@ export default function App() {
     localStorage.setItem(ROTATOR_SPEECH_INTERVAL_KEY, String(rotatorSpeechIntervalSec));
   }, [rotatorSpeechIntervalSec]);
 
-  const manualSpeechTarget = lockedPlane
+  const manualSpeechTarget = uiMode !== "manual" && lockedPlane
     && Number.isFinite(lockedPlane.az_a)
     && Number.isFinite(lockedPlane.el_a)
     ? { az: lockedPlane.az_a, el: lockedPlane.el_a }
@@ -725,6 +730,20 @@ export default function App() {
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
+  const dxBearing = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
+    ? bearingDeg(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
+    : null;
+
+  useEffect(() => {
+    localStorage.setItem(ROTATOR_CONTROL_KEY, String(rotatorControlEnabled));
+    if (!status) return;
+    rpc("set_rotator_control", { enabled: rotatorControlEnabled }).catch(() => {});
+  }, [status === null, rotatorControlEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!status) return;
+    rpc("set_pointing_mode", { mode: uiMode }).catch(() => {});
+  }, [status === null, uiMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!status || myStationRestored.current) return;
@@ -809,8 +828,8 @@ export default function App() {
     });
   }
 
-  const currentAz = lockedPlane ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
-  const currentEl = lockedPlane ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
+  const currentAz = lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
+  const currentEl = lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
   const portableFontPx = Math.max(PORTABLE_MIN_FONT_PX, PORTABLE_BASE_FONT_PX * portableScale / 100);
   const portableReadout = (
   <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
@@ -891,30 +910,22 @@ export default function App() {
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
             Rig
-            <select
+            <DarkSelect
+              ariaLabel="Rig"
               value={wsjtxRigFilter}
               disabled={wsjtxRigFilterBusy}
-              style={{
-                width: 180,
-                fontSize: 10,
-                padding: "2px 6px",
-                borderRadius: 4,
-                border: "1px solid var(--border)",
-                background: "var(--surface)",
-                color: "var(--text)",
-              }}
-              onChange={(e) => { void applyWsjtxRigFilter(e.target.value); }}
-            >
-              <option value="">Any rig</option>
-              {wsjtxRigFilter && !wsjtxKnownRigs.some(rig => rig.app_id === wsjtxRigFilter) && (
-                <option value={wsjtxRigFilter}>{wsjtxRigFilter} (saved)</option>
-              )}
-              {wsjtxKnownRigs.map(rig => (
-                <option key={rig.app_id} value={rig.app_id}>
-                  {rig.config_name ? `${rig.app_id} (${rig.config_name})` : rig.app_id}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: "Any rig" },
+                ...(wsjtxRigFilter && !wsjtxKnownRigs.some(rig => rig.app_id === wsjtxRigFilter)
+                  ? [{ value: wsjtxRigFilter, label: `${wsjtxRigFilter} (saved)` }]
+                  : []),
+                ...wsjtxKnownRigs.map(rig => ({
+                  value: rig.app_id,
+                  label: rig.config_name ? `${rig.app_id} (${rig.config_name})` : rig.app_id,
+                })),
+              ]}
+              onChange={(v) => { void applyWsjtxRigFilter(v); }}
+            />
           </label>
           {wsjtxRigDiscoveryError && (
             <span title={wsjtxRigDiscoveryError} style={{ fontSize: 10, color: "var(--yellow)" }}>
@@ -1211,9 +1222,40 @@ export default function App() {
         </div>
 
         {/* CENTRE: Rotator */}
-        <div className="col" style={{ alignItems: "center", justifyContent: "center" }}>
-          <div className="card" style={{ width: "100%", alignSelf: "stretch" }}>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <div className="col" style={{ alignItems: "center", justifyContent: "flex-start", overflowY: "auto" }}>
+          <div className="card" style={{ width: "100%", alignSelf: "stretch", flexShrink: 0 }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                title={rotatorControlEnabled
+                  ? "rotctld control is on. Click to block all rotator movement commands."
+                  : "rotctld control is off: no movement commands are sent. Click to re-enable."}
+                aria-pressed={!rotatorControlEnabled}
+                style={{
+                  fontSize: 10,
+                  padding: "4px 10px",
+                  border: rotatorControlEnabled ? "1px solid var(--border)" : "1px solid var(--red)",
+                  background: rotatorControlEnabled ? "var(--surface)" : "rgba(248,81,73,0.15)",
+                  color: rotatorControlEnabled ? "var(--text-muted)" : "var(--red)",
+                }}
+                onClick={() => {
+                  const next = !rotatorControlEnabled;
+                  setRotatorControlEnabled(next);
+                  if (!next) return;
+                  // Re-sending the displayed pointing once control resumes
+                  const useLocked = uiMode !== "manual" && lockedPlane
+                    && Number.isFinite(lockedPlane.az_a) && Number.isFinite(lockedPlane.el_a);
+                  const az = useLocked ? lockedPlane!.az_a : rotatorTargetAz;
+                  const el = useLocked ? lockedPlane!.el_a : rotatorTargetEl;
+                  if (az === null || el === null || !rotatorConnected) return;
+                  rpc("set_rotator_control", { enabled: true })
+                    .then(() => rpc("rotator_set", { azimuth: az, elevation: el }))
+                    .catch(e => addLog(`Rotator: ${e}`));
+                }}
+              >
+                {rotatorControlEnabled ? "rotctld control: On" : "rotctld control: OFF"}
+              </button>
               <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", gap: 4 }}>
                 {(["rotator", "manual"] as const).map((mode) => (
                   <button
@@ -1229,16 +1271,18 @@ export default function App() {
                     }}
                     onClick={() => setUiMode(mode)}
                   >
-                    {mode === "rotator" ? "Rotator" : "Manual"}
+                    {mode === "rotator" ? "Auto" : "Manual"}
                   </button>
                 ))}
               </div>
             </div>
             <RotatorPanel
               currentAz={rotatorAz} currentEl={rotatorEl}
-              targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
-              targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
+              targetAz={lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : rotatorTargetAz}
+              targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : rotatorTargetEl}
               connected={rotatorConnected}
+              dxAz={dxBearing}
+              dxLabel={dxCall}
               speechEnabled={rotatorSpeechEnabled}
               speechThresholdDeg={rotatorSpeechThresholdDeg}
               speechIntervalSec={rotatorSpeechIntervalSec}
@@ -1246,14 +1290,20 @@ export default function App() {
               onSpeechThresholdDegChange={(value) => setRotatorSpeechThresholdDeg(Math.max(0.1, value))}
               onSpeechIntervalSecChange={(value) => setRotatorSpeechIntervalSec(Math.max(0, value))}
               mode={uiMode}
-              aircraftLabel={lockedPlane && lockedPlane.callsign ? `${lockedPlane.callsign} target` : "Manual target"}
+              aircraftLabel={uiMode !== "manual" && lockedPlane && lockedPlane.callsign ? `${lockedPlane.callsign} target` : "Manual target"}
               onSetPosition={(az, el) => {
                 setRotatorTargetAz(az); setRotatorTargetEl(el);
+                if (!rotatorControlEnabled) { addLog("Rotator control is off: command not sent"); return; }
                 rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
               }}
               onStop={() => rpc("rotator_stop", {}).catch(e => addLog(`Rotator: ${e}`))}
-              onPark={() => { setRotatorTargetAz(0); setRotatorTargetEl(0); rpc("rotator_park", {}).catch(e => addLog(`Rotator: ${e}`)); }}
+              onPark={() => {
+                if (!rotatorControlEnabled) { addLog("Rotator control is off: command not sent"); return; }
+                setRotatorTargetAz(0); setRotatorTargetEl(0); rpc("rotator_park", {}).catch(e => addLog(`Rotator: ${e}`));
+              }}
               onConnect={(host, port) => rpc("rotator_connect", { host, port }).catch(e => addLog(`Rotator: ${e}`))}
+              onSync={(az, el) => { setRotatorTargetAz(az); setRotatorTargetEl(el); }}
+              syncDisabled={uiMode !== "manual" && rotatorControlEnabled}
             />
           </div>
         </div>

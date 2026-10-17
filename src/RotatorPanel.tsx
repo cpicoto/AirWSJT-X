@@ -7,6 +7,8 @@ interface RotatorPanelProps {
   targetAz: number | null;
   targetEl: number | null;
   connected: boolean;
+  dxAz?: number | null;
+  dxLabel?: string | null;
   speechEnabled: boolean;
   speechThresholdDeg: number;
   speechIntervalSec: number;
@@ -19,20 +21,47 @@ interface RotatorPanelProps {
   onSetPosition: (az: number, el: number) => void;
   onStop: () => void;
   onPark: () => void;
+  onSync?: (az: number, el: number) => void;
+  syncDisabled?: boolean;
   onConnect: (host: string, port: number) => void;
 }
 
 // ─── Compass Rose SVG ─────────────────────────────────────────────────────────
 
+// Wrap any azimuth into [0, 360); non-finite input becomes 0.
+function wrapAz(az: number): number {
+  if (!Number.isFinite(az)) return 0;
+  const w = ((Math.round(az * 10) / 10) % 360 + 360) % 360;
+  return w;
+}
+
+const AZ_INPUT_MAX = 450;
+const EL_INPUT_MAX = 90;
+
+// Typed azimuth is limited to the rotator travel 0..450; bad input becomes 0.
+function clampAzInput(az: number): number {
+  if (!Number.isFinite(az)) return 0;
+  return Math.min(Math.max(Math.round(az * 10) / 10, 0), AZ_INPUT_MAX);
+}
+
+function clampElInput(el: number): number {
+  if (!Number.isFinite(el)) return 0;
+  return Math.min(Math.max(Math.round(el * 10) / 10, 0), EL_INPUT_MAX);
+}
+
 function CompassRose({
   current,
   target,
   size = 260,
+  dxAz = null,
+  dxLabel = null,
   onClick,
 }: {
   current: number;
   target: number | null;
   size?: number;
+  dxAz?: number | null;
+  dxLabel?: string | null;
   onClick?: (az: number) => void;
 }) {
   const cx = size / 2, cy = size / 2;
@@ -98,7 +127,7 @@ function CompassRose({
 
   return (
     <svg
-      width={size} height={size}
+      width={size} height={size} overflow="visible"
       style={{ cursor: onClick ? "crosshair" : "default", userSelect: "none" }}
       onClick={handleClick}
     >
@@ -160,6 +189,26 @@ function CompassRose({
       {/* Center hub */}
       <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
       <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
+
+      {/* DX station direction marker on outer ring, label just outside */}
+      {dxAz !== null && (() => {
+        const dot = azToXY(dxAz, outerR);
+        const lp = azToXY(dxAz, outerR + 10);
+        const sin = Math.sin((dxAz * Math.PI) / 180);
+        const anchor = sin > 0.3 ? "start" : sin < -0.3 ? "end" : "middle";
+        const cos = Math.cos((dxAz * Math.PI) / 180);
+        const dy = anchor === "middle" ? (cos > 0 ? -6 : 8) : 3;
+        return (
+          <g pointerEvents="none">
+            <circle cx={dot.x} cy={dot.y} r={4} fill="#3fb950" stroke="#0d1117" strokeWidth={1} />
+            {dxLabel && (
+              <text x={lp.x} y={lp.y + dy} textAnchor={anchor} fontSize={9} fontWeight={700} fill="#3fb950">
+                {dxLabel}
+              </text>
+            )}
+          </g>
+        );
+      })()}
     </svg>
   );
 }
@@ -284,7 +333,7 @@ function ElevationArc({
 
 export default function RotatorPanel({
   currentAz, currentEl, targetAz, targetEl,
-  connected,
+  connected, dxAz = null, dxLabel = null,
   speechEnabled,
   speechThresholdDeg,
   speechIntervalSec,
@@ -292,7 +341,7 @@ export default function RotatorPanel({
   onSpeechThresholdDegChange,
   onSpeechIntervalSecChange,
   mode = "rotator", aircraftLabel = null, targetLabel = null,
-  onSetPosition, onStop, onPark, onConnect,
+  onSetPosition, onStop, onPark, onConnect, onSync, syncDisabled = false,
 }: RotatorPanelProps) {
   const [manualAz, setManualAz] = useState(currentAz.toFixed(1));
   const [manualEl, setManualEl] = useState(currentEl.toFixed(1));
@@ -309,19 +358,31 @@ export default function RotatorPanel({
   }, [targetEl]);
 
   function handleCompassClick(az: number) {
-    setManualAz(az.toFixed(1));
+    const wrapped = wrapAz(az);
+    setManualAz(wrapped.toFixed(1));
     if (mode === "manual") {
-      onSetPosition(az, parseFloat(manualEl) || 0);
+      onSetPosition(wrapped, clampElInput(parseFloat(manualEl)));
     }
   }
   function handleElevationClick(el: number) {
-    setManualEl(el.toFixed(1));
+    const clamped = clampElInput(el);
+    setManualEl(clamped.toFixed(1));
     if (mode === "manual") {
-      onSetPosition(parseFloat(manualAz) || 0, el);
+      onSetPosition(clampAzInput(parseFloat(manualAz)), clamped);
     }
   }
   function handleGo() {
-    onSetPosition(parseFloat(manualAz) || 0, parseFloat(manualEl) || 0);
+    const az = clampAzInput(parseFloat(manualAz));
+    const el = clampElInput(parseFloat(manualEl));
+    setManualAz(az.toFixed(1));
+    setManualEl(el.toFixed(1));
+    onSetPosition(az, el);
+  }
+
+  function handleSync() {
+    setManualAz(currentAz.toFixed(1));
+    setManualEl(currentEl.toFixed(1));
+    onSync?.(currentAz, currentEl);
   }
 
   // Error delta indicators
@@ -350,7 +411,7 @@ export default function RotatorPanel({
     : "Web Speech API not available on this platform";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
 
       {/* Connection bar */}
       {!isManualMode && (
@@ -384,10 +445,11 @@ export default function RotatorPanel({
             {speechEnabled ? "🔊 Speech on" : "🔈 Speech off"}
           </button>
           {!connected && (
-            <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
               <input value={host} onChange={e => setHost(e.target.value)}
-                placeholder="host" style={inputStyle} />
-              <input value={port} onChange={e => setPort(e.target.value)}
+                placeholder="host" style={{ ...inputStyle, width: 110 }} />
+              <input value={port} inputMode="numeric" maxLength={5}
+                onChange={e => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))}
                 placeholder="port" style={{ ...inputStyle, width: 60 }} />
               <button className="btn-secondary" style={smBtn}
                 onClick={() => {
@@ -397,7 +459,7 @@ export default function RotatorPanel({
                 }}>
                 Connect
               </button>
-            </>
+            </div>
           )}
         </div>
       )}
@@ -436,62 +498,62 @@ export default function RotatorPanel({
 
       <div style={{
         display: "grid",
-        gap: 8,
-        padding: "8px 10px",
+        gap: 2,
+        padding: "5px 10px",
         background: isManualMode ? "rgba(88,166,255,0.08)" : "rgba(255,255,255,0.02)",
         borderRadius: 6,
         border: isManualMode ? "1px solid #58a6ff44" : "1px solid #30363d",
       }}>
-        <div>
-          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Rotator"}</div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+          <span style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Pointing</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#c9d1d9", fontFamily: "monospace" }}>{aircraftLabel || targetLabel || "Rotator"}</span>
         </div>
         <div style={{
-          display: "grid",
-          gridTemplateColumns: "auto 1fr",
+          display: "flex",
           alignItems: "baseline",
-          rowGap: 2,
-          columnGap: 8,
+          justifyContent: "space-between",
           fontFamily: "monospace",
         }}>
-          <div style={{ fontSize: 11, color: "#8b949e" }}>AZ</div>
-          <div style={{ fontSize: 28, lineHeight: 1.05, fontWeight: 700, color: "#58a6ff" }}>{displayAz.toFixed(1)}°</div>
-          <div style={{ fontSize: 11, color: "#8b949e" }}>EL</div>
-          <div style={{ fontSize: 28, lineHeight: 1.05, fontWeight: 700, color: "#3fb950" }}>{displayEl.toFixed(1)}°</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontSize: 11, color: "#8b949e" }}>AZ</span>
+            <span style={{ fontSize: 26, lineHeight: 1.05, fontWeight: 700, color: "#58a6ff" }}>{displayAz.toFixed(1)}°</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontSize: 11, color: "#8b949e" }}>EL</span>
+            <span style={{ fontSize: 26, lineHeight: 1.05, fontWeight: 700, color: "#3fb950" }}>{displayEl.toFixed(1)}°</span>
+          </div>
         </div>
       </div>
 
       {isManualMode && (
-        <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
-              <CompassRose current={currentAz} target={targetAz} size={compassSize} onClick={isManualMode ? handleCompassClick : connected ? handleCompassClick : undefined} />
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Elevation</div>
-              <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight} onClick={isManualMode ? handleElevationClick : connected ? handleElevationClick : undefined} />
-            </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
+            <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel} onClick={handleCompassClick} />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Elevation</div>
+            <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight} onClick={handleElevationClick} />
           </div>
         </div>
       )}
 
       {!isManualMode && (
         <>
-          {/* Dials row */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
+          {/* Dials */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
 
             {/* Azimuth compass */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
                 Azimuth
               </div>
-              <CompassRose current={currentAz} target={targetAz} size={compassSize}
+              <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel}
                 onClick={connected ? handleCompassClick : undefined} />
             </div>
 
             {/* Elevation arc */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
                 Elevation
               </div>
@@ -525,41 +587,55 @@ export default function RotatorPanel({
         </>
       )}
 
-      {!isManualMode && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-          padding: "10px 12px", background: "rgba(255,255,255,0.02)",
+      <div style={{
+          display: "flex", flexDirection: "column", gap: 6,
+          padding: "6px 8px", background: "rgba(255,255,255,0.02)",
           borderRadius: 6, border: "1px solid #30363d",
         }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ color: "#8b949e", width: 20 }}>AZ</span>
-            <input value={manualAz} onChange={e => setManualAz(e.target.value)}
-              style={numInput} type="number" min={0} max={360} step={0.1} />
+            <input value={manualAz}
+              onChange={e => setManualAz(e.target.value.replace("-", ""))}
+              onBlur={() => setManualAz(clampAzInput(parseFloat(manualAz)).toFixed(1))}
+              style={numInput} type="number" min={0} max={AZ_INPUT_MAX} step={0.1} />
             <span style={{ color: "#8b949e", fontSize: 11 }}>°</span>
           </label>
           <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ color: "#8b949e", width: 20 }}>EL</span>
-            <input value={manualEl} onChange={e => setManualEl(e.target.value)}
-              style={numInput} type="number" min={0} max={90} step={0.1} />
+            <input value={manualEl}
+              onChange={e => setManualEl(e.target.value.replace("-", ""))}
+              onBlur={() => setManualEl(clampElInput(parseFloat(manualEl)).toFixed(1))}
+              style={numInput} type="number" min={0} max={EL_INPUT_MAX} step={0.1} />
             <span style={{ color: "#8b949e", fontSize: 11 }}>°</span>
           </label>
-          <button className="btn-primary" style={smBtn} disabled={!connected} onClick={handleGo}>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "nowrap" }}>
+          <button className="btn-primary" style={rowBtn} disabled={!connected} onClick={handleGo}>
             ▶ Go
           </button>
-          <button className="btn-secondary" style={smBtn} disabled={!connected} onClick={onStop}>
+          <button className="btn-secondary" style={rowBtn} disabled={!connected} onClick={onStop}>
             ■ Stop
           </button>
-          <button className="btn-secondary" style={smBtn} disabled={!connected} onClick={onPark}>
+          <button className="btn-secondary" style={rowBtn} disabled={!connected} onClick={onPark}>
             ⌂ Park
           </button>
+          <button className="btn-secondary" style={rowBtn}
+            disabled={!connected || syncDisabled}
+            title={syncDisabled
+              ? "Disabled while rotctld control is ON (tracking owns the target)"
+              : "Update the display to match the actual rotator position"}
+            onClick={handleSync}>
+            ⟳ Sync
+          </button>
         </div>
-      )}
+      </div>
 
-      {/* Hint */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {/* Speech settings and hint */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={{
           display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-          padding: "8px 10px", borderRadius: 6, border: "1px solid #30363d",
+          padding: "4px 8px", borderRadius: 6, border: "1px solid #30363d",
           background: "rgba(255,255,255,0.02)", fontSize: 11,
         }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#c9d1d9" }}>
@@ -581,7 +657,7 @@ export default function RotatorPanel({
               min={0.1}
               step={0.1}
               value={speechThresholdDeg}
-              style={{ ...numInput, width: 58 }}
+              style={{ ...numInput, width: 52, padding: "2px 4px", fontSize: 12 }}
               onChange={(e) => onSpeechThresholdDegChange(parseFloat(e.target.value) || 0.1)}
             />
           </label>
@@ -592,7 +668,7 @@ export default function RotatorPanel({
               min={0}
               step={0.1}
               value={speechIntervalSec}
-              style={{ ...numInput, width: 58 }}
+              style={{ ...numInput, width: 52, padding: "2px 4px", fontSize: 12 }}
               onChange={(e) => onSpeechIntervalSecChange(Math.max(0, parseFloat(e.target.value) || 0))}
             />
           </label>
@@ -633,5 +709,8 @@ const numInput: React.CSSProperties = {
   fontFamily: "monospace", textAlign: "right",
 };
 const smBtn: React.CSSProperties = {
-  fontSize: 12, padding: "5px 12px",
+  fontSize: 12, padding: "4px 9px",
+};
+const rowBtn: React.CSSProperties = {
+  fontSize: 12, padding: "4px 4px", flex: 1, whiteSpace: "nowrap",
 };

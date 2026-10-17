@@ -117,7 +117,7 @@ test.describe("Speech callouts — rotator panel", () => {
     ).toMatch(/^Azimuth \d+, Elevation 0$/);
   });
 
-  test("manual mode announces locked aircraft updates without touching the arcs", async ({ page }) => {
+  test("manual mode ignores locked aircraft updates", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Manual", exact: true }).click();
     await page.evaluate(() => {
@@ -139,9 +139,9 @@ test.describe("Speech callouts — rotator panel", () => {
         },
       }));
     });
-    await expect.poll(async () =>
-      page.evaluate(() => (window as unknown as { __speechCalls: string[] }).__speechCalls[0] ?? "")
-    ).toBe("Azimuth 63, Elevation 1");
+    await page.waitForTimeout(500);
+    const calls = await page.evaluate(() => (window as unknown as { __speechCalls: string[] }).__speechCalls);
+    expect(calls).toEqual([]);
   });
 
   test("speech synthesis cancel is called before each speak", async ({ page }) => {

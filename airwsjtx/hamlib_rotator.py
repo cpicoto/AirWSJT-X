@@ -69,7 +69,15 @@ class HamlibRotator:
         self._disconnect()
 
     def set_position(self, azimuth: float, elevation: float) -> None:
-        """Command rotator to move to (azimuth, elevation)."""
+        """Command rotator to move to (azimuth, elevation).
+
+        Azimuth within the rotator's 0..450 travel is sent as-is; anything outside
+        (e.g. negative) is wrapped into [0, 360). Elevation is clamped to 0..90.
+        """
+        azimuth = round(azimuth, 1)
+        if not 0.0 <= azimuth <= 450.0:
+            azimuth = azimuth % 360.0
+        elevation = min(max(elevation, 0.0), 90.0)
         self._target = RotatorPosition(azimuth, elevation)
         self._send_command(f"P {azimuth:.1f} {elevation:.1f}\n")
 

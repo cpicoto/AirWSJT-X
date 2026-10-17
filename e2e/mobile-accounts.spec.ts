@@ -125,5 +125,5 @@ test("mobile compass tracks device heading and landscape focuses on the dials", 
   });
   await expect(page.getByText("Phone 90°", { exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Tracking dials" })).toHaveCSS("flex-direction", "row");
-  await expect(page.getByText(/aircraft · sorted by distance · tap to track/i)).toHaveCount(0);
+  await expect(page.getByText(/aircraft · sorted by score · tap to track/i)).toHaveCount(0);
 });

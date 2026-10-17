@@ -86,6 +86,8 @@ _wsjtx_de_call: str | None = None
 _wsjtx_de_grid: str | None = None
 _station_b_call: str | None = None
 _dx_grid_manual: bool = False
+_manual_pointing: bool = False
+_rotator_control_enabled: bool = True
 
 # Aircraft display filters
 _DEFAULT_FILTERS = {
@@ -542,8 +544,20 @@ def handle(msg: dict) -> None:
             _start_rotator(host, port)
             _ok(id_, {"host": host, "port": port})
 
+        elif method == "set_pointing_mode":
+            global _manual_pointing
+            _manual_pointing = params.get("mode") == "manual"
+            _ok(id_, {"mode": "manual" if _manual_pointing else "rotator"})
+
+        elif method == "set_rotator_control":
+            global _rotator_control_enabled
+            _rotator_control_enabled = bool(params.get("enabled", True))
+            _ok(id_, {"enabled": _rotator_control_enabled})
+
         elif method == "rotator_set":
-            if not _rotator or not _rotator.connected:
+            if not _rotator_control_enabled:
+                _err(id_, "Rotator control is disabled")
+            elif not _rotator or not _rotator.connected:
                 _err(id_, "Rotator not connected")
             else:
                 az = float(params["azimuth"])
@@ -557,9 +571,12 @@ def handle(msg: dict) -> None:
             _ok(id_, {})
 
         elif method == "rotator_park":
-            if _rotator:
-                _rotator.park()
-            _ok(id_, {})
+            if not _rotator_control_enabled:
+                _err(id_, "Rotator control is disabled")
+            else:
+                if _rotator:
+                    _rotator.park()
+                _ok(id_, {})
 
         elif method == "rotator_status":
             pos = _rotator.current_position if _rotator else None
@@ -1055,8 +1072,8 @@ def _do_lock(icao24: str) -> dict | None:
     _locked_aircraft_id = icao24
     _lock_score = geo["scatter_score"]
 
-    # Point rotator immediately
-    if _rotator and _rotator.connected:
+    # Point rotator immediately (manual pointing mode ignores plane positions)
+    if _rotator and _rotator.connected and _rotator_control_enabled and not _manual_pointing:
         _rotator.set_position(geo["az_a"], geo["el_a"])
 
     info = {**_locked_aircraft_info(ac, geo), "hint": hint}
@@ -1130,8 +1147,8 @@ def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
     except Exception:
         return
 
-    # Point rotator at new position
-    if _rotator and _rotator.connected:
+    # Point rotator at new position (unless manual pointing mode)
+    if _rotator and _rotator.connected and _rotator_control_enabled and not _manual_pointing:
         _rotator.set_position(geo["az_a"], geo["el_a"])
 
     # Check if aircraft has left the scatter window

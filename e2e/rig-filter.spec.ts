@@ -128,27 +128,30 @@ test("manual MY station works without WSJT-X and survives incoming status", asyn
 
 test("discovers rigs, selects and persists a filter, and clears it", async ({ page }) => {
   await page.goto("/");
-  const filter = page.getByRole("combobox", { name: "Rig", exact: true });
-  await expect(filter).toHaveValue("");
+  const filter = page.getByRole("button", { name: "Rig", exact: true });
+  await expect(filter).toHaveText("Any rig");
   await page.evaluate(() => {
     (window as unknown as Record<string, unknown>).__mockRigs = [
       { app_id: "WSJT-X-A", config_name: "Home" },
       { app_id: "WSJT-X-B", config_name: "Portable" },
     ];
   });
-  await expect(filter.locator("option")).toHaveText([
-    "Any rig", "WSJT-X-A (Home)", "WSJT-X-B (Portable)",
-  ]);
-  await filter.selectOption("WSJT-X-B");
-  await expect(filter).toHaveValue("WSJT-X-B");
+  await expect(async () => {
+    await filter.click();
+    await expect(page.getByRole("option")).toHaveText([
+      "Any rig", "WSJT-X-A (Home)", "WSJT-X-B (Portable)",
+    ], { timeout: 500 });
+  }).toPass();
+  await page.getByRole("option", { name: "WSJT-X-B (Portable)" }).click();
+  await expect(filter).toHaveText("WSJT-X-B (Portable)");
   await expect(page.getByText(/WSJT-X rig filter: WSJT-X-B/)).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("wsjtxRigNameFilter"))).toBe("WSJT-X-B");
 
   await page.reload();
-  await expect(filter).toHaveValue("WSJT-X-B");
-  await expect(filter.locator("option:checked")).toHaveText("WSJT-X-B (saved)");
-  await filter.selectOption("");
-  await expect(filter).toHaveValue("");
+  await expect(filter).toHaveText("WSJT-X-B (saved)");
+  await filter.click();
+  await page.getByRole("option", { name: "Any rig" }).click();
+  await expect(filter).toHaveText("Any rig");
   await expect(page.getByText(/WSJT-X rig filter cleared/)).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("wsjtxRigNameFilter"))).toBe("");
 });
@@ -158,9 +161,7 @@ test("preserves a legacy config-name filter until a rig is selected", async ({ p
     localStorage.setItem("wsjtxRigNameFilter", "Home");
   });
   await page.goto("/");
-  const filter = page.getByRole("combobox", { name: "Rig", exact: true });
-  await expect(filter).toHaveValue("Home");
-  await expect(filter.locator("option:checked")).toHaveText("Home (saved)");
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toHaveText("Home (saved)");
 });
 
 test("keeps the app visible when an older sidecar omits rig discovery", async ({ page }) => {
@@ -172,7 +173,7 @@ test("keeps the app visible when an older sidecar omits rig discovery", async ({
   await page.goto("/");
   await expect(page.getByText(/Rig discovery unavailable: rebuild/)).toBeVisible();
   await page.waitForTimeout(2200);
-  await expect(page.getByRole("combobox", { name: "Rig", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -184,6 +185,6 @@ test("rejects malformed rig lists without crashing", async ({ page }) => {
   });
   await page.goto("/");
   await expect(page.getByText(/Invalid WSJT-X rig list/)).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Rig", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });

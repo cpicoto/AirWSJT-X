@@ -19,7 +19,7 @@ async function setup(page: import("@playwright/test").Page, path: string, callsi
     (window as unknown as Record<string, unknown>).__mockMobileStates = mockStates;
   }, states);
   await page.goto("/");
-  await expect(page.getByText(/aircraft · sorted by distance/i)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText(/aircraft · sorted by score/i)).toBeVisible({ timeout: 15000 });
   await page.getByText(callsign).last().click();
   await page.waitForTimeout(800);
   await page.screenshot({ path, fullPage: false });
