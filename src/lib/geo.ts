@@ -71,6 +71,27 @@ export function bearingDeg(
   return (Math.atan2(x, y) * RAD2DEG + 360) % 360;
 }
 
+/** Follow a great-circle ground track; negative distances extend it backwards. */
+export function destinationLatlon(
+  lat: number, lon: number, headingDeg: number, distanceKm: number,
+): [number, number] {
+  const angularDistance = distanceKm / R_KM;
+  const bearing = headingDeg * DEG2RAD;
+  const latitude = lat * DEG2RAD;
+  const longitude = lon * DEG2RAD;
+  const sinLatitude = Math.sin(latitude) * Math.cos(angularDistance)
+    + Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(bearing);
+  const destinationLatitude = Math.asin(Math.max(-1, Math.min(1, sinLatitude)));
+  const destinationLongitude = longitude + Math.atan2(
+    Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latitude),
+    Math.cos(angularDistance) - Math.sin(latitude) * Math.sin(destinationLatitude),
+  );
+  return [
+    destinationLatitude * RAD2DEG,
+    ((destinationLongitude * RAD2DEG + 180) % 360 + 360) % 360 - 180,
+  ];
+}
+
 export function headingDeltaDeg(source: number, target: number): number {
   return Math.abs(((source - target + 180) % 360 + 360) % 360 - 180);
 }

@@ -274,6 +274,7 @@ export default function App() {
   const [dxGridInput, setDxGridInput] = useState("");
   const myGridEditing = useRef(false);
   const [myAltInput, setMyAltInput] = useState(() => localStorage.getItem(MY_ALT_KEY) ?? "");
+  const [myAltitudeM, setMyAltitudeM] = useState(() => Number(localStorage.getItem(MY_ALT_KEY) ?? "0"));
   const dxGridEditing = useRef(false);
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
@@ -667,6 +668,7 @@ export default function App() {
   })();
   const stateColor = STATE_COLOR[displayState] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
+  const skyDomeAircraft = aircraft.filter((ac, index) => index < 20 || ac.icao24 === lockedPlane?.icao24);
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
   const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
   const txIndicatorTitle = wsjtxLive.transmitting
@@ -805,6 +807,7 @@ export default function App() {
     try {
       await rpc("set_my_station_override", { callsign: call || null, grid: grid || null, altitude_m: altM });
       localStorage.setItem(MY_ALT_KEY, altText);
+      setMyAltitudeM(altM ?? 0);
       localStorage.setItem(MY_CALL_OVERRIDE_KEY, call);
       localStorage.setItem(MY_GRID_OVERRIDE_KEY, grid);
       if (reset) savePortableGrid(myCallsign, null);
@@ -1039,19 +1042,10 @@ export default function App() {
             <section className="skydome-panel" id="skydome-panel" aria-label="Sky Dome">
               <h3 className="portable-header">Sky Dome</h3>
               <SkyDome
-                aircraft={aircraft.slice(0, 20).map(ac => ({
-                  icao24: ac.icao24,
-                  callsign: ac.callsign,
-                  az_a: ac.az_a,
-                  el_a: ac.el_a,
-                  scatter_score: ac.scatter_score,
-                  heading_deg: ac.heading_deg,
-                  velocity_kts: ac.velocity_kts,
-                  altitude_ft: ac.altitude_ft,
-                  range_a_km: ac.range_a_km,
-                  off_path_deg: ac.off_path_deg,
-                  locked: lockedPlane?.icao24 === ac.icao24,
-                }))}
+                aircraft={skyDomeAircraft}
+                selectedAircraftId={lockedPlane?.icao24 ?? null}
+                stationLocator={airscout?.station_a ?? myGrid}
+                stationAltitudeM={myAltitudeM}
                 rotatorAz={rotatorAz}
                 rotatorEl={rotatorEl}
                 targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}

@@ -1,28 +1,28 @@
-import { useMemo, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode } from "react";
+import { isValidLocator, locatorToLatlon } from "./lib/geo";
+import { predictSkyCourse, type SkyCourseAircraft } from "./lib/skyCourse";
 
-export interface SkyDomeAircraft {
+export interface SkyDomeAircraft extends SkyCourseAircraft {
   icao24: string;
   callsign: string;
   az_a: number;
   el_a: number;
   scatter_score: number;
-  heading_deg: number | null;
-  velocity_kts: number | null;
-  altitude_ft: number;
   range_a_km: number;
   off_path_deg: number;
-  locked?: boolean;
 }
 
 interface SkyDomeProps {
   aircraft: SkyDomeAircraft[];
+  selectedAircraftId: string | null;
+  stationLocator: string | null;
+  stationAltitudeM: number;
   rotatorAz: number;
   rotatorEl: number;
   targetAz: number | null;
   targetEl: number | null;
   pathBearing: number | null;
   size?: number;
-  showTrails?: boolean;
   onClickAircraft?: (icao24: string) => void;
   onClickSky?: (az: number, el: number) => void;
 }
@@ -42,37 +42,36 @@ function scoreGlow(score: number): string {
 
 export default function SkyDome({
   aircraft,
+  selectedAircraftId,
+  stationLocator,
+  stationAltitudeM,
   rotatorAz,
   rotatorEl,
   targetAz,
   targetEl,
   pathBearing,
   size = 400,
-  showTrails = true,
   onClickAircraft,
   onClickSky,
 }: SkyDomeProps) {
   const cx = size / 2;
   const cy = size / 2;
   const outerR = size / 2 - 8;
+  const courseId = useId();
+  const selectedAircraft = aircraft.find(ac => ac.icao24 === selectedAircraftId);
+  const course = useMemo(() => {
+    if (!selectedAircraft) return null;
+    const coordinates = isValidLocator(stationLocator) ? locatorToLatlon(stationLocator) : null;
+    return predictSkyCourse(selectedAircraft, coordinates ? {
+      lat: coordinates[0], lon: coordinates[1], altitudeM: stationAltitudeM,
+    } : null);
+  }, [selectedAircraft, stationLocator, stationAltitudeM]);
 
   // Polar projection: elevation 0° = edge, 90° = center
   function project(az: number, el: number): { x: number; y: number } {
     const r = outerR * (1 - Math.max(0, Math.min(90, el)) / 90);
     const rad = ((az - 90) * Math.PI) / 180;
     return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-  }
-
-  // Predict position ~3 minutes ahead from heading + velocity
-  function predictTrail(
-    ac: SkyDomeAircraft,
-    minutes: number,
-  ): { x: number; y: number } | null {
-    if (ac.heading_deg === null || ac.velocity_kts === null) return null;
-    const speedDegPerMin = (ac.velocity_kts * 1.852) / 111.0 / 60;
-    const dAz = speedDegPerMin * minutes * Math.sin((ac.heading_deg * Math.PI) / 180) * 3;
-    const dEl = -speedDegPerMin * minutes * 0.3;
-    return project(ac.az_a + dAz, Math.max(0, ac.el_a + dEl));
   }
 
   const elevationRings = useMemo(() => {
@@ -268,6 +267,15 @@ export default function SkyDome({
         style={{ cursor: onClickSky ? "crosshair" : "default", userSelect: "none" }}
         onClick={handleClick}
       >
+        <defs>
+          <clipPath id={`${courseId}-clip`}>
+            <circle cx={cx} cy={cy} r={outerR} />
+          </clipPath>
+          <marker id={`${courseId}-arrow`} viewBox="0 0 8 8"
+            refX={7} refY={4} markerWidth={7} markerHeight={7} orient="auto">
+            <path d="M 0 0 L 8 4 L 0 8 Z" fill="var(--accent)" />
+          </marker>
+        </defs>
         {/* Background */}
         <circle cx={cx} cy={cy} r={outerR} fill="#0a0e14" stroke="#30363d" strokeWidth={1.5} />
 
@@ -286,37 +294,70 @@ export default function SkyDome({
         {/* Sweet spot zones */}
         {sweetSpot}
 
-        {/* Aircraft trails (predicted path) */}
-        {showTrails && aircraft.map((ac) => {
-          const pos = project(ac.az_a, ac.el_a);
-          const future = predictTrail(ac, 3);
-          if (!future) return null;
+        {selectedAircraft && course && !course.unavailableReason && (() => {
+          const projected = course.points.map(point => ({ ...point, ...project(point.az, point.el) }));
+          const past = projected.filter(point => point.seconds <= 0);
+          const future = projected.filter(point => point.seconds >= 0);
+          const markers = future.filter(point =>
+            point.seconds >= 60 && point.seconds <= 300 && point.seconds % 60 === 0);
+          const arrowEnd = future.findIndex(point => point.seconds >= 60);
+          const arrowIndex = arrowEnd >= 1 ? arrowEnd : future.length - 1;
           return (
-            <line
-              key={`trail-${ac.icao24}`}
-              x1={pos.x} y1={pos.y}
-              x2={future.x} y2={future.y}
-              stroke={scoreColor(ac.scatter_score)}
-              strokeWidth={1}
-              strokeDasharray="3 3"
-              opacity={0.4}
-            />
+            <g role="img" aria-label={`Estimated course for ${selectedAircraft.callsign || selectedAircraft.icao24}`}
+              data-aircraft-course={selectedAircraft.icao24}
+              clipPath={`url(#${courseId}-clip)`} pointerEvents="none">
+              <title>Estimated visible course up to 30 minutes either side of the latest report;
+                constant ground track, speed and altitude, not recorded history or a flight plan.</title>
+              <polyline aria-label="Estimated approach course"
+                points={past.map(point => `${point.x},${point.y}`).join(" ")}
+                fill="none" stroke="var(--accent)" strokeWidth={1.5} opacity={0.45} />
+              <polyline aria-label="Predicted future course"
+                points={future.map(point => `${point.x},${point.y}`).join(" ")}
+                fill="none" stroke="var(--accent)" strokeWidth={2} strokeDasharray="5 4" />
+              {arrowIndex >= 1 && (
+                <line x1={future[arrowIndex - 1].x} y1={future[arrowIndex - 1].y}
+                  x2={future[arrowIndex].x} y2={future[arrowIndex].y}
+                  stroke="var(--accent)" strokeWidth={2} markerEnd={`url(#${courseId}-arrow)`} />
+              )}
+              {markers.map(point => (
+                <g key={point.seconds} aria-label={`Predicted position in ${point.seconds / 60} minutes`}>
+                  <circle cx={point.x} cy={point.y} r={2.5}
+                    fill="var(--accent)" stroke="var(--bg)" strokeWidth={1} />
+                  <text x={point.x + (point.x > cx ? -5 : 5)}
+                    y={point.y + (point.seconds / 60 % 2 === 0 ? -7 : 14)}
+                    textAnchor={point.x > cx ? "end" : "start"}
+                    fontSize={9} fill="var(--accent)"
+                    stroke="var(--bg)" strokeWidth={3} paintOrder="stroke">
+                    +{point.seconds / 60}m
+                  </text>
+                </g>
+              ))}
+            </g>
           );
-        })}
+        })()}
 
         {/* Aircraft dots */}
         {aircraft.map((ac) => {
           const pos = project(ac.az_a, ac.el_a);
           const color = scoreColor(ac.scatter_score);
           const glow = scoreGlow(ac.scatter_score);
-          const r = ac.locked ? 8 : ac.scatter_score > 0.4 ? 6 : 4;
+          const locked = ac.icao24 === selectedAircraftId;
+          const r = locked ? 8 : ac.scatter_score > 0.4 ? 6 : 4;
           return (
             <g
               key={`ac-${ac.icao24}`}
+              data-aircraft-id={ac.icao24}
               style={{ cursor: onClickAircraft ? "pointer" : "default" }}
               onClick={(e) => {
                 e.stopPropagation();
                 onClickAircraft?.(ac.icao24);
+              }}
+              onKeyDown={(e) => {
+                if (onClickAircraft && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onClickAircraft(ac.icao24);
+                }
               }}
             >
               {/* Glow ring for high-score aircraft */}
@@ -324,14 +365,14 @@ export default function SkyDome({
                 <circle cx={pos.x} cy={pos.y} r={r + 4} fill={glow} />
               )}
               {/* Locked ring */}
-              {ac.locked && (
+              {locked && (
                 <circle cx={pos.x} cy={pos.y} r={r + 3}
                   fill="none" stroke="#f0883e" strokeWidth={2} />
               )}
               {/* Aircraft dot */}
               <circle cx={pos.x} cy={pos.y} r={r} fill={color} />
               {/* Heading indicator */}
-              {ac.heading_deg !== null && (
+              {ac.heading_deg !== null && !(locked && course && !course.unavailableReason) && (
                 <line
                   x1={pos.x} y1={pos.y}
                   x2={pos.x + (r + 4) * Math.cos(((ac.heading_deg - 90) * Math.PI) / 180)}
@@ -342,8 +383,8 @@ export default function SkyDome({
               {/* Label */}
               <text
                 x={pos.x + r + 4} y={pos.y - r - 2}
-                fontSize={ac.locked ? 10 : 8}
-                fontWeight={ac.locked ? 700 : 400}
+                fontSize={locked ? 10 : 8}
+                fontWeight={locked ? 700 : 400}
                 fill={color}
               >
                 {ac.callsign || ac.icao24}
@@ -356,6 +397,10 @@ export default function SkyDome({
                 >
                   {(ac.scatter_score * 100).toFixed(0)}%
                 </text>
+              )}
+              {onClickAircraft && (
+                <circle cx={pos.x} cy={pos.y} r={r + 4} fill="transparent"
+                  role="button" aria-label={`Lock ${ac.callsign || ac.icao24}`} tabIndex={0} />
               )}
             </g>
           );
@@ -399,6 +444,12 @@ export default function SkyDome({
         <span style={{ color: "#db6d28" }}>● 15-40%</span>
         <span style={{ color: "#484f58" }}>● &lt;15%</span>
         <span style={{ color: "#f85149" }}>✛ rotator</span>
+      </div>
+      <div className="skydome-course-note" aria-live="polite">
+        {!selectedAircraftId ? "Select an aircraft to show its estimated course"
+          : !selectedAircraft ? "Course unavailable: selected aircraft is no longer in the current feed"
+          : course?.unavailableReason ? `Course unavailable: ${course.unavailableReason}`
+          : "Estimated course: constant track, speed & altitude; markers +1 to +5 min"}
       </div>
     </div>
   );

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Desktop Sky Dome course overlay for the locked aircraft: station-relative estimated approach and dashed future track, direction arrow, and one-minute markers for the next five minutes. Updates with aircraft reports, clips at the radio horizon, and reports missing prediction data. Desktop-only visibility defaults and mobile behavior are unchanged.
+
 ## 0.3.22
 
 ### Added
