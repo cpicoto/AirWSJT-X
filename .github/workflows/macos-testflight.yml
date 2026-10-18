@@ -102,37 +102,13 @@ jobs:
             exit 1
           fi
           pip install pyinstaller certifi
-          # Onefile libraries must be signed before compression; signing the outer executable cannot repair them.
-          pyinstaller --onefile --codesign-identity "$IDENTITY" --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
-          mv src-tauri/binaries/airwsjtx_bridge src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
-          chmod +x src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
-
-      - name: Smoke test hardened Python sidecar
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          import tempfile
-
-          # Before adding sandbox-inheritance entitlements, test library validation
-          # directly. The CI shell cannot launch an inherit-only sandbox helper.
-          with tempfile.TemporaryDirectory() as home:
-              result = subprocess.run(
-                  ["src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin"],
-                  input=json.dumps({"id": "packaging-smoke", "method": "get_status"}) + "\n",
-                  capture_output=True,
-                  text=True,
-                  timeout=30,
-                  env={**os.environ, "HOME": home},
-              )
-              if result.returncode:
-                  raise SystemExit(f"Packaged sidecar failed to start: {result.stderr}")
-              replies = [json.loads(line) for line in result.stdout.splitlines()]
-              reply = next((item for item in replies if item.get("id") == "packaging-smoke"), None)
-              if not reply or not reply.get("ok"):
-                  raise SystemExit(f"Packaged sidecar did not answer get_status: {result.stderr}")
-          PY
+          # Onefile's launcher uses SysV semaphores, which App Sandbox denies.
+          pyinstaller --onedir --windowed --codesign-identity "$IDENTITY" \
+            --osx-entitlements-file src-tauri/entitlements-mas-sidecar.plist \
+            --osx-bundle-identifier us.ad7np.airwsjt-x.bridge \
+            --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
+          clang -Wall -Wextra -Werror -arch arm64 -mmacosx-version-min=12.0 \
+            scripts/macos_sidecar_launcher.c -o src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
 
       - name: Sign sidecar with MAS entitlements
         run: |
@@ -197,6 +173,11 @@ jobs:
           done
 
           codesign --force --options runtime \
+            --entitlements src-tauri/entitlements-mas-sidecar.plist \
+            --sign "$IDENTITY" \
+            "$APP_PATH/Contents/Helpers/airwsjtx_bridge.app"
+
+          codesign --force --options runtime \
             --entitlements src-tauri/entitlements-mas.plist \
             --sign "$IDENTITY" \
             "$APP_PATH"
@@ -204,6 +185,12 @@ jobs:
           echo "=== Verify signature ==="
           codesign -dv --verbose=2 "$APP_PATH"
           codesign --verify --deep --strict "$APP_PATH"
+
+      - name: Smoke test sandboxed Python sidecar
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning "$RUNNER_TEMP/mas-signing.keychain-db" | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          APP_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle -name "*.app" -type d | head -1)
+          python scripts/verify_macos_sidecar.py "$APP_PATH" --identity "$IDENTITY"
 
       - name: Build .pkg installer
         run: |

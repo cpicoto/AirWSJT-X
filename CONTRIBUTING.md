@@ -21,15 +21,18 @@ See [README.md](README.md#building-from-source) for build instructions.
 
 Import the Apple Distribution certificate before running PyInstaller, and pass
 `--codesign-identity` so the Python runtime, SSL libraries, and extension modules
-inside its onefile archive are signed by the same team as the sidecar. Signing
-only the outer executable leaves ad-hoc libraries inside the archive, which
-macOS hardened-runtime library validation rejects. This prevents the backend
-from starting, leaving both WSJT-X UDP and aircraft feeds disconnected.
+are signed by the same team as the sidecar. TestFlight uses `--onedir`, not
+`--onefile`: the onefile bootloader initializes a SysV semaphore that App Sandbox
+denies (`semctl: Operation not permitted`), before Python starts. PyInstaller
+creates a helper app under `Contents/Helpers/airwsjtx_bridge.app`, keeping code
+and data in standard macOS bundle locations. A native sidecar launcher executes
+that helper while preserving the JSON-RPC pipes and inherited sandbox.
 
-The TestFlight workflow smoke-tests the packaged backend before adding its
-sandbox-inheritance entitlements, then signs the helper and app for distribution.
-Keep library validation enabled; re-signing the outer bundle is not a substitute
-for signing embedded Python libraries during packaging.
+The TestFlight workflow signs the helper and app for distribution, then launches
+the final packaged helper from a native sandboxed parent before uploading.
+A successful unsandboxed startup does not validate TestFlight behavior.
+Keep library validation enabled; do not weaken sandbox entitlements to work
+around packaging failures.
 
 ## Guidelines
 

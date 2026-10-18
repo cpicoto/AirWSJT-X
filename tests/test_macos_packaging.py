@@ -1,6 +1,7 @@
 """Static checks for TestFlight sidecar signing, runnable on every CI platform."""
 
 from pathlib import Path
+import json
 import plistlib
 import re
 import unittest
@@ -24,27 +25,39 @@ class MacOSTestFlightPackagingTests(unittest.TestCase):
             self.workflow.index("- name: Bundle Python sidecar with PyInstaller"),
         )
 
-    def test_embedded_libraries_use_distribution_identity_before_compression(self) -> None:
+    def test_onedir_libraries_use_distribution_identity(self) -> None:
         bundle = self.steps["Bundle Python sidecar with PyInstaller"]
         self.assertIn('grep "Apple Distribution"', bundle)
         self.assertIn('if [ -z "$IDENTITY" ]; then', bundle)
-        self.assertRegex(bundle, r'pyinstaller --onefile --codesign-identity "\$IDENTITY"')
+        self.assertRegex(bundle, r'pyinstaller --onedir --windowed --codesign-identity "\$IDENTITY"')
+        self.assertNotIn("--onefile", bundle)
+        self.assertIn("--osx-entitlements-file src-tauri/entitlements-mas-sidecar.plist", bundle)
+        self.assertIn("scripts/macos_sidecar_launcher.c", bundle)
 
-    def test_real_sidecar_is_smoke_tested_before_sandbox_inheritance_is_added(self) -> None:
+    def test_runtime_layout_is_bundled_for_the_sidecar(self) -> None:
+        config = json.loads((ROOT / "src-tauri/tauri.mas.conf.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            config["bundle"]["macOS"]["files"]["Helpers/airwsjtx_bridge.app"],
+            "binaries/airwsjtx_bridge.app",
+        )
+        self.assertIn(
+            '"$APP_PATH/Contents/Helpers/airwsjtx_bridge.app"',
+            self.steps["Re-sign .app bundle for MAS"],
+        )
+
+    def test_sandboxed_backend_is_checked_before_upload(self) -> None:
         self.assertLess(
-            self.workflow.index("- name: Bundle Python sidecar with PyInstaller"),
-            self.workflow.index("- name: Smoke test hardened Python sidecar"),
+            self.workflow.index("- name: Re-sign .app bundle for MAS"),
+            self.workflow.index("- name: Smoke test sandboxed Python sidecar"),
         )
         self.assertLess(
-            self.workflow.index("- name: Smoke test hardened Python sidecar"),
-            self.workflow.index("- name: Sign sidecar with MAS entitlements"),
+            self.workflow.index("- name: Smoke test sandboxed Python sidecar"),
+            self.workflow.index("- name: Upload to TestFlight"),
         )
-        smoke = self.steps["Smoke test hardened Python sidecar"]
-        self.assertIn("subprocess.run(", smoke)
-        self.assertIn('"method": "get_status"', smoke)
-        self.assertIn("result.returncode", smoke)
-        self.assertIn('reply.get("ok")', smoke)
-        self.assertIn("timeout=30", smoke)
+        self.assertIn(
+            'python scripts/verify_macos_sidecar.py "$APP_PATH" --identity "$IDENTITY"',
+            self.steps["Smoke test sandboxed Python sidecar"],
+        )
 
     def test_mas_signing_preserves_library_validation(self) -> None:
         for name in ["entitlements-mas.plist", "entitlements-mas-sidecar.plist"]:
