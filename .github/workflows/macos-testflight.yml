@@ -56,13 +56,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Bundle Python sidecar with PyInstaller
-        run: |
-          pip install pyinstaller certifi
-          pyinstaller --onefile --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
-          mv src-tauri/binaries/airwsjtx_bridge src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
-          chmod +x src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
-
       - name: Import signing certificates
         env:
           MAS_APP_CERTIFICATE: ${{ secrets.MAS_APP_CERTIFICATE }}
@@ -100,6 +93,46 @@ jobs:
           mkdir -p "$PROFILE_DIR"
           echo -n "$MAS_PROVISIONING_PROFILE" | base64 --decode -o "$PROFILE_DIR/AirWSJTX_Profile.provisionprofile"
           ls -la "$PROFILE_DIR"
+
+      - name: Bundle Python sidecar with PyInstaller
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning "$RUNNER_TEMP/mas-signing.keychain-db" | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::Apple Distribution signing identity is required before packaging Python libraries"
+            exit 1
+          fi
+          pip install pyinstaller certifi
+          # Onefile libraries must be signed before compression; signing the outer executable cannot repair them.
+          pyinstaller --onefile --codesign-identity "$IDENTITY" --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
+          mv src-tauri/binaries/airwsjtx_bridge src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
+          chmod +x src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
+
+      - name: Smoke test hardened Python sidecar
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+
+          # Before adding sandbox-inheritance entitlements, test library validation
+          # directly. The CI shell cannot launch an inherit-only sandbox helper.
+          with tempfile.TemporaryDirectory() as home:
+              result = subprocess.run(
+                  ["src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin"],
+                  input=json.dumps({"id": "packaging-smoke", "method": "get_status"}) + "\n",
+                  capture_output=True,
+                  text=True,
+                  timeout=30,
+                  env={**os.environ, "HOME": home},
+              )
+              if result.returncode:
+                  raise SystemExit(f"Packaged sidecar failed to start: {result.stderr}")
+              replies = [json.loads(line) for line in result.stdout.splitlines()]
+              reply = next((item for item in replies if item.get("id") == "packaging-smoke"), None)
+              if not reply or not reply.get("ok"):
+                  raise SystemExit(f"Packaged sidecar did not answer get_status: {result.stderr}")
+          PY
 
       - name: Sign sidecar with MAS entitlements
         run: |

@@ -17,6 +17,20 @@ Thanks for your interest in contributing to AirWSJT-X! This project is built by 
 
 See [README.md](README.md#building-from-source) for build instructions.
 
+### macOS TestFlight packaging
+
+Import the Apple Distribution certificate before running PyInstaller, and pass
+`--codesign-identity` so the Python runtime, SSL libraries, and extension modules
+inside its onefile archive are signed by the same team as the sidecar. Signing
+only the outer executable leaves ad-hoc libraries inside the archive, which
+macOS hardened-runtime library validation rejects. This prevents the backend
+from starting, leaving both WSJT-X UDP and aircraft feeds disconnected.
+
+The TestFlight workflow smoke-tests the packaged backend before adding its
+sandbox-inheritance entitlements, then signs the helper and app for distribution.
+Keep library validation enabled; re-signing the outer bundle is not a substitute
+for signing embedded Python libraries during packaging.
+
 ## Guidelines
 
 - **Keep it focused.** Each PR should address one thing — a bug fix, a feature, or a refactor. Not all three.
