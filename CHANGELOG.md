@@ -13,6 +13,9 @@
 - WSJT-X QSO Logged parsing with auto-complete; opt-in Halt Tx on Abort/Finish via UDP.
 - Dark-themed scrollbars and spin controls on Linux.
 
+### Fixed
+- **macOS TestFlight backend startup (build 18)**: restored WSJT-X UDP and aircraft-feed connectivity by replacing the sandbox-incompatible PyInstaller onefile launcher with a signed nested Python helper app. Embedded runtime libraries use the distribution signing identity, and a sandboxed backend startup check now gates uploads. Ordinary desktop and mobile packaging are unchanged.
+
 ## 0.3.21
 
 ### Added

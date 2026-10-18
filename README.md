@@ -103,6 +103,12 @@ Credentials are stored in the OS credential manager (Keychain, Credential Manage
 
 ### Desktop
 
+These commands are for ordinary desktop builds, **not macOS TestFlight / Mac App
+Store**. Sandboxed macOS distribution requires a signed, bundled Python helper
+instead of `--onefile`; follow the
+[TestFlight packaging guide and release checks](CONTRIBUTING.md#macos-testflight-packaging)
+and `.github/workflows/macos-testflight.yml`.
+
 ```bash
 npm ci
 pip install pyinstaller
@@ -162,6 +168,15 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 ## FAQ
+
+### Why are both WSJT-X and NET disconnected on macOS TestFlight?
+
+The Python backend may have failed to start rather than lost network access.
+Version 0.3.22 build 18 fixes a sandbox-incompatible Python launcher that blocked
+both services; update older affected builds through TestFlight. If the problem
+persists, report the version/build number and native sidecar startup errors.
+See [diagnostic guidance](CONTRIBUTING.md#diagnosing-simultaneous-wsjtx-and-net-disconnection)
+before changing firewall or aircraft-account settings.
 
 ### Is AirWSJT-X safe for airplanes?
 
