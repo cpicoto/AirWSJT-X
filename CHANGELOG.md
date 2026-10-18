@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.3.23
 
 ### Added
 - Desktop Sky Dome course overlay for the locked aircraft: station-relative estimated approach and dashed future track, direction arrow, and one-minute markers for the next five minutes. Updates with aircraft reports, clips at the radio horizon, and reports missing prediction data. Desktop-only visibility defaults and mobile behavior are unchanged.
+
+### Fixed
+- Integrated the macOS TestFlight sandbox-startup fix validated in 0.3.22 build 18: signed nested Python helper packaging, preserved network entitlements and library validation, and a sandboxed startup gate before upload.
+
+### Documentation
+- Added agent/review guardrails and macOS release checks to prevent sandbox packaging regressions.
 
 ## 0.3.22
 
