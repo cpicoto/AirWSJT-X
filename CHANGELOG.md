@@ -7,6 +7,7 @@
 
 ### Fixed
 - Integrated the macOS TestFlight sandbox-startup fix validated in 0.3.22 build 18: signed nested Python helper packaging, preserved network entitlements and library validation, and a sandboxed startup gate before upload.
+- Keep the locked aircraft in backend updates when it ranks below the first 20 candidates, preserve due-north ground tracks, and reserve space for course guidance at small desktop window sizes.
 
 ### Documentation
 - Added agent/review guardrails and macOS release checks to prevent sandbox packaging regressions.

@@ -116,6 +116,18 @@ async function openSky(page: Page) {
   await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
 }
 
+async function expectSkyPointing(page: Page, azimuth: number, elevation: number) {
+  // Physical clicks on a scaled SVG have pixel rounding, roughly one degree here.
+  await expect.poll(() => page.evaluate(({ azimuth, elevation }) => {
+    const target = Reflect.get(window, "__mockRotatorTarget") as {
+      azimuth: number; elevation: number;
+    } | undefined;
+    return target ? Math.max(
+      Math.abs(target.azimuth - azimuth), Math.abs(target.elevation - elevation),
+    ) : Infinity;
+  }, { azimuth, elevation })).toBeLessThanOrEqual(1);
+}
+
 test("selecting an aircraft shows one course that updates, switches and clears on unlock", async ({ page }) => {
   await openSky(page);
   const first = skyAircraft("abc123");
@@ -154,8 +166,7 @@ test("selecting an aircraft shows one course that updates, switches and clears o
   await dome.locator("svg").click({ position: {
     x: bounds!.width * (0.5 + 96 / 430), y: bounds!.height * 0.5,
   } });
-  await expect.poll(() => page.evaluate(() => Reflect.get(window, "__mockRotatorTarget")))
-    .toEqual({ azimuth: 90, elevation: 45 });
+  await expectSkyPointing(page, 90, 45);
   await dome.getByRole("button", { name: "Lock FLIGHTdef456", exact: true }).press("Enter");
   await expect.poll(() => page.evaluate(() => Reflect.get(window, "__mockLockRequest"))).toBe("def456");
   await skyEvent(page, "plane_locked", { ...second, state: "tracking" });
@@ -311,13 +322,11 @@ test("pointing uses SVG coordinates after resizing", async ({ page }) => {
       x: bounds!.width * (0.5 + 96 / 430),
       y: bounds!.height * 0.5,
     } });
-    await expect.poll(() => page.evaluate(() => Reflect.get(window, "__mockRotatorTarget")))
-      .toEqual({ azimuth: 90, elevation: 45 });
+    await expectSkyPointing(page, 90, 45);
     await dome.click({ position: {
       x: bounds!.width * 0.5,
       y: bounds!.height * (0.5 + 96 / 430),
     } });
-    await expect.poll(() => page.evaluate(() => Reflect.get(window, "__mockRotatorTarget")))
-      .toEqual({ azimuth: 180, elevation: 45 });
+    await expectSkyPointing(page, 180, 45);
   }
 });

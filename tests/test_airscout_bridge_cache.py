@@ -10,6 +10,40 @@ from sidecar import airwsjtx_bridge
 
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
+    def test_aircraft_update_retains_locked_aircraft_beyond_payload_limit(self) -> None:
+        ranked = [
+            {"icao24": f"ac{i}", "lat": 47.5, "lon": -122.4, "altitude_ft": 33000,
+             "heading_deg": 90, "velocity_kts": 450, "scatter_score": 1 - i / 100}
+            for i in range(25)
+        ]
+        for locked_id in [None, "ac3", "ac24", "missing"]:
+            with self.subTest(locked_id=locked_id):
+                with patch.object(airwsjtx_bridge, "_locked_aircraft_id", locked_id), \
+                        patch.object(airwsjtx_bridge, "_get_scatter_aircraft_with_total",
+                                     return_value=(ranked, 45)), \
+                        patch.object(airwsjtx_bridge, "_update_rotator_for_locked"), \
+                        patch.object(airwsjtx_bridge, "_try_auto_lock"), \
+                        patch.object(airwsjtx_bridge, "_emit") as emit:
+                    airwsjtx_bridge._emit_aircraft_update()
+                payload = emit.call_args.args[0]["data"]
+                expected = ranked[:20] + ([ranked[24]] if locked_id == "ac24" else [])
+                self.assertEqual(payload["aircraft"], expected)
+                self.assertEqual(payload["total"], 45)
+                self.assertEqual(len({ac["icao24"] for ac in payload["aircraft"]}), len(expected))
+
+    def test_scatter_payload_preserves_due_north_heading_for_course_prediction(self) -> None:
+        aircraft = Aircraft(
+            icao24="abc123", callsign="NORTH", lat=47.5, lon=-122.4,
+            altitude_m=10000, velocity_ms=200, heading_deg=0,
+            vertical_rate_ms=0, on_ground=False,
+        )
+        with patch.multiple(airwsjtx_bridge, _station_a_locator="CN87", _station_b_locator="CN89"), \
+                patch.object(airwsjtx_bridge, "_aircraft_matches_filters", return_value=True):
+            airwsjtx_bridge._replace_aircraft_cache([aircraft])
+            ranked, _ = airwsjtx_bridge._get_scatter_aircraft_with_total()
+            self.assertEqual(ranked[0]["heading_deg"], 0)
+            self.assertEqual(airwsjtx_bridge._get_scatter_aircraft()[0]["heading_deg"], 0)
+
     def test_locked_distance_uses_full_eight_character_my_grid(self) -> None:
         lat = 47 + 15 / 24 + 0.5 / 240
         lon = -124 + 21 * 2 / 24 + 0.5 * 2 / 240

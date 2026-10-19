@@ -1343,7 +1343,7 @@ def _get_scatter_aircraft() -> list[dict]:
             "altitude_m": round(ac.altitude_m),  # type: ignore[arg-type]
             "altitude_ft": round(ac.altitude_m * 3.28084),  # type: ignore[arg-type]
             "velocity_kts": round(ac.velocity_ms * 1.94384) if ac.velocity_ms else None,
-            "heading_deg": round(ac.heading_deg) if ac.heading_deg else None,
+            "heading_deg": round(ac.heading_deg) if ac.heading_deg is not None else None,
             **geo,
         })
 
@@ -1389,7 +1389,7 @@ def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
             "altitude_m": round(ac.altitude_m),
             "altitude_ft": round(ac.altitude_m * 3.28084),
             "velocity_kts": round(ac.velocity_ms * 1.94384) if ac.velocity_ms else None,
-            "heading_deg": round(ac.heading_deg) if ac.heading_deg else None,
+            "heading_deg": round(ac.heading_deg) if ac.heading_deg is not None else None,
             **geo,
         })
 
@@ -1401,6 +1401,11 @@ def _emit_aircraft_update() -> None:
     age_s = _aircraft_cache_age_s()
     freshness = _aircraft_cache_freshness(age_s)
     aircraft, total = _get_scatter_aircraft_with_total()
+    visible_aircraft = aircraft[:20]
+    if _locked_aircraft_id:
+        locked = next((ac for ac in aircraft[20:] if ac["icao24"] == _locked_aircraft_id), None)
+        if locked is not None:
+            visible_aircraft.append(locked)
     with _aircraft_lock:
         last_update_epoch_s = _aircraft_last_update_epoch_s
     with _source_status_lock:
@@ -1408,7 +1413,7 @@ def _emit_aircraft_update() -> None:
     _emit({
         "event": "airscout_update",
         "data": {
-            "aircraft": aircraft[:20],
+            "aircraft": visible_aircraft,
             "total": total,
             "station_a": _station_a_locator,
             "station_b": _station_b_locator,
