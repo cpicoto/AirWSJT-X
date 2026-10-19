@@ -4,7 +4,10 @@
     "category": "public.app-category.utilities",
     "macOS": {
       "entitlements": "entitlements-mas.plist",
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "files": {
+        "Helpers/airwsjtx_bridge.app": "binaries/airwsjtx_bridge.app"
+      }
     }
   }
 }

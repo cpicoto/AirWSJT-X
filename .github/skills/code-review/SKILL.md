@@ -61,6 +61,7 @@ description: "Code review checklist for AirWSJT-X (Tauri 2 + React 19 + Python s
 ### 6. CI / workflows (.github/workflows/)
 
 - **Release workflow:** Desktop builds produce macOS .dmg, Windows .exe/.msi, Linux AppImage/deb/rpm. Verify all targets are present.
+- **macOS TestFlight/MAS:** Apply the [agent guardrails](../../../AGENTS.md#macos-testflight--mac-app-store-guardrails) and [release checks](../../../CONTRIBUTING.md#required-release-checks). Reject a return to PyInstaller `--onefile`, outer-only runtime signing, weakened sandbox/library-validation entitlements, or removal of the post-signing sandbox startup gate. Require installed TestFlight network validation for packaging/startup changes; an unsandboxed `.dmg` or successful upload is not sufficient.
 - **Mobile workflow:** Must include APK signing (debug keystore generated in CI), zipalign, apksigner verify.
 - **Test workflow:** Python tests (`tests/test_*.py`) and Playwright e2e tests (`e2e/*.spec.ts`). New features should have at least one test.
 - **Action versions:** Use pinned major versions (`@v7`, not `@latest`). Dependabot manages bumps.

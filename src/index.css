@@ -43,7 +43,7 @@ input[type="number"] { color-scheme: dark; }
   height: 100vh;
 }
 
-.app.has-portable-panel {
+.app.has-display-panels {
   grid-template-rows: 44px auto auto minmax(0, 1fr) 44px;
 }
 
@@ -146,6 +146,7 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 
 /* ── Large portable Az/El readout ─────────────────────────────────────── */
 .portable-panel,
+.skydome-panel,
 .portable-overlay {
   background: #02060b;
   border: 1px solid rgba(88, 166, 255, 0.6);
@@ -155,6 +156,32 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 
 .portable-panel {
   margin: 6px 8px 0;
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+}
+
+.display-panels {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 6px 8px 0;
+  min-width: 0;
+}
+
+.display-panels > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.display-panels .portable-panel {
+  margin: 0;
+}
+
+.display-panels.has-skydome .portable-value {
+  font-size: min(1em, 5vw);
+}
+
+.skydome-panel {
   border-radius: 8px;
   padding: 8px 10px 10px;
 }
@@ -235,10 +262,16 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
   text-shadow: 0 0 12px rgba(88, 166, 255, 0.45);
 }
 
+.display-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
 .portable-toolbar {
   padding: 6px 12px;
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -318,3 +351,10 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 }
 .station-pill .call { font-family: monospace; font-weight: 700; font-size: 13px; }
 .station-pill .grid { font-family: monospace; font-size: 11px; color: var(--text-muted); }
+
+/* ── Sky Dome (experimental) ─────────────────────────────────────────── */
+.skydome-container { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+/* Reserve the course note's 12px line and 6px gap within the dome height budget. */
+.skydome-container svg { display: block; width: min(100%, calc(40vh - 18px), 460px); height: auto; }
+.skydome-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; font-size: 9px; color: var(--text-muted); font-family: monospace; }
+.skydome-course-note { max-width: 100%; font-size: 10px; line-height: 12px; color: var(--text-muted); text-align: center; }

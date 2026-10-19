@@ -22,6 +22,7 @@ All platforms are built from CI on every tagged release.
 |----------|--------|----------|
 | **macOS** (Apple Silicon) | `.dmg` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
 | **Windows** (x64) | `.msi` / `.exe` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
+| **Windows** (ARM64 / Snapdragon) | `_arm64-setup.exe` | [ARM64 build artifacts](https://github.com/cpicoto/AirWSJT-X/actions/workflows/windows-arm64.yml) (also included in future tagged releases) |
 | **Linux** (x64) | `.AppImage` / `.deb` / `.rpm` | [Latest release](https://github.com/cpicoto/AirWSJT-X/releases/latest) |
 | **Android** (ARM) | `.apk` (signed, arm64 + armeabi-v7a) | [Download](https://github.com/K7MDL2/AirWSJT-X/releases/latest/download/AirWSJT-X-android-arm.apk) |
 | **Android** (x86_64) | `.apk` (signed) | [Download](https://github.com/K7MDL2/AirWSJT-X/releases/latest/download/AirWSJT-X-android-x86_64.apk) |
@@ -57,6 +58,20 @@ When multiple WSJT-X instances are on the network, the **Rig** dropdown selects 
 **Start QSO** marks the app's session as active; it does not enable transmission. Press **Enable Tx** in WSJT-X to transmit. By default, **Abort** and **Finish QSO** only update the app's session. The optional **Halt WSJT-X Tx on Abort/Finish** checkbox also sends Halt Tx to the selected WSJT-X instance; enable **Accept UDP requests** in WSJT-X's **Settings > Reporting** to use it. If delivery fails, use **Halt Tx** in WSJT-X itself. A QSO Logged message from the selected instance automatically completes an active app session.
 
 The compass outer ring marks the DX station's bearing and callsign. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
+
+**Sky Dome** is an optional, desktop-only polar view of aircraft azimuth and elevation, hidden by default. Use **Show / Hide** beside the **Az / El** display controls; the choice is remembered. It sits above the main columns, alongside the Az / El panel when visible, and scales to the window without clipping the dome. The outer edge is the horizon (0 degrees), the centre is the zenith (90 degrees), and labelled concentric rings mark 22.5, 45, and 67.5 degrees. Click an aircraft to lock it, or a point in the sky to set the rotator target.
+
+Locking an aircraft adds a blue estimated course across the dome: a faint approach
+extension, dashed future track, direction arrow, and one-minute markers for the
+next five minutes while above the horizon. The curve updates with aircraft
+reports using its geographic position, ground track, speed and altitude relative
+to MY station, including station altitude and the same effective-Earth-radius
+elevation model as tracking. It extends up to 30 minutes each way, clipped at the
+radio horizon. Both directions are estimates assuming no turns or altitude/speed
+changes, not recorded history or a filed flight plan. Missing station or motion
+data is reported instead of drawing a guessed course. Only the locked aircraft's
+course is shown, even when it is outside the first 20 candidates; mobile is
+unchanged.
 
 ### Mobile Mode
 
@@ -100,6 +115,12 @@ Credentials are stored in the OS credential manager (Keychain, Credential Manage
 
 ### Desktop
 
+These commands are for ordinary desktop builds, **not macOS TestFlight / Mac App
+Store**. Sandboxed macOS distribution requires a signed, bundled Python helper
+instead of `--onefile`; follow the
+[TestFlight packaging guide and release checks](CONTRIBUTING.md#macos-testflight-packaging)
+and `.github/workflows/macos-testflight.yml`.
+
 ```bash
 npm ci
 pip install pyinstaller
@@ -126,6 +147,25 @@ Open in VS Code and use **Terminal > Run Task**:
 - **AirWSJT-X: Desktop Dev** — launch `tauri dev` with hot-reloading
 - **AirWSJT-X: Build Android APK** — build the Android APK (requires Android SDK/NDK setup) (currently untested)
 
+### Windows ARM64
+
+The **Windows ARM64 setup** workflow runs on `windows-11-arm` with ARM64 Node.js, Python 3.12, and Rust. It builds both the desktop app and Python sidecar natively, checks their PE machine types, and exercises the frozen sidecar's JSON-line protocol from an empty working directory. Download `AirWSJT-X-windows-arm64` from the run's **Artifacts** section and extract `AirWSJT-X_<version>_arm64-setup.exe`. Tagged releases attach the same setup alongside the existing x64 installers.
+
+For a local build, use Windows 11 ARM64, native ARM64 Python/Node.js, and Visual Studio's C++ ARM64 build tools:
+
+```powershell
+npm ci
+python -m pip install pyinstaller certifi
+python -m unittest discover -s tests -v
+python -m PyInstaller --noconfirm --onefile --name airwsjtx_bridge --distpath src-tauri\binaries --paths . sidecar\airwsjtx_bridge.py
+Move-Item -Force src-tauri\binaries\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+rustup target add aarch64-pc-windows-msvc
+npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json
+python scripts\verify_windows_arm64.py --app src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx.exe --sidecar src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+```
+
+The setup is under `src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis`. ARM64 uses NSIS, not WiX/MSI. The NSIS installer bootstrapper may run under Windows emulation; the installed application and Python sidecar are native ARM64. This build does not change the architecture requirements of separately installed WSJT-X or rotctld.
+
 ### Running Tests
 
 ```bash
@@ -140,6 +180,15 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 ## FAQ
+
+### Why are both WSJT-X and NET disconnected on macOS TestFlight?
+
+The Python backend may have failed to start rather than lost network access.
+Version 0.3.22 build 18 fixes a sandbox-incompatible Python launcher that blocked
+both services; update older affected builds through TestFlight. If the problem
+persists, report the version/build number and native sidecar startup errors.
+See [diagnostic guidance](CONTRIBUTING.md#diagnosing-simultaneous-wsjtx-and-net-disconnection)
+before changing firewall or aircraft-account settings.
 
 ### Is AirWSJT-X safe for airplanes?
 

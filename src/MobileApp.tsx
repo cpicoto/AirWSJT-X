@@ -634,7 +634,7 @@ export default function MobileApp() {
             <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 4 }}>
               Aircraft scatter assistant for WSJT-X
             </div>
-            <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 12 }}>Version 0.3.21</div>
+            <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 12 }}>Version 0.3.22</div>
             <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.6 }}>
               Created by Carlos Picoto, AD7NP<br />
               Contributions by Mike, K7MDL2

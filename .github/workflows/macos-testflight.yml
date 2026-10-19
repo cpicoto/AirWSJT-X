@@ -56,13 +56,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Bundle Python sidecar with PyInstaller
-        run: |
-          pip install pyinstaller certifi
-          pyinstaller --onefile --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
-          mv src-tauri/binaries/airwsjtx_bridge src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
-          chmod +x src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
-
       - name: Import signing certificates
         env:
           MAS_APP_CERTIFICATE: ${{ secrets.MAS_APP_CERTIFICATE }}
@@ -100,6 +93,22 @@ jobs:
           mkdir -p "$PROFILE_DIR"
           echo -n "$MAS_PROVISIONING_PROFILE" | base64 --decode -o "$PROFILE_DIR/AirWSJTX_Profile.provisionprofile"
           ls -la "$PROFILE_DIR"
+
+      - name: Bundle Python sidecar with PyInstaller
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning "$RUNNER_TEMP/mas-signing.keychain-db" | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::Apple Distribution signing identity is required before packaging Python libraries"
+            exit 1
+          fi
+          pip install pyinstaller certifi
+          # Onefile's launcher uses SysV semaphores, which App Sandbox denies.
+          pyinstaller --onedir --windowed --codesign-identity "$IDENTITY" \
+            --osx-entitlements-file src-tauri/entitlements-mas-sidecar.plist \
+            --osx-bundle-identifier us.ad7np.airwsjt-x.bridge \
+            --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
+          clang -Wall -Wextra -Werror -arch arm64 -mmacosx-version-min=12.0 \
+            scripts/macos_sidecar_launcher.c -o src-tauri/binaries/airwsjtx_bridge-aarch64-apple-darwin
 
       - name: Sign sidecar with MAS entitlements
         run: |
@@ -164,6 +173,11 @@ jobs:
           done
 
           codesign --force --options runtime \
+            --entitlements src-tauri/entitlements-mas-sidecar.plist \
+            --sign "$IDENTITY" \
+            "$APP_PATH/Contents/Helpers/airwsjtx_bridge.app"
+
+          codesign --force --options runtime \
             --entitlements src-tauri/entitlements-mas.plist \
             --sign "$IDENTITY" \
             "$APP_PATH"
@@ -171,6 +185,12 @@ jobs:
           echo "=== Verify signature ==="
           codesign -dv --verbose=2 "$APP_PATH"
           codesign --verify --deep --strict "$APP_PATH"
+
+      - name: Smoke test sandboxed Python sidecar
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning "$RUNNER_TEMP/mas-signing.keychain-db" | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          APP_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle -name "*.app" -type d | head -1)
+          python scripts/verify_macos_sidecar.py "$APP_PATH" --identity "$IDENTITY"
 
       - name: Build .pkg installer
         run: |

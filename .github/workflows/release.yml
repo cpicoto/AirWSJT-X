@@ -46,41 +46,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Sync app versions from tag
-        shell: bash
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          tag = os.environ["RELEASE_VERSION"]
-          version = tag[1:] if tag.startswith("v") else tag
-
-          package_json = Path("package.json")
-          package_data = json.loads(package_json.read_text(encoding="utf-8"))
-          package_data["version"] = version
-          package_json.write_text(json.dumps(package_data, indent=2) + "\n", encoding="utf-8")
-
-          tauri_conf = Path("src-tauri/tauri.conf.json")
-          tauri_data = json.loads(tauri_conf.read_text(encoding="utf-8"))
-          tauri_data["version"] = version
-          tauri_conf.write_text(json.dumps(tauri_data, indent=2) + "\n", encoding="utf-8")
-
-          cargo_toml = Path("src-tauri/Cargo.toml")
-          cargo_text = cargo_toml.read_text(encoding="utf-8")
-          cargo_text, replaced = re.subn(
-              r'(?m)^version\s*=\s*"[^\"]+"$',
-              f'version = "{version}"',
-              cargo_text,
-              count=1,
-          )
-          if replaced != 1:
-              raise SystemExit("Failed to update src-tauri/Cargo.toml version")
-          cargo_toml.write_text(cargo_text, encoding="utf-8")
-          PY
+        run: python scripts/sync_release_version.py
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -180,7 +148,8 @@ jobs:
 
             ### Downloads
             - **macOS (Apple Silicon):** `.dmg` file
-            - **Windows:** `.msi` installer or `.exe` setup
+            - **Windows (x64):** `.msi` installer or `.exe` setup
+            - **Windows (ARM64):** native `_arm64-setup.exe` setup (Windows 11 / Snapdragon)
             - **Linux (x64):** `.AppImage`, `.deb` (Debian/Ubuntu/Mint), `.rpm` (Fedora/openSUSE)
             - **iOS:** `.tar.gz` (from mobile build workflow)
             - **Android:** `.apk` (from mobile build workflow)
@@ -188,8 +157,29 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
 
+  windows-arm64:
+    needs: python-tests
+    uses: ./.github/workflows/windows-arm64.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+
+  publish-windows-arm64:
+    needs: [build, windows-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: AirWSJT-X-windows-arm64
+          path: arm64-setup
+      - name: Attach ARM64 setup to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" arm64-setup/*_arm64-setup.exe --clobber
+
   deploy-site:
-    needs: build
+    needs: [build, publish-windows-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

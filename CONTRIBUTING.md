@@ -17,6 +17,77 @@ Thanks for your interest in contributing to AirWSJT-X! This project is built by 
 
 See [README.md](README.md#building-from-source) for build instructions.
 
+### macOS TestFlight packaging
+
+Import the Apple Distribution certificate before running PyInstaller, and pass
+`--codesign-identity` so the Python runtime, SSL libraries, and extension modules
+are signed by the same team as the sidecar. TestFlight uses `--onedir`, not
+`--onefile`: the onefile bootloader initializes a SysV semaphore that App Sandbox
+denies (`semctl: Operation not permitted`), before Python starts. PyInstaller
+creates a helper app under `Contents/Helpers/airwsjtx_bridge.app`, keeping code
+and data in standard macOS bundle locations. A native sidecar launcher executes
+that helper while preserving the JSON-RPC pipes and inherited sandbox.
+
+The TestFlight workflow signs the helper and app for distribution, then launches
+the final packaged helper from a native sandboxed parent before uploading.
+A successful unsandboxed startup does not validate TestFlight behavior.
+Keep library validation enabled; do not weaken sandbox entitlements to work
+around packaging failures.
+
+#### Required release checks
+
+When changing packaging, PyInstaller, sidecar startup, Tauri bundle layout, or
+macOS signing/entitlements:
+
+1. Run the cross-platform packaging regression checks:
+   `python -m unittest discover -s tests -p 'test_macos_packaging.py' -v`.
+   Keep these checks and the workflow's sandbox smoke step enabled.
+2. Build using the desktop and MAS Tauri configurations, as shown in
+   `.github/workflows/macos-testflight.yml`. Keep the complete PyInstaller helper
+   app layout; do not flatten its resources into the outer app's `Frameworks`
+   directory. Sign nested libraries before the helper app, and the helper app
+   before the outer app. The launcher and helper use
+   `entitlements-mas-sidecar.plist` (sandbox + inherit); the outer app uses
+   `entitlements-mas.plist` (including network client/server permissions).
+3. After final signing, run the sandbox-aware check below. It must succeed
+   **before** packaging/upload. `codesign --verify --deep --strict` is also
+   required, but does not prove that the backend can start.
+4. Verify WSJT-X UDP reception and a live aircraft feed from a sandboxed launch.
+   A simulated WSJT-X peer must identify itself as WSJT-X or JTDX; unrelated
+   application IDs are deliberately ignored. The automated smoke check only
+   exercises startup and `get_status`, not these network paths.
+5. After Apple processes the upload, validate the installed TestFlight build's
+   WSJT-X connection and NET/aircraft-feed connectivity. A successful Developer
+   ID build, CI run, or Apple upload is not a substitute for this check.
+
+```bash
+python scripts/verify_macos_sidecar.py "/path/to/AirWSJT-X.app" \
+  --identity "<signing identity used for the app>"
+```
+
+This macOS-only check requires Xcode command-line tools and an available signing
+identity. It copies the final app, preserves the packaged helper, and replaces
+the copied main executable with a native sandboxed test parent. The parent uses
+sandbox and network entitlements without application-ID/keychain entitlements.
+It does not validate Apple receipts or Keychain restoration.
+
+Keep MAS packaging changes confined to the TestFlight workflow and MAS config;
+ordinary desktop releases and mobile use different packaging paths.
+
+#### Diagnosing simultaneous WSJT-X and NET disconnection
+
+Check native stderr and whether the sidecar starts before changing network
+settings. `Failed to initialize sync semaphore!` / `semctl: Operation not
+permitted` identifies the onefile/App Sandbox startup failure. Library-validation
+errors about different Team IDs indicate incorrectly signed embedded libraries;
+re-signing only the outer executable is insufficient.
+
+In 0.3.22, build 17 fixed embedded-library signing but still hit the semaphore
+failure. Build 18 replaced onefile packaging and was confirmed working in the
+installed TestFlight app. Pre-Sky Dome 0.3.21 build 15 reproduced the same
+semaphore failure under the sandbox probe; the Sky Dome integration did not
+change networking or TestFlight packaging.
+
 ## Guidelines
 
 - **Keep it focused.** Each PR should address one thing — a bug fix, a feature, or a refactor. Not all three.
