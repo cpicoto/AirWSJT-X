@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Windows sidecar packaging uses the OS-supplied Universal C Runtime instead of extracting `ucrtbase.dll` and UCRT forwarders, avoiding the reported Application Control `Bad Image` error (`0xc0e90002`). Python and Visual C++ runtimes remain bundled, with UPX compression and stripping disabled.
+
 ## 0.3.23
 
 ### Added

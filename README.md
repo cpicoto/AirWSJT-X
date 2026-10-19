@@ -123,10 +123,15 @@ and `.github/workflows/macos-testflight.yml`.
 
 ```bash
 npm ci
-pip install pyinstaller
-pyinstaller --onefile --name airwsjtx_bridge --distpath src-tauri/binaries --paths . sidecar/airwsjtx_bridge.py
+pip install pyinstaller certifi
+python -m PyInstaller --noconfirm --clean --distpath src-tauri/binaries sidecar/airwsjtx_bridge.spec
 npx tauri build
 ```
+
+Use the checked-in spec for desktop packaging. Windows 10+ supplies the Universal
+C Runtime, so Windows bundles exclude `ucrtbase.dll` and `api-ms-win-crt-*.dll`
+while retaining the Python and Visual C++ runtimes. UPX compression and stripping
+are disabled to preserve the collected DLLs.
 
 ### Android
 
@@ -189,6 +194,14 @@ both services; update older affected builds through TestFlight. If the problem
 persists, report the version/build number and native sidecar startup errors.
 See [diagnostic guidance](CONTRIBUTING.md#diagnosing-simultaneous-wsjtx-and-net-disconnection)
 before changing firewall or aircraft-account settings.
+
+### Windows "Bad Image" error with `ucrtbase.dll` and `0xc0e90002`?
+
+This status means Windows Application Control blocked the extracted DLL, not
+necessarily that the CPU architecture is wrong. Rebuild with the checked-in
+sidecar spec, or install a release containing the packaging fix; do not disable
+Windows security or download replacement system DLLs. Both the x64 and native
+ARM64 Windows sidecars use this packaging policy.
 
 ### Is AirWSJT-X safe for airplanes?
 
