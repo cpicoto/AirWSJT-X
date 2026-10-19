@@ -162,7 +162,7 @@ For a local build, use Windows 11 ARM64, native ARM64 Python/Node.js, and Visual
 npm ci
 python -m pip install pyinstaller certifi
 python -m unittest discover -s tests -v
-python -m PyInstaller --noconfirm --onefile --name airwsjtx_bridge --distpath src-tauri\binaries --paths . sidecar\airwsjtx_bridge.py
+python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
 Move-Item -Force src-tauri\binaries\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
 rustup target add aarch64-pc-windows-msvc
 npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json

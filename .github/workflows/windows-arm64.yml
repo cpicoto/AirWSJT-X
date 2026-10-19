@@ -18,6 +18,7 @@ on:
       - "src-tauri/**"
       - "scripts/**"
       - "tests/test_windows_packaging.py"
+      - "tests/test_sidecar_packaging.py"
       - "package*.json"
       - "vite.config.*"
       - "tsconfig*.json"
@@ -77,9 +78,14 @@ jobs:
         run: |
           python -m pip install pyinstaller certifi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m PyInstaller --noconfirm --onefile --name airwsjtx_bridge --distpath src-tauri\binaries --paths . sidecar\airwsjtx_bridge.py
+          python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item src-tauri\binaries\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+
+      - name: Verify Windows runtime packaging
+        env:
+          AIRWSJTX_PACKAGED_SIDECAR: src-tauri/binaries/airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+        run: python -m unittest tests.test_sidecar_packaging -v
 
       - name: Build ARM64 NSIS setup
         run: npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json

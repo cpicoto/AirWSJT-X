@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
 import runpy
-import subprocess
-import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+from scripts.verify_windows_arm64 import check_sidecar
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -87,23 +86,24 @@ class SidecarSpecTests(unittest.TestCase):
         self.assertFalse(build_exe.call_args.kwargs["upx"])
 
     def test_desktop_builds_use_the_shared_spec(self) -> None:
-        for workflow in ("release.yml", "test.yml"):
+        for workflow in ("release.yml", "windows-arm64.yml", "test.yml"):
             with self.subTest(workflow=workflow):
                 text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text(
                     encoding="utf-8"
                 )
-                self.assertIn("sidecar/airwsjtx_bridge.spec", text)
-                self.assertNotIn("pyinstaller --onefile", text)
+                self.assertIn("sidecar/airwsjtx_bridge.spec", text.replace("\\", "/"))
+                self.assertNotIn("pyinstaller --onefile", text.lower())
 
     def test_windows_ci_and_releases_verify_the_frozen_binary(self) -> None:
-        for workflow in ("release.yml", "test.yml"):
+        for workflow in ("release.yml", "windows-arm64.yml", "test.yml"):
             with self.subTest(workflow=workflow):
                 text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text(
                     encoding="utf-8"
                 )
-                self.assertIn(
-                    "AIRWSJTX_PACKAGED_SIDECAR: src-tauri/binaries/airwsjtx_bridge.exe",
+                self.assertRegex(
                     text,
+                    r"AIRWSJTX_PACKAGED_SIDECAR: src-tauri/binaries/"
+                    r"airwsjtx_bridge(?:-aarch64-pc-windows-msvc)?\.exe",
                 )
                 self.assertIn("python -m unittest tests.test_sidecar_packaging -v", text)
 
@@ -130,31 +130,7 @@ class FrozenSidecarTests(unittest.TestCase):
         self.assertIn("cacert.pem", names)
 
     def test_frozen_bridge_replies_from_outside_the_checkout(self) -> None:
-        request = {"id": "packaging-smoke", "method": "get_status", "params": {}}
-        with tempfile.TemporaryDirectory() as directory:
-            env = {key: value for key, value in os.environ.items() if not key.startswith("PYTHON")}
-            env.update(TEMP=directory, TMP=directory)
-            result = subprocess.run(
-                [str(self.binary)],
-                input=json.dumps(request) + "\n",
-                capture_output=True,
-                text=True,
-                cwd=directory,
-                env=env,
-                timeout=30,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        replies = [
-            json.loads(line)
-            for line in result.stdout.splitlines()
-            if line.strip()
-        ]
-        responses = [reply for reply in replies if reply.get("id") == request["id"]]
-        self.assertEqual(len(responses), 1, result.stdout)
-        response = responses[0]
-        self.assertTrue(response.get("ok"), response)
-        self.assertEqual(response["result"]["state"], "idle")
-        self.assertFalse(response["result"]["wsjtx"]["ptt_enabled"])
+        check_sidecar(self.binary)
 
 
 if __name__ == "__main__":
