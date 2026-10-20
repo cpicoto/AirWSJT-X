@@ -152,7 +152,8 @@ configuration when packaging (for ARM64, use the dedicated commands below):
 npm ci
 python -m pip install pyinstaller certifi
 python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
-Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-x86_64-pc-windows-msvc.exe
+Move-Item -Force src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-x86_64-pc-windows-msvc.exe
+if (Test-Path -LiteralPath src-tauri\binaries\airwsjtx_bridge-runtime) { Remove-Item -LiteralPath src-tauri\binaries\airwsjtx_bridge-runtime -Recurse -Force }
 Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
 npx tauri build --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-desktop.conf.json
 ```
@@ -192,7 +193,8 @@ npm ci
 python -m pip install pyinstaller certifi
 python -m unittest discover -s tests -v
 python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
-Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+Move-Item -Force src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+if (Test-Path -LiteralPath src-tauri\binaries\airwsjtx_bridge-runtime) { Remove-Item -LiteralPath src-tauri\binaries\airwsjtx_bridge-runtime -Recurse -Force }
 Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
 rustup target add aarch64-pc-windows-msvc
 npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json

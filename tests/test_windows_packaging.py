@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -97,6 +99,54 @@ class ReleaseVersionTests(unittest.TestCase):
 
 
 class WindowsWorkflowTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows build commands require PowerShell")
+    def test_documented_rebuilds_replace_generated_bridge_and_runtime(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        blocks = [
+            block for block in re.findall(r"```powershell\n(.*?)```", readme, re.DOTALL)
+            if "sidecar\\airwsjtx_bridge.spec" in block
+        ]
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            target = (
+                "aarch64-pc-windows-msvc"
+                if "airwsjtx_bridge-aarch64" in block
+                else "x86_64-pc-windows-msvc"
+            )
+            commands = "\n".join(
+                line for line in block.splitlines()
+                if line.startswith(("Move-Item", "if (Test-Path"))
+            )
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                binaries = Path(directory) / "src-tauri" / "binaries"
+                binaries.mkdir(parents=True)
+                executable = binaries / f"airwsjtx_bridge-{target}.exe"
+                executable.write_text("old bridge", encoding="utf-8")
+                runtime = binaries / "airwsjtx_bridge-runtime"
+                runtime.mkdir()
+                (runtime / "stale.dll").write_text("old runtime", encoding="utf-8")
+                unrelated = binaries / "keep.txt"
+                unrelated.write_text("unrelated output", encoding="utf-8")
+                for version in ("first rebuild", "second rebuild"):
+                    source = binaries / "airwsjtx_bridge"
+                    source_runtime = source / "airwsjtx_bridge-runtime"
+                    source_runtime.mkdir(parents=True)
+                    (source / "airwsjtx_bridge.exe").write_text(version, encoding="utf-8")
+                    (source_runtime / "python312.dll").write_text(version, encoding="utf-8")
+                    result = subprocess.run(
+                        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                         "$ErrorActionPreference = 'Stop';\n" + commands],
+                        cwd=directory,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(executable.read_text(encoding="utf-8"), version)
+                    self.assertEqual((runtime / "python312.dll").read_text(encoding="utf-8"), version)
+                    self.assertEqual(sorted(path.name for path in runtime.iterdir()), ["python312.dll"])
+                    self.assertEqual(unrelated.read_text(encoding="utf-8"), "unrelated output")
+
     def test_windows_installs_runtime_next_to_the_sidecar(self) -> None:
         config = json.loads((ROOT / "src-tauri" / "tauri.windows-desktop.conf.json").read_text(encoding="utf-8"))
         self.assertEqual(config["bundle"]["resources"], {

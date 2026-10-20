@@ -26,6 +26,8 @@ both x64 and ARM64 installers. The bridge loads Python from the installed direct
 temporary `_MEI...` extraction directory that Application Control may block.
 Keep the system-provided UCRT and preserve signatures on Python/VC/TLS libraries.
 Do not disable security policies to work around startup errors.
+For repeat builds, replace the generated executable and remove the previous
+generated runtime directory before staging its replacement, as shown in README.
 
 After building, set `AIRWSJTX_PACKAGED_SIDECAR` to the frozen executable and run
 `python -m unittest tests.test_sidecar_packaging -v`. These checks inspect the
