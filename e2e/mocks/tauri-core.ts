@@ -13,6 +13,7 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
   }),
   set_station_calls: () => null,
   set_my_station_override: p => ({ callsign: p.callsign, grid: p.grid, altitude_m: p.altitude_m ?? 0 }),
+  set_dx_altitude: p => ({ altitude_m: p.altitude_m }),
   airscout_set_stations: () => null,
   airscout_apply_filters: () => null,
   airscout_get_sources: () => ({
@@ -46,7 +47,9 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
 
 export async function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   if (cmd === "plugin:shell|open") return;
-  if (cmd === "fetch_remote_db") return "[]";
+  if (cmd === "fetch_remote_db") {
+    return JSON.stringify((window as unknown as Record<string, unknown>).__mockRemoteDb ?? []);
+  }
   if (cmd === "get_source_rate_limit_status") {
     return (window as unknown as Record<string, unknown>).__mockQuotas ?? {};
   }
@@ -112,12 +115,20 @@ export async function invoke(cmd: string, args?: Record<string, unknown>): Promi
       method: string;
       params: Record<string, unknown>;
     };
+    const mock = window as unknown as {
+      __mockRpcRequests?: typeof msg[];
+      __mockRpcErrors?: Record<string, string>;
+    };
+    (mock.__mockRpcRequests ??= []).push(msg);
+    const error = mock.__mockRpcErrors?.[msg.method];
     const handler = RPC_RESPONSES[msg.method];
-    if (handler) {
-      const result = handler(msg.params ?? {});
+    if (handler || error) {
+      const result = error ? undefined : handler(msg.params ?? {});
       setTimeout(() => {
         const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-        if (emit) emit("sidecar-message", JSON.stringify({ id: msg.id, ok: true, result }));
+        if (emit) emit("sidecar-message", JSON.stringify(error
+          ? { id: msg.id, ok: false, error }
+          : { id: msg.id, ok: true, result }));
       }, 10);
     }
     return;

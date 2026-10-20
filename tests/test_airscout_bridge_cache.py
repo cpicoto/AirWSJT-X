@@ -10,6 +10,42 @@ from sidecar import airwsjtx_bridge
 
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
+    def test_station_altitude_rpcs_reach_all_scatter_geometry_paths(self) -> None:
+        from airwsjtx.supervisor import AirWSJTXSupervisor
+
+        ac = Aircraft(
+            icao24="abc123", callsign="TEST1", lat=48.5, lon=-123,
+            altitude_m=10000, velocity_ms=200, heading_deg=0,
+            vertical_rate_ms=0, on_ground=False,
+        )
+        with patch.multiple(airwsjtx_bridge, _station_a_locator="CN87", _station_b_locator="CN89",
+                            _my_call_override=None, _my_grid_override=None, _station_a_call=None,
+                            _station_a_alt_m=0.0, _station_b_alt_m=0.0,
+                            _locked_aircraft_id=None, _lock_score=0.0, _rotator=None,
+                            _wsjtx_band_mhz=None, _wsjtx_freq_hz=None,
+                            supervisor=AirWSJTXSupervisor()), \
+                patch.object(airwsjtx_bridge, "_start_configured_airscout_feed"), \
+                patch.object(airwsjtx_bridge, "_emit"), \
+                patch.object(airwsjtx_bridge, "_aircraft_matches_filters", return_value=True), \
+                patch.object(airwsjtx_bridge, "scatter_geometry",
+                             wraps=airwsjtx_bridge.scatter_geometry) as geometry:
+            airwsjtx_bridge.handle({
+                "id": "my", "method": "set_my_station_override",
+                "params": {"grid": "CN87", "altitude_m": 1250},
+            })
+            airwsjtx_bridge.handle({
+                "id": "dx", "method": "set_dx_altitude", "params": {"altitude_m": 850},
+            })
+            airwsjtx_bridge._replace_aircraft_cache([ac])
+            self.assertEqual(len(airwsjtx_bridge._get_scatter_aircraft()), 1)
+            self.assertEqual(len(airwsjtx_bridge._get_scatter_aircraft_with_total()[0]), 1)
+            self.assertEqual(airwsjtx_bridge._select_auto_lock_candidate([ac]), ac)
+            self.assertIsNotNone(airwsjtx_bridge._do_lock(ac.icao24))
+            airwsjtx_bridge._update_rotator_for_locked([ac])
+            self.assertEqual(geometry.call_count, 5)
+            for call in geometry.call_args_list:
+                self.assertEqual(call.args[-2:], (1250.0, 850.0))
+
     def test_aircraft_update_retains_locked_aircraft_beyond_payload_limit(self) -> None:
         ranked = [
             {"icao24": f"ac{i}", "lat": 47.5, "lon": -122.4, "altitude_ft": 33000,
