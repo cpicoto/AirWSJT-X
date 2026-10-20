@@ -19,14 +19,36 @@ if sys.platform == "win32":
     ]
 
 pyz = PYZ(analysis.pure)
-exe = EXE(
-    pyz,
-    analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
-    [],
-    name="airwsjtx_bridge",
-    console=True,
-    strip=False,
-    upx=False,
-)
+if sys.platform == "win32":
+    # Install the runtime beside the bridge instead of executing DLLs from _MEI temp paths.
+    exe = EXE(
+        pyz,
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        contents_directory="airwsjtx_bridge-runtime",
+        name="airwsjtx_bridge",
+        console=True,
+        strip=False,
+        upx=False,
+    )
+    collect = COLLECT(
+        exe,
+        analysis.binaries,
+        analysis.datas,
+        name="airwsjtx_bridge",
+        strip=False,
+        upx=False,
+    )
+else:
+    exe = EXE(
+        pyz,
+        analysis.scripts,
+        analysis.binaries,
+        analysis.datas,
+        [],
+        name="airwsjtx_bridge",
+        console=True,
+        strip=False,
+        upx=False,
+    )

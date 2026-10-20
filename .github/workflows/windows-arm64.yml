@@ -80,7 +80,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Move-Item src-tauri\binaries\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+          Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+          Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
 
       - name: Verify Windows runtime packaging
         env:
@@ -88,10 +89,10 @@ jobs:
         run: python -m unittest tests.test_sidecar_packaging -v
 
       - name: Build ARM64 NSIS setup
-        run: npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json
+        run: npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json
 
       - name: Verify native executables and packaged sidecar protocol
-        run: python scripts\verify_windows_arm64.py --app src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx.exe --sidecar src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+        run: python scripts\verify_windows_arm64.py --app src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx.exe --sidecar src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx_bridge.exe
 
       - name: Upload Windows ARM64 setup
         uses: actions/upload-artifact@v7

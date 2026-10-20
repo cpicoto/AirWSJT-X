@@ -17,6 +17,26 @@ Thanks for your interest in contributing to AirWSJT-X! This project is built by 
 
 See [README.md](README.md#building-from-source) for build instructions.
 
+### Windows runtime packaging
+
+Windows desktop builds use the shared PyInstaller spec in onedir mode. Install
+`airwsjtx_bridge.exe` and its `airwsjtx_bridge-runtime` directory together; the
+`tauri.windows-desktop.conf.json` Tauri configuration includes that directory in
+both x64 and ARM64 installers. The bridge loads Python from the installed directory, not from a
+temporary `_MEI...` extraction directory that Application Control may block.
+Keep the system-provided UCRT and preserve signatures on Python/VC/TLS libraries.
+Do not disable security policies to work around startup errors.
+For repeat builds, replace the generated executable and remove the previous
+generated runtime directory before staging its replacement, as shown in README.
+
+After building, set `AIRWSJTX_PACKAGED_SIDECAR` to the frozen executable and run
+`python -m unittest tests.test_sidecar_packaging -v`. These checks inspect the
+runtime layout and launch both the original and a relocated installation from
+outside the checkout. ARM64 builds additionally verify the bridge copied into
+Tauri's final release directory before uploading the installer. Validate the
+installed package on the affected Windows device too; a CI runner may not have
+the same Application Control policies.
+
 ### macOS TestFlight packaging
 
 Import the Apple Distribution certificate before running PyInstaller, and pass

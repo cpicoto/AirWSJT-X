@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import runpy
+import shutil
+import tempfile
 import unittest
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -37,7 +39,7 @@ class SidecarSpecTests(unittest.TestCase):
             ("api-ms-win-crt-not-a-dll.txt", "data/example.txt", "DATA"),
         ]
 
-    def run_spec(self, platform: str) -> tuple[SimpleNamespace, Mock, Mock]:
+    def run_spec(self, platform: str) -> tuple[SimpleNamespace, Mock, Mock, Mock]:
         analysis = SimpleNamespace(
             binaries=self.system_runtime + self.application_runtime,
             pure=["pure-python"],
@@ -46,6 +48,7 @@ class SidecarSpecTests(unittest.TestCase):
         )
         analyze = Mock(return_value=analysis)
         build_exe = Mock()
+        collect = Mock()
         with patch("sys.platform", platform):
             runpy.run_path(
                 str(_SPEC),
@@ -54,27 +57,40 @@ class SidecarSpecTests(unittest.TestCase):
                     "Analysis": analyze,
                     "PYZ": Mock(return_value="python-archive"),
                     "EXE": build_exe,
+                    "COLLECT": collect,
                 },
             )
-        return analysis, analyze, build_exe
+        return analysis, analyze, build_exe, collect
 
     def test_windows_uses_system_ucrt_without_removing_python_or_vc_runtime(self) -> None:
-        analysis, _, build_exe = self.run_spec("win32")
+        analysis, _, build_exe, collect = self.run_spec("win32")
         self.assertEqual(analysis.binaries, self.application_runtime)
-        self.assertEqual(build_exe.call_args.args[2], self.application_runtime)
-        self.assertEqual(build_exe.call_args.args[3], analysis.datas)
+        self.assertEqual(build_exe.call_args.args[2], [])
+        self.assertTrue(build_exe.call_args.kwargs["exclude_binaries"])
+        self.assertEqual(
+            build_exe.call_args.kwargs["contents_directory"], "airwsjtx_bridge-runtime",
+        )
+        self.assertEqual(collect.call_args.args, (
+            build_exe.return_value, self.application_runtime, analysis.datas,
+        ))
+        self.assertEqual(collect.call_args.kwargs["name"], "airwsjtx_bridge")
+        self.assertFalse(collect.call_args.kwargs["strip"])
+        self.assertFalse(collect.call_args.kwargs["upx"])
 
     def test_other_platforms_keep_all_collected_binaries(self) -> None:
         for platform in ("darwin", "linux"):
             with self.subTest(platform=platform):
-                analysis, _, _ = self.run_spec(platform)
+                analysis, _, build_exe, collect = self.run_spec(platform)
                 self.assertEqual(
                     analysis.binaries,
                     self.system_runtime + self.application_runtime,
                 )
+                self.assertEqual(build_exe.call_args.args[2], analysis.binaries)
+                self.assertEqual(build_exe.call_args.args[3], analysis.datas)
+                collect.assert_not_called()
 
     def test_spec_resolves_project_paths_and_preserves_console_protocol(self) -> None:
-        _, analyze, build_exe = self.run_spec("win32")
+        _, analyze, build_exe, _ = self.run_spec("win32")
         self.assertEqual(
             analyze.call_args.args[0],
             [str(_REPO_ROOT / "sidecar" / "airwsjtx_bridge.py")],
@@ -114,11 +130,17 @@ class FrozenSidecarTests(unittest.TestCase):
         self.binary = Path(_PACKAGED_SIDECAR).resolve()
         self.assertTrue(self.binary.is_file(), f"Missing frozen sidecar: {self.binary}")
 
-    def test_archive_uses_system_ucrt_and_keeps_required_runtime(self) -> None:
+    def test_runtime_is_installed_not_extracted_and_keeps_required_libraries(self) -> None:
         from PyInstaller.archive.readers import CArchiveReader
 
         archive = CArchiveReader(str(self.binary))
-        names = {PureWindowsPath(name).name.lower() for name in archive.toc}
+        self.assertFalse(
+            any(name.lower().endswith((".dll", ".pyd")) for name in archive.toc),
+            "Windows runtime libraries must not be extracted from a onefile archive",
+        )
+        runtime = self.binary.parent / "airwsjtx_bridge-runtime"
+        self.assertTrue(runtime.is_dir(), f"Missing installed runtime: {runtime}")
+        names = {path.name.lower() for path in runtime.rglob("*") if path.is_file()}
         self.assertNotIn("ucrtbase.dll", names)
         self.assertFalse(
             any(name.startswith("api-ms-win-crt-") and name.endswith(".dll") for name in names),
@@ -131,6 +153,17 @@ class FrozenSidecarTests(unittest.TestCase):
 
     def test_frozen_bridge_replies_from_outside_the_checkout(self) -> None:
         check_sidecar(self.binary)
+
+    def test_relocated_installation_with_spaces_keeps_runtime_and_protocol(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="AirWSJT-X installed ") as directory:
+            installation = Path(directory)
+            binary = installation / self.binary.name
+            shutil.copy2(self.binary, binary)
+            shutil.copytree(
+                self.binary.parent / "airwsjtx_bridge-runtime",
+                installation / "airwsjtx_bridge-runtime",
+            )
+            check_sidecar(binary)
 
 
 if __name__ == "__main__":

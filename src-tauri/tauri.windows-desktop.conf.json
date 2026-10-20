@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "binaries/airwsjtx_bridge-runtime/": "airwsjtx_bridge-runtime/"
+    }
+  }
+}
