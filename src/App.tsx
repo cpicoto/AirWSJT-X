@@ -547,6 +547,13 @@ export default function App() {
     localStorage.setItem(ROTATOR_SPEECH_INTERVAL_KEY, String(rotatorSpeechIntervalSec));
   }, [rotatorSpeechIntervalSec]);
 
+  // In Auto mode, keep the last locked plane's Az/El visible (greyed) after lock is lost.
+  const lastPlaneTargetRef = useRef<{ az: number; el: number } | null>(null);
+  const planeTargetValid = !!lockedPlane && Number.isFinite(lockedPlane.az_a) && Number.isFinite(lockedPlane.el_a);
+  if (lockedPlane && planeTargetValid) lastPlaneTargetRef.current = { az: lockedPlane.az_a, el: lockedPlane.el_a };
+  const autoTargetInvalid = uiMode !== "manual" && !planeTargetValid;
+  const lastPlaneTarget = lastPlaneTargetRef.current;
+
   const manualSpeechTarget = uiMode !== "manual" && lockedPlane
     && Number.isFinite(lockedPlane.az_a)
     && Number.isFinite(lockedPlane.el_a)
@@ -558,7 +565,9 @@ export default function App() {
     );
 
   // Auto mode with the rotor off/disconnected still announces the target.
-  const rotatorSpeechSource = !(rotatorControlEnabled && rotatorConnected)
+  const rotatorSpeechSource = autoTargetInvalid
+    ? null
+    : !(rotatorControlEnabled && rotatorConnected)
     ? (
       uiMode !== "manual" && manualSpeechTarget
         ? { ...manualSpeechTarget, source: "manual" as const, announceFirstUpdate: true }
@@ -622,6 +631,16 @@ export default function App() {
     rotatorSpeechIntervalSec,
     speechRecheck,
   ]);
+
+  const prevAutoLockedRef = useRef(false);
+  useEffect(() => {
+    const autoLocked = uiMode !== "manual" && planeTargetValid;
+    if (prevAutoLockedRef.current && uiMode !== "manual" && !planeTargetValid
+      && rotatorSpeechEnabled && isSpeechSupported()) {
+      speak("Lost plane lock");
+    }
+    prevAutoLockedRef.current = autoLocked;
+  }, [uiMode, planeTargetValid, rotatorSpeechEnabled]);
 
   const [controlWsjtx, setControlWsjtx] = useState<boolean>(() => localStorage.getItem("airwsjtx.controlWsjtx") === "1");
   useEffect(() => { localStorage.setItem("airwsjtx.controlWsjtx", controlWsjtx ? "1" : "0"); }, [controlWsjtx]);
@@ -861,13 +880,15 @@ export default function App() {
     });
   }
 
-  const currentAz = lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
-  const currentEl = lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
+  const currentAz = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az
+    : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
+  const currentEl = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el
+    : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
   const portableFontPx = Math.max(PORTABLE_MIN_FONT_PX, PORTABLE_BASE_FONT_PX * portableScale / 100);
   const rotorOn = rotatorControlEnabled && rotatorConnected;
   const lastSpeechPreviewAt = useRef(0);
   function previewSpeech() {
-    if (!isSpeechSupported() || !rotatorSpeechEnabled || !(rotorOn || uiMode !== "manual")) return;
+    if (!isSpeechSupported() || !rotatorSpeechEnabled || autoTargetInvalid || !(rotorOn || uiMode !== "manual")) return;
     const now = Date.now();
     if (now - lastSpeechPreviewAt.current < 1200) return;
     lastSpeechPreviewAt.current = now;
@@ -883,11 +904,11 @@ export default function App() {
     <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
       <div className="portable-readout">
         <span className="portable-label">AZ</span>
-        <span className="portable-value">{Number.isFinite(currentAz) ? currentAz.toFixed(1) : "--.-"}°</span>
+        <span className="portable-value" style={autoTargetInvalid ? { opacity: 0.35 } : undefined}>{Number.isFinite(currentAz) ? currentAz.toFixed(1) : "--.-"}°</span>
       </div>
       <div className="portable-readout">
         <span className="portable-label">EL</span>
-        <span className="portable-value">{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
+        <span className="portable-value" style={autoTargetInvalid ? { opacity: 0.35 } : undefined}>{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
       </div>
     </div>
   </div>
@@ -1405,8 +1426,9 @@ export default function App() {
             </div>
             <RotatorPanel
               currentAz={rotatorAz} currentEl={rotatorEl}
-              targetAz={lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : rotatorTargetAz}
-              targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : rotatorTargetEl}
+              targetAz={lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az : rotatorTargetAz}
+              targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el : rotatorTargetEl}
+              targetInvalid={autoTargetInvalid}
               connected={rotatorConnected}
               dxAz={dxBearing}
               dxLabel={dxCall}
