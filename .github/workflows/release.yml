@@ -84,6 +84,12 @@ jobs:
           pip install pyinstaller certifi
           python -m PyInstaller --noconfirm --clean --distpath src-tauri/binaries sidecar/airwsjtx_bridge.spec
 
+      - name: Stage installed Windows sidecar runtime
+        if: runner.os == 'Windows'
+        run: |
+          Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge.exe
+          Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
+
       - name: Verify packaged Windows sidecar
         if: runner.os == 'Windows'
         env:
@@ -161,7 +167,7 @@ jobs:
             - **Android:** `.apk` (from mobile build workflow)
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ runner.os == 'Windows' && ' --config src-tauri/tauri.windows-desktop.conf.json' || '' }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
 
   windows-arm64:
     needs: python-tests

@@ -130,6 +130,8 @@ instead of `--onefile`; follow the
 [TestFlight packaging guide and release checks](CONTRIBUTING.md#macos-testflight-packaging)
 and `.github/workflows/macos-testflight.yml`.
 
+On macOS and Linux:
+
 ```bash
 npm ci
 pip install pyinstaller certifi
@@ -141,6 +143,24 @@ Use the checked-in spec for desktop packaging. Windows 10+ supplies the Universa
 C Runtime, so Windows bundles exclude `ucrtbase.dll` and `api-ms-win-crt-*.dll`
 while retaining the Python and Visual C++ runtimes. UPX compression and stripping
 are disabled to preserve the collected DLLs.
+
+Windows uses an installed-directory runtime rather than extracting Python DLLs
+to temporary `_MEI...` paths. Stage the output and include the Windows desktop
+configuration when packaging (for ARM64, use the dedicated commands below):
+
+```powershell
+npm ci
+python -m pip install pyinstaller certifi
+python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
+Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-x86_64-pc-windows-msvc.exe
+Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
+npx tauri build --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-desktop.conf.json
+```
+
+Keep `airwsjtx_bridge-runtime` next to the installed bridge executable. The
+Windows desktop configuration includes it in the installer; do not distribute
+the executable alone. Ordinary source-only development and Rust tests do not
+need this frozen-runtime configuration.
 
 ### Android
 
@@ -172,10 +192,11 @@ npm ci
 python -m pip install pyinstaller certifi
 python -m unittest discover -s tests -v
 python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
-Move-Item -Force src-tauri\binaries\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
 rustup target add aarch64-pc-windows-msvc
-npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json
-python scripts\verify_windows_arm64.py --app src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx.exe --sidecar src-tauri\binaries\airwsjtx_bridge-aarch64-pc-windows-msvc.exe
+npx tauri build --ci --target aarch64-pc-windows-msvc --config src-tauri\tauri.desktop.conf.json --config src-tauri\tauri.windows-desktop.conf.json --config src-tauri\tauri.windows-arm64.conf.json
+python scripts\verify_windows_arm64.py --app src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx.exe --sidecar src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx_bridge.exe
 ```
 
 The setup is under `src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis`. ARM64 uses NSIS, not WiX/MSI. The NSIS installer bootstrapper may run under Windows emulation; the installed application and Python sidecar are native ARM64. This build does not change the architecture requirements of separately installed WSJT-X or rotctld.
@@ -204,13 +225,14 @@ persists, report the version/build number and native sidecar startup errors.
 See [diagnostic guidance](CONTRIBUTING.md#diagnosing-simultaneous-wsjtx-and-net-disconnection)
 before changing firewall or aircraft-account settings.
 
-### Windows "Bad Image" error with `ucrtbase.dll` and `0xc0e90002`?
+### Windows "Bad Image" error with `python312.dll` / `ucrtbase.dll` and `0xc0e90002`?
 
 This status means Windows Application Control blocked the extracted DLL, not
 necessarily that the CPU architecture is wrong. Rebuild with the checked-in
 sidecar spec, or install a release containing the packaging fix; do not disable
 Windows security or download replacement system DLLs. Both the x64 and native
-ARM64 Windows sidecars use this packaging policy.
+ARM64 Windows sidecars use the installed runtime layout described above, avoiding
+temporary Python DLL extraction while using the OS-provided UCRT.
 
 ### Is AirWSJT-X safe for airplanes?
 

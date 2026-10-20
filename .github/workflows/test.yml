@@ -26,6 +26,9 @@ jobs:
         run: |
           python -m pip install pyinstaller certifi
           python -m PyInstaller --noconfirm --clean --distpath src-tauri/binaries sidecar/airwsjtx_bridge.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge.exe
+          Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime src-tauri\binaries\airwsjtx_bridge-runtime
 
       - name: Verify packaged Windows sidecar
         if: runner.os == 'Windows'

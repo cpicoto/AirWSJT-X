@@ -97,6 +97,31 @@ class ReleaseVersionTests(unittest.TestCase):
 
 
 class WindowsWorkflowTests(unittest.TestCase):
+    def test_windows_installs_runtime_next_to_the_sidecar(self) -> None:
+        config = json.loads((ROOT / "src-tauri" / "tauri.windows-desktop.conf.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["bundle"]["resources"], {
+            "binaries/airwsjtx_bridge-runtime/": "airwsjtx_bridge-runtime/",
+        })
+        for name in ("windows-arm64.yml", "release.yml", "test.yml"):
+            workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    r"Move-Item src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge-runtime "
+                    r"src-tauri\binaries\airwsjtx_bridge-runtime",
+                    workflow,
+                )
+        workflow = (ROOT / ".github" / "workflows" / "windows-arm64.yml").read_text(encoding="utf-8")
+        self.assertIn(r"--config src-tauri\tauri.windows-desktop.conf.json", workflow)
+        self.assertIn(
+            r"--sidecar src-tauri\target\aarch64-pc-windows-msvc\release\airwsjtx_bridge.exe",
+            workflow,
+        )
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "runner.os == 'Windows' && ' --config src-tauri/tauri.windows-desktop.conf.json'",
+            release,
+        )
+
     def test_native_toolchain_and_payload_checks_are_required(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-arm64.yml").read_text(encoding="utf-8")
         for required in (
