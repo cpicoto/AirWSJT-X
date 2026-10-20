@@ -5,6 +5,8 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashMap;
 mod credentials;
+#[cfg(any(target_os = "linux", test))]
+mod native_speech;
 #[cfg(target_os = "android")]
 mod mobile_storage;
 #[cfg(any(mobile, test))]
@@ -25,6 +27,39 @@ async fn fetch_remote_db() -> Result<String, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
     resp.text().await.map_err(|e| e.to_string())
+}
+
+/// Linux fallback for WebKitGTK builds that lack the Web Speech API.
+/// Uses the first available of spd-say, espeak-ng or espeak.
+#[cfg(target_os = "linux")]
+static NATIVE_SPEECH: native_speech::NativeSpeech = native_speech::NativeSpeech::new();
+
+#[tauri::command]
+async fn speak_native(text: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let utterance = NATIVE_SPEECH.start(&text)?;
+        tauri::async_runtime::spawn_blocking(move || NATIVE_SPEECH.wait(utterance))
+            .await
+            .map_err(|e| format!("Cannot monitor native speech: {e}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = text;
+        Err("Native speech is only available on Linux".into())
+    }
+}
+
+#[tauri::command]
+async fn stop_native_speech() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        tauri::async_runtime::spawn_blocking(|| NATIVE_SPEECH.stop())
+            .await
+            .map_err(|e| format!("Cannot stop native speech: {e}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(())
 }
 
 pub struct SidecarState {
@@ -174,6 +209,8 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
             send_to_sidecar,
             fetch_remote_db,
+            speak_native,
+            stop_native_speech,
             credentials::get_source_credentials_status,
             credentials::save_source_credentials,
             credentials::set_source_poll_interval,
@@ -191,8 +228,18 @@ pub fn run() {
         mobile_dump1090::fetch_mobile_dump1090,
         mobile_dump1090::stop_mobile_dump1090,
     ]);
-    builder.run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    builder.build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            #[cfg(target_os = "linux")]
+            if let tauri::RunEvent::Exit = event {
+                if let Err(e) = NATIVE_SPEECH.stop() {
+                    eprintln!("Cannot stop native speech on exit: {e}");
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = event;
+        });
 }
 
 #[cfg(test)]

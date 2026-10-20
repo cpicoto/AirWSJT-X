@@ -82,10 +82,12 @@ _station_a_call: str | None = None
 _my_call_override: str | None = None
 _my_grid_override: str | None = None
 _station_a_alt_m: float = 0.0  # user-entered altitude of MY station above sea level
+_station_b_alt_m: float = 0.0  # user-entered altitude of DX station above sea level
 _wsjtx_de_call: str | None = None
 _wsjtx_de_grid: str | None = None
 _station_b_call: str | None = None
 _dx_grid_manual: bool = False
+_STATION_GRID_RE = re.compile(r"[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?")
 _manual_pointing: bool = False
 _rotator_control_enabled: bool = True
 
@@ -450,7 +452,7 @@ def handle(msg: dict) -> None:
             _station_a_locator = params.get("locator_a")
             _station_b_locator = params.get("locator_b")
             # A DX chosen in the app must not be clobbered by WSJT-X's DX grid.
-            _dx_grid_manual = bool(_station_b_locator)
+            _dx_grid_manual = bool(params.get("dx_local", bool(_station_b_locator)))
             _start_configured_airscout_feed(force_restart=True)
             _ok(id_, {"locator_a": _station_a_locator, "locator_b": _station_b_locator})
 
@@ -676,8 +678,7 @@ def handle(msg: dict) -> None:
             call = (params.get("callsign") or "").strip().upper() or None
             grid = (params.get("grid") or "").strip().upper() or None
             if grid:
-                import re
-                if not re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?", grid):
+                if not _STATION_GRID_RE.fullmatch(grid):
                     raise ValueError("MY grid must be a valid 4, 6, or 8 character Maidenhead locator")
             if call and (not any(c.isdigit() for c in call) or not any(c.isalpha() for c in call)
                          or not all(c.isascii() and (c.isalnum() or c == "/") for c in call)):
@@ -692,6 +693,15 @@ def handle(msg: dict) -> None:
             _station_a_locator = grid or _wsjtx_de_grid
             _start_configured_airscout_feed(force_restart=True)
             _ok(id_, {"callsign": call, "grid": grid, "altitude_m": alt_m})
+
+        elif method == "set_dx_altitude":
+            global _station_b_alt_m
+            alt_raw = params.get("altitude_m")
+            alt_m = 0.0 if alt_raw in (None, "") else float(alt_raw)
+            if not -500.0 <= alt_m <= 9000.0:
+                raise ValueError("DX altitude must be between -500 and 9000 metres")
+            _station_b_alt_m = alt_m
+            _ok(id_, {"altitude_m": alt_m})
 
         elif method == "set_station_calls":
             _station_a_call = params.get("call_a")
@@ -1000,6 +1010,7 @@ def _locked_aircraft_info(ac: Aircraft, geo: dict) -> dict:
         "callsign": ac.callsign or ac.icao24,
         "altitude_ft": round((ac.altitude_m or 0) * 3.28084),
         "range_a_km": geo["range_a_km"],
+        "range_b_km": geo.get("range_b_km"),
         "az_a": geo["az_a"],
         "el_a": geo["el_a"],
         "az_b": geo["az_b"],
@@ -1029,7 +1040,7 @@ def _do_lock(icao24: str) -> dict | None:
         return None
 
     # Compute scatter score
-    geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore
+    geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore
 
     # Build track (current pos + projections)
     track = build_track(ac, lat_a, lon_a, n_samples=6, sample_interval_s=15.0, station_alt_m=_station_a_alt_m)
@@ -1120,7 +1131,7 @@ def _select_auto_lock_candidate(aircraft: list[Aircraft]) -> Aircraft | None:
     for ac in aircraft:
         if not ac.has_position or not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
-        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore[arg-type]
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
         score = float(geo.get("scatter_score", 0.0))
         if score > best_score and score >= 0.05:
             best_score = score
@@ -1155,7 +1166,7 @@ def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
     try:
         lat_a, lon_a = locator_to_latlon(_station_a_locator)
         lat_b, lon_b = locator_to_latlon(_station_b_locator or _station_a_locator)
-        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore
     except Exception:
         return
 
@@ -1332,6 +1343,7 @@ def _get_scatter_aircraft() -> list[dict]:
             lat_b, lon_b,
             ac.lat, ac.lon, ac.altitude_m,  # type: ignore[arg-type]
             _station_a_alt_m,
+            _station_b_alt_m,
         )
         if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
@@ -1378,7 +1390,7 @@ def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
         if not ac.has_position:
             continue
         total += 1
-        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore[arg-type]
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
         if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
         results.append({
@@ -1435,7 +1447,10 @@ def _emit_aircraft_update() -> None:
 def _on_wsjtx_status(st: WSJTXStatus) -> None:
     global _station_a_locator, _station_b_locator, _station_a_call, _wsjtx_freq_hz, _wsjtx_band_mhz
     global _wsjtx_de_call, _wsjtx_de_grid
-    _wsjtx_de_call, _wsjtx_de_grid = st.de_call, st.de_grid
+    de_grid = (st.de_grid or "").strip().upper()
+    dx_grid = (st.dx_grid or "").strip().upper()
+    _wsjtx_de_call = st.de_call
+    _wsjtx_de_grid = de_grid if _STATION_GRID_RE.fullmatch(de_grid) else None
     # Capture frequency for supervisor begin_session
     if st.freq_hz:
         _wsjtx_freq_hz = st.freq_hz
@@ -1443,8 +1458,8 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
     # Auto-populate station A call + locator from WSJT-X de_call/de_grid
     if st.de_call and not _my_call_override:
         _station_a_call = st.de_call
-    if st.de_grid and not _my_grid_override and st.de_grid != _station_a_locator:
-        _station_a_locator = st.de_grid
+    if _wsjtx_de_grid and not _my_grid_override and _wsjtx_de_grid != _station_a_locator:
+        _station_a_locator = _wsjtx_de_grid
         with _source_status_lock:
             active_source = _active_source
         if active_source == "opensky":
@@ -1453,8 +1468,8 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
             _start_adsbexchange_feed()
         else:
             _start_configured_airscout_feed()
-    if st.dx_grid and not _dx_grid_manual and st.dx_grid != _station_b_locator:
-        _station_b_locator = st.dx_grid
+    if _STATION_GRID_RE.fullmatch(dx_grid) and not _dx_grid_manual and dx_grid != _station_b_locator:
+        _station_b_locator = dx_grid
         with _source_status_lock:
             active_source = _active_source
         if active_source == "opensky":

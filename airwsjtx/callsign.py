@@ -473,10 +473,35 @@ def _prefix_fallback(callsign: str) -> StationInfo | None:
 
 # ─── Public entry point ───────────────────────────────────────────────────────
 
+_CALL_SUFFIXES = {"P", "M", "MM", "AM", "QRP", "R", "A", "B"}
+
+
+def base_callsign(callsign: str) -> str:
+    """Strip portable/mobile markers: W7GLF/P, VE7/W7GLF, W7GLF/QRP -> the home callsign."""
+    parts = [p for p in callsign.strip().upper().split("/") if p]
+    if len(parts) < 2:
+        return parts[0] if parts else ""
+    rest = [p for p in parts if p not in _CALL_SUFFIXES and not (len(p) == 1 and p.isdigit())]
+    return max(rest, key=len) if rest else parts[0]
+
+
 def lookup(callsign: str) -> StationInfo:
+    """Look up a callsign, also trying its home callsign when it has a /P-style marker."""
+    call = callsign.strip().upper()
+    base = base_callsign(call)
+    result = _lookup_exact(call)
+    if base and base != call and result.source in ("not-found", "prefix-fallback"):
+        base_result = _lookup_exact(base)
+        if base_result.source not in ("not-found", "prefix-fallback") and base_result.grid:
+            return StationInfo(callsign=call, name=base_result.name, grid=base_result.grid,
+                               lat=base_result.lat, lon=base_result.lon,
+                               country=base_result.country, source=base_result.source)
+    return result
+
+
+def _lookup_exact(callsign: str) -> StationInfo:
     """Look up a callsign. Never raises — returns best-effort result."""
     call = callsign.strip().upper()
-
     # 1. Local downloaded DB
     _load_local_db()
     cached = _LOCAL_DB_CACHE.get(call)

@@ -164,7 +164,7 @@ test("selecting an aircraft shows one course that updates, switches and clears o
   await page.setViewportSize({ width: 900, height: 600 });
   const bounds = await dome.locator("svg").boundingBox();
   await dome.locator("svg").click({ position: {
-    x: bounds!.width * (0.5 + 96 / 430), y: bounds!.height * 0.5,
+    x: bounds!.width * (0.5 + 96 / 540), y: bounds!.height * 0.5,
   } });
   await expectSkyPointing(page, 90, 45);
   await dome.getByRole("button", { name: "Lock FLIGHTdef456", exact: true }).press("Enter");
@@ -232,10 +232,11 @@ test("Sky Dome controls remain accessible and remember visibility", async ({ pag
   const controls = page.getByRole("group", { name: "Sky Dome display controls" });
   const panel = page.getByRole("region", { name: "Sky Dome", exact: true });
   await expect(panel).toHaveCount(0);
-  await expect(controls.getByRole("button", { name: "Hide", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await controls.getByRole("button", { name: "Show", exact: true }).click();
+  await expect(controls.getByRole("button", { name: "Open", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await controls.getByRole("button", { name: "Open", exact: true }).click();
   await expect(panel).toBeVisible();
-  await expect(panel.locator("xpath=..")).toHaveClass(/display-panels/);
+  await expect(panel).toHaveClass(/skydome-float/);
+  expect(await panel.evaluate(el => getComputedStyle(el).position)).toBe("fixed");
   const dome = panel.locator("svg");
   for (const [elevation, radius] of [[22.5, 144], [45, 96], [67.5, 48]]) {
     await expect(dome.getByText(`${elevation}°`, { exact: true })).toBeVisible();
@@ -243,12 +244,12 @@ test("Sky Dome controls remain accessible and remember visibility", async ({ pag
   }
   await page.reload();
   await expect(panel).toBeVisible();
-  await expect(controls.getByRole("button", { name: "Show", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await controls.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect(controls.getByRole("button", { name: "Close", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await controls.getByRole("button", { name: "Close", exact: true }).click();
   await page.reload();
   await expect(panel).toHaveCount(0);
   await expect(controls).toBeVisible();
-  await expect(controls.getByRole("button", { name: "Hide", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(controls.getByRole("button", { name: "Open", exact: true })).toHaveAttribute("aria-pressed", "false");
 });
 
 for (const platform of [
@@ -281,10 +282,9 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await page.goto("/");
     await page.getByRole("group", { name: "Sky Dome display controls" })
-      .getByRole("button", { name: "Show", exact: true }).click();
+      .getByRole("button", { name: "Open", exact: true }).click();
     const azElControls = page.getByRole("group", { name: "Az / El display controls" });
-    await azElControls.getByRole("slider", { name: "Scale" }).fill("180");
-    for (const mode of ["Panel", "Overlay", "Hide"]) {
+    for (const mode of ["Open", "Close"]) {
       await azElControls.getByRole("button", { name: mode, exact: true }).click();
       const panel = await page.locator("#skydome-panel").boundingBox();
       const dome = await page.locator(".skydome-container svg").boundingBox();
@@ -294,17 +294,15 @@ for (const viewport of [
       expect(dome).not.toBeNull();
       expect(content).not.toBeNull();
       expect(footer).not.toBeNull();
-      expect(panel!.width).toBeGreaterThan(400);
-      expect(dome!.width).toBeCloseTo(dome!.height, 0);
+      expect(panel!.width).toBeGreaterThan(280);
+      expect(dome!.width / dome!.height).toBeCloseTo(540 / 430, 1);
       expect(dome!.x).toBeGreaterThanOrEqual(panel!.x);
       expect(dome!.x + dome!.width).toBeLessThanOrEqual(panel!.x + panel!.width);
       expect(dome!.y + dome!.height).toBeLessThanOrEqual(panel!.y + panel!.height);
+      expect(panel!.x + panel!.width).toBeLessThanOrEqual(viewport.width);
+      expect(panel!.y + panel!.height).toBeLessThanOrEqual(viewport.height);
       expect(content!.height).toBeGreaterThanOrEqual(160);
       expect(footer!.y + footer!.height).toBeLessThanOrEqual(viewport.height);
-      expect(await page.locator(".display-panels").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-      if (mode === "Panel") {
-        expect(await page.locator(".portable-panel").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-      }
     }
   });
 }
@@ -312,14 +310,14 @@ for (const viewport of [
 test("pointing uses SVG coordinates after resizing", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("group", { name: "Sky Dome display controls" })
-    .getByRole("button", { name: "Show", exact: true }).click();
+    .getByRole("button", { name: "Open", exact: true }).click();
   const dome = page.locator(".skydome-container svg");
   for (const viewport of [{ width: 1440, height: 900 }, { width: 900, height: 600 }]) {
     await page.setViewportSize(viewport);
     const bounds = await dome.boundingBox();
     expect(bounds).not.toBeNull();
     await dome.click({ position: {
-      x: bounds!.width * (0.5 + 96 / 430),
+      x: bounds!.width * (0.5 + 96 / 540),
       y: bounds!.height * 0.5,
     } });
     await expectSkyPointing(page, 90, 45);

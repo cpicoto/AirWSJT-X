@@ -367,6 +367,49 @@ class WSJTXListenerSocketTests(unittest.TestCase):
                 bridge._on_wsjtx_status(status)
                 self.assertEqual(bridge._station_b_locator, "CN89OH")
 
+    def test_dx_source_can_follow_wsjtx_again_without_changing_grid(self) -> None:
+        from sidecar import airwsjtx_bridge as bridge
+
+        with patch.multiple(bridge, _my_call_override=None, _my_grid_override="CN87VP",
+                            _station_a_locator="CN87VP", _station_b_locator=None,
+                            _station_a_call=None, _wsjtx_de_call=None, _wsjtx_de_grid=None,
+                            _dx_grid_manual=False, _wsjtx_freq_hz=None, _wsjtx_band_mhz=None,
+                            _active_source=None):
+            with patch.object(bridge, "_start_configured_airscout_feed"), patch.object(bridge, "_emit"):
+                status = _make_status("WSJT-X")
+                params = {"locator_a": "CN87VP", "locator_b": "CN89OH", "dx_local": True}
+                bridge.handle({"id": "local", "method": "airscout_set_stations", "params": params})
+                self.assertTrue(bridge._dx_grid_manual)
+                status.dx_grid = "CN90AA"
+                bridge._on_wsjtx_status(status)
+                self.assertEqual(bridge._station_b_locator, "CN89OH")
+
+                params["dx_local"] = False
+                bridge.handle({"id": "wsjtx", "method": "airscout_set_stations", "params": params})
+                self.assertFalse(bridge._dx_grid_manual)
+                bridge._on_wsjtx_status(status)
+                self.assertEqual(bridge._station_b_locator, "CN90AA")
+                status.dx_grid = "CN91BB"
+                bridge._on_wsjtx_status(status)
+                self.assertEqual(bridge._station_b_locator, "CN91BB")
+
+                params["locator_b"] = "FN32AA"
+                bridge.handle({"id": "fallback", "method": "airscout_set_stations", "params": params})
+                for grid in [None, "", "INVALID", "ZZ99", "CN91B"]:
+                    status.de_grid, status.dx_grid = grid, grid
+                    bridge._on_wsjtx_status(status)
+                    self.assertEqual(bridge._station_a_locator, "CN87VP")
+                    self.assertEqual(bridge._station_b_locator, "FN32AA")
+
+                params["locator_b"] = None
+                bridge.handle({"id": "clear", "method": "airscout_set_stations", "params": params})
+                self.assertIsNone(bridge._station_b_locator)
+                params["dx_local"] = True
+                bridge.handle({"id": "empty-local", "method": "airscout_set_stations", "params": params})
+                bridge._on_wsjtx_status(status)
+                self.assertTrue(bridge._dx_grid_manual)
+                self.assertIsNone(bridge._station_b_locator)
+
     def test_discovers_filtered_out_rigs_from_udp_messages(self) -> None:
         on_status = Mock()
         listener = WSJTXListener(rig_name_filter="Selected-Rig", on_status=on_status)

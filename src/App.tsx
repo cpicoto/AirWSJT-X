@@ -1,11 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
+import AzElReadout from "./AzElReadout";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
+import {
+  FLOAT_ACTION_EVENT, FLOAT_CLOSED_EVENT, FLOAT_READY_EVENT, FLOAT_STATE_EVENT,
+  nativeFloatSupported, syncFloatWindow,
+  type FloatAction, type FloatKind, type FloatState,
+} from "./lib/floatWindow";
 import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
 import SkyDome from "./SkyDome";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
@@ -21,6 +27,7 @@ interface WsjtxLive {
   de_call: string | null;
   de_grid: string | null;
   dx_call: string | null;
+  dx_grid: string | null;
   transmitting: boolean;
   decoding: boolean;
   tr_period: number | null;
@@ -187,16 +194,100 @@ const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
 const MY_CALL_OVERRIDE_KEY = "airwsjtx.myCallOverride";
 const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
 const MY_ALT_KEY = "airwsjtx.myAltitudeM";
-const PORTABLE_SCALE_KEY = "airwsjtx.portableScale";
-const PORTABLE_MIN_FONT_PX = 28;
+const DX_ALT_KEY = "airwsjtx.dxAltitudeM";
+const DX_LOCAL_KEY = "airwsjtx.dxLocal";
+const FAVORITE_DX_KEY = "airwsjtx.favoriteDx";
+const FAVORITE_DX_MAX = 20;
+type FavoriteDx = { call: string; grid: string | null; alt?: string };
+const favAlt = (f: FavoriteDx) => (f.alt?.trim() ? f.alt.trim() : "0");
+const favGrid = (f: FavoriteDx) => (f.grid ?? "").trim().toUpperCase();
+const DEFAULT_FAVORITE_DX: FavoriteDx[] = [{ call: "VE7NX", grid: "CN89oh" }, { call: "W7PUA", grid: "CN84jq" }];
+function loadFavoriteDx(): FavoriteDx[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FAVORITE_DX_KEY) ?? localStorage.getItem("airwsjtx.recentDx") ?? "null") as FavoriteDx[] | null;
+    if (Array.isArray(parsed) && parsed.every(r => r && typeof r.call === "string")) {
+      const out = parsed.map(r => ({ ...r, call: cleanCall(r.call) })).filter(r => isCompleteCall(r.call));
+      for (const d of DEFAULT_FAVORITE_DX) if (out.length < 2 && !out.some(r => r.call === d.call)) out.push(d);
+      return out.slice(0, FAVORITE_DX_MAX);
+    }
+  } catch { /* fall back to defaults */ }
+  return DEFAULT_FAVORITE_DX;
+}
+const STATION_SOURCE_BTN_STYLE: React.CSSProperties = {
+  fontSize: 10, padding: "2px 0", width: 52, boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", flex: "0 0 auto",
+};
+const STATION_INPUT_STYLE: React.CSSProperties = {
+  background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
+  borderRadius: 4, padding: "2px 4px", fontSize: 11, fontFamily: "monospace", boxSizing: "content-box",
+};
 const PORTABLE_BASE_FONT_PX = 72;
 
 type PortableViewMode = "hidden" | "panel" | "overlay";
+// The docked Az/El panel is switched off (code kept): set to true to bring the Panel mode back.
+const AZEL_PANEL_ENABLED = false;
 const ROTATOR_SPEECH_ENABLED_KEY = "airwsjtx.rotatorSpeech.enabled";
 const ROTATOR_SPEECH_THRESHOLD_KEY = "airwsjtx.rotatorSpeech.thresholdDeg";
 const ROTATOR_SPEECH_INTERVAL_KEY = "airwsjtx.rotatorSpeech.intervalSec";
 const ROTATOR_CONTROL_KEY = "airwsjtx.rotatorControlEnabled";
 const ROTATOR_SPEECH_MIGRATED_KEY = "airwsjtx.rotatorSpeech.threshold1degMigrated";
+const SKYDOME_RECT_KEY = "airwsjtx.skyDomeRect";
+const SKYDOME_MIN_W = 280;
+const SKYDOME_MIN_H = 320;
+
+interface SkyDomeRect { x: number; y: number; w: number; h: number }
+
+function clampSkyDomeRect(r: SkyDomeRect, minW = SKYDOME_MIN_W, minH = SKYDOME_MIN_H): SkyDomeRect {
+  const w = Math.min(Math.max(r.w, minW), window.innerWidth);
+  const h = Math.min(Math.max(r.h, minH), window.innerHeight);
+  return {
+    w, h,
+    x: Math.min(Math.max(r.x, 0), Math.max(0, window.innerWidth - w)),
+    y: Math.min(Math.max(r.y, 0), Math.max(0, window.innerHeight - h)),
+  };
+}
+
+function loadSkyDomeRect(): SkyDomeRect {
+  try {
+    const p = JSON.parse(localStorage.getItem(SKYDOME_RECT_KEY) ?? "null");
+    if (p && [p.x, p.y, p.w, p.h].every(Number.isFinite)) return clampSkyDomeRect(p);
+  } catch { /* fall through to default */ }
+  return clampSkyDomeRect({ w: 460, h: 560, x: window.innerWidth - 480, y: 110 });
+}
+
+const OVERLAY_RECT_KEY = "airwsjtx.overlayRect";
+const OVERLAY_MIN_W = 220;
+const OVERLAY_MIN_H = 120;
+
+function clampOverlayRect(r: SkyDomeRect): SkyDomeRect {
+  return clampSkyDomeRect(r, OVERLAY_MIN_W, OVERLAY_MIN_H);
+}
+
+function loadOverlayRect(): SkyDomeRect {
+  try {
+    const p = JSON.parse(localStorage.getItem(OVERLAY_RECT_KEY) ?? "null");
+    if (p && [p.x, p.y, p.w, p.h].every(Number.isFinite)) return clampOverlayRect(p);
+  } catch { /* fall through to default */ }
+  return clampOverlayRect({ w: 600, h: 200, x: window.innerWidth - 620, y: 90 });
+}
+
+// Callbook lookups ignore portable/mobile markers: W7GLF/P, VE7/W7GLF, W7GLF/QRP
+const CALL_SUFFIXES = new Set(["P", "M", "MM", "AM", "QRP", "R", "A", "B"]);
+function baseCall(callsign: string): string {
+  const parts = callsign.trim().toUpperCase().split("/").filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? "";
+  const rest = parts.filter(p => !CALL_SUFFIXES.has(p) && !/^\d$/.test(p));
+  if (rest.length === 0) return parts[0];
+  return rest.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+// WSJT-X can send a half-typed call such as "W7GLF/"; drop dangling slashes
+function cleanCall(call: string | null | undefined): string {
+  return (call ?? "").trim().toUpperCase().replace(/^\/+|\/+$/g, "");
+}
+
+function isCompleteCall(call: string): boolean {
+  return /^[A-Z0-9]+(\/[A-Z0-9]+)*$/.test(call) && /[A-Z]/.test(call) && /[0-9]/.test(call) && call.length >= 3;
+}
 
 function normalizeGrid(grid: string | null | undefined): string | null {
   const normalized = (grid ?? "").trim().toUpperCase();
@@ -210,7 +301,7 @@ export default function App() {
   const [log, setLog] = useState<string[]>([]);
   const [wsjtxLive, setWsjtxLive] = useState<WsjtxLive>({
     connected: false, app_id: "", freq_mhz: null, mode: null,
-    sub_mode: null, de_call: null, de_grid: null, dx_call: null,
+    sub_mode: null, de_call: null, de_grid: null, dx_call: null, dx_grid: null,
     transmitting: false, decoding: false, tr_period: null,
     rx_df: null, tx_df: null, config_name: null,
   });
@@ -247,6 +338,32 @@ export default function App() {
     return Number.isFinite(value) && value >= 0 ? value : 2;
   });
   const [showSkyDome, setShowSkyDome] = useState(() => localStorage.getItem("airwsjtx.showSkyDome") === "true");
+  const [skyDomeRect, setSkyDomeRect] = useState(loadSkyDomeRect);
+  const skyDomeRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = skyDomeRef.current;
+    if (!showSkyDome || !el) return;
+    // Native CSS resize doesn't raise React events; persist the size it produces.
+    const ro = new ResizeObserver(() => {
+      const w = Math.round(el.offsetWidth);
+      const h = Math.round(el.offsetHeight);
+      setSkyDomeRect((r) => (r.w === w && r.h === h ? r : { ...r, w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [showSkyDome]);
+  useEffect(() => {
+    localStorage.setItem(SKYDOME_RECT_KEY, JSON.stringify(skyDomeRect));
+  }, [skyDomeRect]);
+  const skyDomeDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  useEffect(() => {
+    const onResize = () => setSkyDomeRect((r) => {
+      const c = clampSkyDomeRect(r);
+      return c.x === r.x && c.y === r.y && c.w === r.w && c.h === r.h ? r : c;
+    });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [dxCallsign, setDxCallsign] = useState<string | null>(null);
   const [dxGrid, setDxGrid] = useState<string | null>(null);
   const [stationGridOverrides, setStationGridOverrides] = useState<Record<string, string>>(() => {
@@ -274,8 +391,13 @@ export default function App() {
   const [dxGridInput, setDxGridInput] = useState("");
   const myGridEditing = useRef(false);
   const [myAltInput, setMyAltInput] = useState(() => localStorage.getItem(MY_ALT_KEY) ?? "");
+  const [dxAltInput, setDxAltInput] = useState(() => localStorage.getItem(DX_ALT_KEY) ?? "");
   const [myAltitudeM, setMyAltitudeM] = useState(() => Number(localStorage.getItem(MY_ALT_KEY) ?? "0"));
   const dxGridEditing = useRef(false);
+  const dxCallEditing = useRef(false);
+  const [favoriteDx, setFavoriteDx] = useState<FavoriteDx[]>(loadFavoriteDx);
+  const [dxLocal, setDxLocal] = useState(() => localStorage.getItem(DX_LOCAL_KEY) === "1");
+  const [dxCallInput, setDxCallInput] = useState("");
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
   const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
@@ -285,12 +407,12 @@ export default function App() {
   const [wsjtxRigFilterBusy, setWsjtxRigFilterBusy] = useState(false);
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
     const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
-    return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
+    if (saved === "panel") return AZEL_PANEL_ENABLED ? "panel" : "overlay";
+    return saved === "overlay" || saved === "hidden" ? saved : (AZEL_PANEL_ENABLED ? "panel" : "hidden");
   });
-  const [portableScale, setPortableScale] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(PORTABLE_SCALE_KEY) ?? "100");
-    return Number.isFinite(saved) && saved >= 70 && saved <= 180 ? saved : 100;
-  });
+  const [overlayRect, setOverlayRect] = useState(loadOverlayRect);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const overlayDragRef = useRef<{ dx: number; dy: number } | null>(null);
   const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
   const [callsignDbBusy, setCallsignDbBusy] = useState(false);
@@ -301,6 +423,7 @@ export default function App() {
     rotator_az?: number | null; rotator_el?: number | null;
     position_updated_epoch_s?: number | null;
     range_a_km?: number | null;
+    range_b_km?: number | null;
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number; source: "rotator" | "manual" } | null>(null);
@@ -344,7 +467,9 @@ export default function App() {
   function lookupGrid(callsign: string | null): string | null {
     if (!callsign) return null;
     const call = callsign.trim().toUpperCase();
-    return stationGridOverrides[call] ?? remoteStationGrids[call] ?? null;
+    const base = baseCall(call);
+    return stationGridOverrides[call] ?? remoteStationGrids[call]
+      ?? stationGridOverrides[base] ?? remoteStationGrids[base] ?? null;
   }
 
   // Wire sidecar messages — handles both RPC responses and push events
@@ -377,6 +502,7 @@ export default function App() {
               de_call: evtData.de_call as string | null,
               de_grid: evtData.de_grid as string | null,
               dx_call: evtData.dx_call as string | null,
+              dx_grid: evtData.dx_grid as string | null,
               transmitting: evtData.transmitting as boolean,
               decoding: evtData.decoding as boolean,
               tr_period: evtData.tr_period as number | null,
@@ -454,6 +580,7 @@ export default function App() {
               callsign: typeof evtData.callsign === "string" ? evtData.callsign : prev.callsign,
               altitude_ft: typeof evtData.altitude_ft === "number" ? evtData.altitude_ft : prev.altitude_ft,
               range_a_km: typeof evtData.range_a_km === "number" ? evtData.range_a_km : null,
+              range_b_km: typeof evtData.range_b_km === "number" ? evtData.range_b_km : null,
               az_a: evtData.az_a as number,
               el_a: evtData.el_a as number,
               az_b: typeof evtData.az_b === "number" ? evtData.az_b : prev.az_b,
@@ -547,6 +674,13 @@ export default function App() {
     localStorage.setItem(ROTATOR_SPEECH_INTERVAL_KEY, String(rotatorSpeechIntervalSec));
   }, [rotatorSpeechIntervalSec]);
 
+  // In Auto mode, keep the last locked plane's Az/El visible (greyed) after lock is lost.
+  const lastPlaneTargetRef = useRef<{ az: number; el: number } | null>(null);
+  const planeTargetValid = !!lockedPlane && Number.isFinite(lockedPlane.az_a) && Number.isFinite(lockedPlane.el_a);
+  if (lockedPlane && planeTargetValid) lastPlaneTargetRef.current = { az: lockedPlane.az_a, el: lockedPlane.el_a };
+  const autoTargetInvalid = uiMode !== "manual" && !planeTargetValid;
+  const lastPlaneTarget = lastPlaneTargetRef.current;
+
   const manualSpeechTarget = uiMode !== "manual" && lockedPlane
     && Number.isFinite(lockedPlane.az_a)
     && Number.isFinite(lockedPlane.el_a)
@@ -557,8 +691,15 @@ export default function App() {
         : null
     );
 
-  const rotatorSpeechSource = !(rotatorControlEnabled && rotatorConnected)
+  // Auto mode with the rotor off/disconnected still announces the target.
+  const rotatorSpeechSource = autoTargetInvalid
     ? null
+    : !(rotatorControlEnabled && rotatorConnected)
+    ? (
+      uiMode !== "manual" && manualSpeechTarget
+        ? { ...manualSpeechTarget, source: "manual" as const, announceFirstUpdate: true }
+        : null
+    )
     : uiMode === "manual"
     ? (
       manualSpeechTarget
@@ -574,7 +715,7 @@ export default function App() {
   useEffect(() => {
     if (!isSpeechSupported()) return;
     if (!rotatorSpeechEnabled || !rotatorSpeechSource) {
-      if (rotatorSpeechLastAnnouncedRef.current) cancelSpeech();
+      if (rotatorSpeechLastAnnouncedRef.current) void cancelSpeech().catch(e => addLog(`Speech: ${e}`));
       rotatorSpeechLastAnnouncedRef.current = null;
       rotatorSpeechLastProcessedRef.current = null;
       return;
@@ -587,7 +728,7 @@ export default function App() {
     const speechText = `Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`;
     if (!last || last.source !== source) {
       rotatorSpeechLastProcessedRef.current = { az, el, source };
-      if (announceFirstUpdate) speak(speechText);
+      if (announceFirstUpdate) void speak(speechText).catch(e => addLog(`Speech: ${e}`));
       rotatorSpeechLastAnnouncedRef.current = { az, el, at: now, source };
       return;
     }
@@ -605,7 +746,7 @@ export default function App() {
       return () => window.clearTimeout(timer);
     }
     rotatorSpeechLastProcessedRef.current = { az, el, source };
-    speak(speechText);
+    void speak(speechText).catch(e => addLog(`Speech: ${e}`));
     rotatorSpeechLastAnnouncedRef.current = { az, el, at: now, source };
   }, [
     rotatorAz,
@@ -616,7 +757,18 @@ export default function App() {
     rotatorSpeechThresholdDeg,
     rotatorSpeechIntervalSec,
     speechRecheck,
+    addLog,
   ]);
+
+  const prevAutoLockedRef = useRef(false);
+  useEffect(() => {
+    const autoLocked = uiMode !== "manual" && planeTargetValid;
+    if (prevAutoLockedRef.current && uiMode !== "manual" && !planeTargetValid
+      && rotatorSpeechEnabled && isSpeechSupported()) {
+      void speak("Lost plane lock").catch(e => addLog(`Speech: ${e}`));
+    }
+    prevAutoLockedRef.current = autoLocked;
+  }, [uiMode, planeTargetValid, rotatorSpeechEnabled, addLog]);
 
   const [controlWsjtx, setControlWsjtx] = useState<boolean>(() => localStorage.getItem("airwsjtx.controlWsjtx") === "1");
   useEffect(() => { localStorage.setItem("airwsjtx.controlWsjtx", controlWsjtx ? "1" : "0"); }, [controlWsjtx]);
@@ -751,15 +903,29 @@ export default function App() {
   }, [airscout?.station_a, airscout?.station_b]);
 
   const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
-  const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
-  const myGrid = myGridOverride || lookupGrid(myCallsign) || wsjtxLive.de_grid;
-  const selectedDxGrid = lookupGrid(dxCall) ?? dxGrid;
+  const dxCall = dxCallsign ? cleanCall(dxCallsign) || null : null;
+  const wsjtxMyGrid = normalizeGrid(wsjtxLive.de_grid);
+  const myGrid = myGridOverride || (isValidLocator(wsjtxMyGrid) ? wsjtxMyGrid : lookupGrid(myCallsign));
+  const wsjtxDxGrid = normalizeGrid(wsjtxLive.dx_grid);
+  const selectedDxGrid = dxLocal ? (dxGrid ?? lookupGrid(dxCall))
+    : isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : lookupGrid(dxCall);
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
   const dxBearing = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? bearingDeg(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
+
+  useEffect(() => {
+    if (!status) return;
+    rpc("set_station_calls", { call_a: myCallsign, call_b: dxCall })
+      .catch(e => addLog(`Station calls error: ${e}`));
+    rpc("airscout_set_stations", {
+      locator_a: isValidLocator(myGrid) ? myGrid : null,
+      locator_b: isValidLocator(selectedDxGrid) ? selectedDxGrid : null,
+      dx_local: dxLocal,
+    }).catch(e => addLog(`Station geometry error: ${e}`));
+  }, [status === null, myCallsign, myGrid, myCallOverride, myGridOverride, dxCall, selectedDxGrid, dxLocal, addLog]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem(ROTATOR_CONTROL_KEY, String(rotatorControlEnabled));
@@ -781,6 +947,14 @@ export default function App() {
         .catch(e => addLog(`MY station restore error: ${e}`));
     }
   }, [status, myCallOverride, myGridOverride, addLog]);
+
+  useEffect(() => {
+    if (!status) return;
+    const saved = Number(localStorage.getItem(DX_ALT_KEY) ?? "0");
+    if (Number.isFinite(saved) && saved !== 0) {
+      rpc("set_dx_altitude", { altitude_m: saved }).catch(e => addLog(`DX altitude restore error: ${e}`));
+    }
+  }, [status === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!myCallEditing.current) setMyCallInput(myCallOverride || wsjtxLive.de_call || "");
@@ -828,8 +1002,30 @@ export default function App() {
   }, [portableView]);
 
   useEffect(() => {
-    localStorage.setItem(PORTABLE_SCALE_KEY, String(portableScale));
-  }, [portableScale]);
+    localStorage.setItem(OVERLAY_RECT_KEY, JSON.stringify(overlayRect));
+  }, [overlayRect]);
+
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+    // Native CSS resize doesn't raise React events; persist the size it produces.
+    const ro = new ResizeObserver(() => {
+      const w = Math.round(el.offsetWidth);
+      const h = Math.round(el.offsetHeight);
+      setOverlayRect((r) => (r.w === w && r.h === h ? r : { ...r, w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  useEffect(() => {
+    const onResize = () => setOverlayRect((r) => {
+      const c = clampOverlayRect(r);
+      return c.x === r.x && c.y === r.y && c.w === r.w && c.h === r.h ? r : c;
+    });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     if (!myGridEditing.current) setMyGridInput(myGrid ?? "");
@@ -837,6 +1033,9 @@ export default function App() {
   useEffect(() => {
     if (!dxGridEditing.current) setDxGridInput(selectedDxGrid ?? "");
   }, [selectedDxGrid]);
+  useEffect(() => {
+    if (!dxCallEditing.current) setDxCallInput(dxCall ?? "");
+  }, [dxCall]);
   useEffect(() => {
     const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
     setAircraftFilters(stored);
@@ -856,43 +1055,249 @@ export default function App() {
     });
   }
 
-  const currentAz = lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
-  const currentEl = lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
-  const portableFontPx = Math.max(PORTABLE_MIN_FONT_PX, PORTABLE_BASE_FONT_PX * portableScale / 100);
+  const myUsesLocal = !!(myCallOverride || myGridOverride);
+  const dxUsesLocal = dxLocal;
+
+  // Newest first, FIFO capped at 20. A station that matches an entry exactly (call, grid and
+  // altitude) moves to the top instead of being listed twice.
+  function storeDx(rawCall: string, grid: string | null, alt: string) {
+    const call = cleanCall(rawCall);
+    if (!isCompleteCall(call)) return;
+    const entry: FavoriteDx = { call, grid: normalizeGrid(grid), alt: alt.trim() || "0" };
+    setFavoriteDx(prev => {
+      const next = [entry, ...prev.filter(r => !(r.call === call && favGrid(r) === favGrid(entry) && favAlt(r) === favAlt(entry)))]
+        .slice(0, FAVORITE_DX_MAX);
+      localStorage.setItem(FAVORITE_DX_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+  function chooseDxMode(local: boolean) {
+    setDxLocal(local);
+    localStorage.setItem(DX_LOCAL_KEY, local ? "1" : "0");
+  }
+
+  // Selecting a DX station by hand is a local choice; WSJT-X-driven changes are not.
+  function selectDx(call: string, grid: string | null, local: boolean, name?: string | null, alt?: string) {
+    const dxLocator = grid ?? lookupGrid(call);
+    if (alt !== undefined || call !== dxCallsign) {
+      // a different station starts at 0 m unless a favorite supplies its altitude
+      const nextAlt = alt ?? "";
+      setDxAltInput(nextAlt);
+      localStorage.setItem(DX_ALT_KEY, nextAlt);
+      rpc("set_dx_altitude", { altitude_m: nextAlt === "" ? 0 : Number(nextAlt) })
+        .catch(e => addLog(`DX altitude error: ${e}`));
+    }
+    setDxCallsign(call);
+    setDxGrid(grid);
+    if (local) chooseDxMode(true);
+    addLog(dxLocator
+      ? `DX → ${call} ${dxLocator}${name ? ` (${name})` : ""}`
+      : `DX → ${call} (enter portable grid manually)`);
+  }
+
+  // WSJT-X mode: follow both the DX call and grid WSJT-X reports (the callbook is only the fallback)
+  useEffect(() => {
+    if (dxLocal) return;
+    const wsjtxDx = cleanCall(wsjtxLive.dx_call);
+    if (!wsjtxDx || !isCompleteCall(wsjtxDx)) return;
+    const grid = isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : null;
+    if (wsjtxDx !== dxCallsign || grid !== dxGrid) {
+      selectDx(wsjtxDx, grid, false);
+    }
+  }, [wsjtxLive.dx_call, wsjtxLive.dx_grid, dxLocal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Local mode: typed call/grid take effect as soon as they are complete and valid
+  useEffect(() => {
+    if (!dxLocal) return;
+    const call = cleanCall(dxCallInput);
+    const grid = normalizeGrid(dxGridInput);
+    if (!isCompleteCall(call)) return;
+    if (grid && !isValidLocator(grid)) return;
+    if (call === dxCallsign && (grid ?? lookupGrid(call)) === selectedDxGrid) return;
+    const t = setTimeout(() => {
+      savePortableGrid(call, grid);
+      selectDx(call, grid, true);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [dxCallInput, dxGridInput, dxLocal]); // eslint-disable-line react-hooks/exhaustive-deps
+  function applyDxStation(reset: boolean, toggle = false) {
+    const altText = dxAltInput.trim();
+    const altM = altText === "" ? 0 : Number(altText);
+    if (!Number.isFinite(altM) || altM < -500 || altM > 9000) {
+      addLog("DX altitude must be a number of metres between -500 and 9000");
+      return;
+    }
+    if (reset || (!dxLocal && !toggle)) {
+      localStorage.setItem(DX_ALT_KEY, altText);
+      rpc("set_dx_altitude", { altitude_m: altM }).catch(e => addLog(`DX altitude error: ${e}`));
+    }
+    if (reset) {
+      chooseDxMode(false);
+      if (dxCall) savePortableGrid(dxCall, null);
+      addLog("DX station follows WSJT-X");
+      return;
+    }
+    if (!dxLocal && !toggle) {
+      // WSJT-X mode: Store DX keeps the current station and its altitude without changing mode
+      if (!dxCall) {
+        addLog("No DX station to store");
+        return;
+      }
+      storeDx(dxCall, selectedDxGrid, altText);
+      addLog(`Stored DX ${dxCall}`);
+      return;
+    }
+    chooseDxMode(true);
+    const call = cleanCall(dxCallInput) || dxCall;
+    if (!call) {
+      addLog(toggle ? "DX station is Local; enter a callsign and press Apply" : "Set DX callsign before applying DX grid");
+      return;
+    }
+    const grid = normalizeGrid(dxGridInput);
+    if (grid && !isValidLocator(grid)) {
+      addLog("DX grid must be a valid 4, 6, or 8 character Maidenhead locator");
+      return;
+    }
+    savePortableGrid(call, grid);
+    selectDx(call, grid, true, null, altText);
+    if (!toggle) {
+      storeDx(call, grid ?? lookupGrid(call), altText);
+      addLog(`Stored DX ${call}`);
+    }
+  }
+  const currentAz = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az
+    : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
+  const currentEl = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el
+    : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
   const rotorOn = rotatorControlEnabled && rotatorConnected;
   const lastSpeechPreviewAt = useRef(0);
   function previewSpeech() {
-    if (!isSpeechSupported() || !rotatorSpeechEnabled || !rotorOn) return;
+    if (!isSpeechSupported() || !rotatorSpeechEnabled || autoTargetInvalid || !(rotorOn || uiMode !== "manual")) return;
     const now = Date.now();
     if (now - lastSpeechPreviewAt.current < 1200) return;
     lastSpeechPreviewAt.current = now;
     const az = lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : rotatorTargetAz ?? rotatorAz;
     const el = lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : rotatorTargetEl ?? rotatorEl;
-    speak(`Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`);
+    void speak(`Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`).catch(e => addLog(`Speech: ${e}`));
+  }
+  function setSpeechEnabled(enabled: boolean) {
+    setRotatorSpeechEnabled(enabled);
+    if (!enabled) {
+      void cancelSpeech().catch(e => addLog(`Speech: ${e}`));
+      rotatorSpeechLastAnnouncedRef.current = null;
+    }
   }
   const portableReadout = (
-  <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
-    <div className="portable-header">
-      <span>Az / El</span>
-    </div>
-    <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
-      <div className="portable-readout">
-        <span className="portable-label">AZ</span>
-        <span className="portable-value">{Number.isFinite(currentAz) ? currentAz.toFixed(1) : "--.-"}°</span>
-      </div>
-      <div className="portable-readout">
-        <span className="portable-label">EL</span>
-        <span className="portable-value">{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
-      </div>
-    </div>
-  </div>
+    <AzElReadout
+      className="portable-panel"
+      az={currentAz} el={currentEl} invalid={autoTargetInvalid} fontPx={PORTABLE_BASE_FONT_PX}
+    />
   );
 
   const portableDisplay = portableView === "hidden" ? null : portableReadout;
 
+  // Sky Dome and the Az/El overlay float in their own native windows on desktop so they can leave
+  // the app window. Browsers (and a failed window creation) fall back to in-page floating panels.
+  const [floatFallback, setFloatFallback] = useState(false);
+  const nativeFloat = nativeFloatSupported() && !floatFallback;
+  const wantSkyDomeWindow = showSkyDome;
+  const wantOverlayWindow = portableView === "overlay";
+  const floatStateRef = useRef<FloatState | null>(null);
+  floatStateRef.current = {
+    aircraft: skyDomeAircraft,
+    selectedAircraftId: lockedPlane?.icao24 ?? null,
+    stationLocator: airscout?.station_a ?? myGrid,
+    stationAltitudeM: myAltitudeM,
+    rotatorAz,
+    rotatorEl,
+    targetAz: lockedPlane ? lockedPlane.az_a : rotatorTargetAz,
+    targetEl: lockedPlane ? lockedPlane.el_a : rotatorTargetEl,
+    pathBearing: dxBearing,
+    dxLabel: dxCall,
+    myLabel: myCallsign,
+    readoutAz: currentAz,
+    readoutEl: currentEl,
+    readoutInvalid: autoTargetInvalid,
+  };
+  const lastFloatJsonRef = useRef("");
+  const publishFloatState = useCallback((force = false) => {
+    if (!floatStateRef.current) return;
+    const json = JSON.stringify(floatStateRef.current);
+    if (!force && json === lastFloatJsonRef.current) return;
+    lastFloatJsonRef.current = json;
+    void emit(FLOAT_STATE_EVENT, floatStateRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!nativeFloat) return;
+    for (const [kind, wanted] of [["skydome", wantSkyDomeWindow], ["overlay", wantOverlayWindow]] as const) {
+      const action = syncFloatWindow(kind, wanted);
+      action.catch((e) => {
+        if (!wanted) return;
+        addLog(`Floating ${kind} window unavailable, showing it in the app instead: ${e}`);
+        setFloatFallback(true);
+      });
+    }
+  }, [nativeFloat, wantSkyDomeWindow, wantOverlayWindow, addLog]);
+
+  useEffect(() => {
+    if (!nativeFloat) return;
+    const offs = [
+      listen(FLOAT_READY_EVENT, () => publishFloatState(true)),
+      listen<FloatAction>(FLOAT_ACTION_EVENT, (e) => {
+        const a = e.payload;
+        if (a.type === "lock") {
+          rpc("lock_aircraft", { icao24: a.icao24 }).catch(err => addLog(`Lock: ${err}`));
+        } else {
+          setRotatorTargetAz(a.az);
+          setRotatorTargetEl(a.el);
+          rpc("rotator_set", { azimuth: a.az, elevation: a.el }).catch(err => addLog(`Rotator: ${err}`));
+        }
+      }),
+      listen<{ kind: FloatKind }>(FLOAT_CLOSED_EVENT, (e) => {
+        if (e.payload.kind === "skydome") {
+          setShowSkyDome(false);
+          localStorage.setItem("airwsjtx.showSkyDome", "false");
+        } else {
+          setPortableView("hidden");
+        }
+      }),
+    ];
+    return () => { offs.forEach((p) => void p.then((f) => f())); };
+  }, [nativeFloat, publishFloatState, addLog]);
+
+  useEffect(() => {
+    if (nativeFloat && (wantSkyDomeWindow || wantOverlayWindow)) publishFloatState();
+  });
+
   return (
-    <div className={`app${portableView === "panel" || showSkyDome ? " has-display-panels" : ""}`}>
-      {portableView === "overlay" && portableDisplay}
+    <div className={`app${AZEL_PANEL_ENABLED && portableView === "panel" ? " has-display-panels" : ""}`}>
+      {!nativeFloat && portableView === "overlay" && (
+        <div
+          ref={overlayRef}
+          className="overlay-frame"
+          aria-label="Az / El overlay"
+          style={{ left: overlayRect.x, top: overlayRect.y, width: overlayRect.w, height: overlayRect.h }}
+        >
+          <AzElReadout
+            className="portable-overlay"
+            az={currentAz} el={currentEl} invalid={autoTargetInvalid}
+            headerProps={{
+              className: "portable-header overlay-drag",
+              onPointerDown: (e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                overlayDragRef.current = { dx: e.clientX - overlayRect.x, dy: e.clientY - overlayRect.y };
+              },
+              onPointerMove: (e) => {
+                const d = overlayDragRef.current;
+                if (d) setOverlayRect((r) => clampOverlayRect({ ...r, x: e.clientX - d.dx, y: e.clientY - d.dy }));
+              },
+              onPointerUp: () => { overlayDragRef.current = null; },
+              onPointerCancel: () => { overlayDragRef.current = null; },
+            }}
+          />
+        </div>
+      )}
 
       {/* ── Top bar ── */}
       <header className="topbar">
@@ -992,22 +1397,16 @@ export default function App() {
         <div className="portable-toolbar" role="group" aria-label="Az / El display controls">
           <span>Az / El</span>
           <div className="portable-controls">
-            <button className="portable-mode" aria-pressed={portableView === "panel"} onClick={() => setPortableView("panel")}>Panel</button>
-            <button className="portable-mode" aria-pressed={portableView === "overlay"} onClick={() => setPortableView("overlay")}>Overlay</button>
-            <button className="portable-mode" aria-pressed={portableView === "hidden"} onClick={() => setPortableView("hidden")}>Hide</button>
+            {AZEL_PANEL_ENABLED && (
+              <button className="portable-mode" aria-pressed={portableView === "panel"} onClick={() => setPortableView("panel")}>Panel</button>
+            )}
+            <button
+              className="portable-mode"
+              aria-pressed={portableView === "overlay"}
+              title={portableView === "overlay" ? "Close the Az / El window" : "Open the Az / El window"}
+              onClick={() => setPortableView(portableView === "overlay" ? "hidden" : "overlay")}
+            >{portableView === "overlay" ? "Close" : "Open"}</button>
           </div>
-          <label>
-            Scale
-            <input
-              type="range"
-              min={70}
-              max={180}
-              step={5}
-              value={portableScale}
-              onChange={(e) => setPortableScale(Number(e.target.value))}
-            />
-            <span>{portableScale}%</span>
-          </label>
         </div>
 
         <div className="portable-toolbar" role="group" aria-label="Sky Dome display controls">
@@ -1017,50 +1416,62 @@ export default function App() {
               className="portable-mode"
               aria-pressed={showSkyDome}
               aria-controls="skydome-panel"
+              title={showSkyDome ? "Close the Sky Dome window" : "Open the Sky Dome window"}
               onClick={() => {
-                setShowSkyDome(true);
-                localStorage.setItem("airwsjtx.showSkyDome", "true");
+                setShowSkyDome(!showSkyDome);
+                localStorage.setItem("airwsjtx.showSkyDome", String(!showSkyDome));
               }}
-            >Show</button>
-            <button
-              className="portable-mode"
-              aria-pressed={!showSkyDome}
-              aria-controls="skydome-panel"
-              onClick={() => {
-                setShowSkyDome(false);
-                localStorage.setItem("airwsjtx.showSkyDome", "false");
-              }}
-            >Hide</button>
+            >{showSkyDome ? "Close" : "Open"}</button>
           </div>
         </div>
       </div>
 
-      {(portableView === "panel" || showSkyDome) && (
-        <div className={`display-panels${showSkyDome ? " has-skydome" : ""}`}>
-          {portableView === "panel" && portableDisplay}
-          {showSkyDome && (
-            <section className="skydome-panel" id="skydome-panel" aria-label="Sky Dome">
-              <h3 className="portable-header">Sky Dome</h3>
-              <SkyDome
-                aircraft={skyDomeAircraft}
-                selectedAircraftId={lockedPlane?.icao24 ?? null}
-                stationLocator={airscout?.station_a ?? myGrid}
-                stationAltitudeM={myAltitudeM}
-                rotatorAz={rotatorAz}
-                rotatorEl={rotatorEl}
-                targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
-                targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
-                pathBearing={dxBearing}
-                onClickAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
-                onClickSky={(az, el) => {
-                  setRotatorTargetAz(az);
-                  setRotatorTargetEl(el);
-                  rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
-                }}
-              />
-            </section>
-          )}
+      {AZEL_PANEL_ENABLED && portableView === "panel" && (
+        <div className="display-panels">
+          {portableDisplay}
         </div>
+      )}
+      {showSkyDome && !nativeFloat && (
+        <section
+          ref={skyDomeRef}
+          className="skydome-panel skydome-float"
+          id="skydome-panel"
+          aria-label="Sky Dome"
+          style={{ left: skyDomeRect.x, top: skyDomeRect.y, width: skyDomeRect.w, height: skyDomeRect.h }}
+        >
+          <h3
+            className="portable-header skydome-drag"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              skyDomeDragRef.current = { dx: e.clientX - skyDomeRect.x, dy: e.clientY - skyDomeRect.y };
+            }}
+            onPointerMove={(e) => {
+              const d = skyDomeDragRef.current;
+              if (d) setSkyDomeRect((r) => clampSkyDomeRect({ ...r, x: e.clientX - d.dx, y: e.clientY - d.dy }));
+            }}
+            onPointerUp={() => { skyDomeDragRef.current = null; }}
+            onPointerCancel={() => { skyDomeDragRef.current = null; }}
+          >Sky Dome</h3>
+          <SkyDome
+            aircraft={skyDomeAircraft}
+            selectedAircraftId={lockedPlane?.icao24 ?? null}
+            stationLocator={airscout?.station_a ?? myGrid}
+            stationAltitudeM={myAltitudeM}
+            rotatorAz={rotatorAz}
+            rotatorEl={rotatorEl}
+            targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
+            targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
+            pathBearing={dxBearing}
+            dxLabel={dxCall}
+            myLabel={myCallsign}
+            onClickAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
+            onClickSky={(az, el) => {
+              setRotatorTargetAz(az);
+              setRotatorTargetEl(el);
+              rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
+            }}
+          />
+        </section>
       )}
 
       {/* ── 3-column content ── */}
@@ -1078,47 +1489,47 @@ export default function App() {
                 <div className="call" style={{ color: "var(--accent)" }}>{myCallsign ?? "—"}</div>
                 <div className="grid">{myGrid ?? "—"}</div>
               </div>
-              <div style={{ color: "var(--border)", fontSize: 16 }}>→</div>
+              <div className="station-distance" style={{ flex: "0 0 auto", fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap", textAlign: "center" }}>
+                ← {stationDistanceKm === null ? "--" : stationDistanceKm.toFixed(1)} km →
+              </div>
               <div className="station-pill" style={{ borderColor: "#3fb95044" }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 1 }}>DX</div>
                 <div className="call" style={{ color: "var(--green)" }}>{dxCall ?? "—"}</div>
                 <div className="grid">{selectedDxGrid ?? "—"}</div>
               </div>
             </div>
-            <div className="station-distance" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
-              MY–DX distance: {stationDistanceKm === null ? "-- km" : `${stationDistanceKm.toFixed(1)} km`}
-            </div>
-            <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
-              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>MY</span>
+            <div style={{ display: "grid", gap: 3, marginTop: 6 }}>
+              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", width: 17, flex: "0 0 auto" }}>MY</span>
                 <input
                   aria-label="MY callsign"
                   value={myCallInput}
+                  maxLength={10}
                   onChange={e => setMyCallInput(e.target.value.toUpperCase())}
                   onFocus={() => { myCallEditing.current = true; }}
                   onBlur={() => { myCallEditing.current = false; }}
                   placeholder="Callsign"
-                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
-                    borderRadius: 4, padding: "2px 6px", fontSize: 11, width: 86, fontFamily: "monospace" }}
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
                 />
                 <input
                   aria-label="MY grid"
                   value={myGridInput}
+                  maxLength={10}
                   onChange={(e) => setMyGridInput(e.target.value.toUpperCase())}
                   onFocus={() => { myGridEditing.current = true; }}
                   onBlur={() => { myGridEditing.current = false; }}
                   placeholder={wsjtxLive.de_grid ?? "Grid"}
-                  style={{
-                    background: "var(--surface)",
-                    color: "var(--text)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "2px 6px",
-                    fontSize: 11,
-                    width: 86,
-                    fontFamily: "monospace",
-                  }}
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
                 />
+                <button className="btn-secondary" aria-label="MY station source" aria-pressed={myUsesLocal}
+                  disabled={myStationBusy}
+                  title={myUsesLocal ? "Using local MY values; click to use WSJT-X" : "Using WSJT-X values; click to use the local values typed here"}
+                  style={STATION_SOURCE_BTN_STYLE}
+                  onClick={() => { void applyMyStation(myUsesLocal); }}>
+                  {myUsesLocal ? "Local" : "WSJT-X"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 3, alignItems: "center", paddingLeft: 20 }}>
                 <input
                   aria-label="MY altitude (m)"
                   title="Station altitude above sea level, metres"
@@ -1126,76 +1537,82 @@ export default function App() {
                   onChange={(e) => setMyAltInput(e.target.value)}
                   inputMode="decimal"
                   placeholder="Alt m"
-                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
-                    borderRadius: 4, padding: "2px 6px", fontSize: 11, width: 56, fontFamily: "monospace" }}
+                  style={{ ...STATION_INPUT_STYLE, width: "7ch" }}
                 />
                 <button className="btn-secondary" aria-label="Apply MY station" disabled={myStationBusy}
                   style={{ fontSize: 10, padding: "2px 8px" }} onClick={() => { void applyMyStation(); }}>
                   Apply
                 </button>
-                <button className="btn-secondary" disabled={myStationBusy} style={{ fontSize: 10, padding: "2px 8px" }}
-                  onClick={() => { void applyMyStation(true); }}>Use WSJT-X</button>
               </div>
-              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>DX</span>
+              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", width: 17, flex: "0 0 auto" }}>DX</span>
                 <input
+                  aria-label="DX callsign"
+                  value={dxCallInput}
+                  maxLength={10}
+                  onChange={(e) => { setDxCallInput(e.target.value.toUpperCase()); chooseDxMode(true); }}
+                  onFocus={() => { dxCallEditing.current = true; }}
+                  onBlur={() => { dxCallEditing.current = false; }}
+                  placeholder="Callsign"
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
+                />
+                <input
+                  aria-label="DX grid"
                   value={dxGridInput}
-                  onChange={(e) => setDxGridInput(e.target.value.toUpperCase())}
+                  maxLength={10}
+                  onChange={(e) => { setDxGridInput(e.target.value.toUpperCase()); chooseDxMode(true); }}
                   onFocus={() => { dxGridEditing.current = true; }}
                   onBlur={() => { dxGridEditing.current = false; }}
                   placeholder={dxGrid ?? "Grid"}
-                  style={{
-                    background: "var(--surface)",
-                    color: "var(--text)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "2px 6px",
-                    fontSize: 11,
-                    width: 86,
-                    fontFamily: "monospace",
-                  }}
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
                 />
-                <button className="btn-secondary" style={{ fontSize: 10, padding: "2px 8px" }}
-                  onClick={() => {
-                    if (!dxCall) {
-                      addLog("Set DX callsign before applying DX grid");
-                      return;
-                    }
-                    const grid = normalizeGrid(dxGridInput);
-                    const locatorB = grid ?? dxGrid;
-                    const locatorA = myGrid;
-                    savePortableGrid(dxCall, grid);
-                    if (locatorA && locatorB) {
-                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: locatorB }).catch(() => {});
-                    }
-                    addLog(`DX grid ${grid ? `override → ${grid}` : "reset to callbook"}`);
-                  }}>
-                  Apply
+                <button className="btn-secondary" aria-label="DX station source" aria-pressed={dxUsesLocal}
+                  title={dxUsesLocal ? "Using local DX values; click to use WSJT-X / callbook" : "Using WSJT-X / callbook values; click to use the local values typed here"}
+                  style={STATION_SOURCE_BTN_STYLE}
+                  onClick={() => applyDxStation(dxUsesLocal, true)}>
+                  {dxUsesLocal ? "Local" : "WSJT-X"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 3, alignItems: "center", paddingLeft: 20 }}>
+                <input
+                  aria-label="DX altitude (m)"
+                  title="DX station altitude above sea level, metres (default 0)"
+                  value={dxAltInput}
+                  onChange={(e) => setDxAltInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="Alt m"
+                  style={{ ...STATION_INPUT_STYLE, width: "7ch" }}
+                />
+                <button className="btn-secondary" aria-label="Store DX station" style={{ fontSize: 10, padding: "2px 8px" }}
+                  title="Save this DX station and altitude in the DX favorites list"
+                  onClick={() => applyDxStation(false)}>
+                  Store DX
                 </button>
               </div>
             </div>
-            {/* Quick-select */}
-            <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
-              {[{ call: "VE7NX", grid: "CN89oh" }, { call: "W7PUA", grid: "CN84jq" }].map(s => (
-                <button key={s.call} className="btn-secondary"
-                  style={{ fontSize: 10, padding: "3px 8px",
-                    border: dxCall === s.call ? "1px solid var(--green)" : undefined,
-                    color: dxCall === s.call ? "var(--green)" : undefined }}
-                  onClick={() => {
-                    setDxCallsign(s.call); setDxGrid(s.grid.toUpperCase());
-                    const dxLocator = lookupGrid(s.call) ?? s.grid.toUpperCase();
-                    const locatorA = myGrid ?? wsjtxLive.de_grid;
-                    if (myCallsign) {
-                      rpc("set_station_calls", { call_a: myCallsign, call_b: s.call }).catch(() => {});
-                    }
-                    if (locatorA && dxLocator) {
-                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
-                    }
-                    addLog(`DX → ${s.call} ${dxLocator}`);
-                  }}>
-                  {s.call}
-                </button>
-              ))}
+            {/* DX favorites */}
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
+            <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap" }}>
+              <select
+                aria-label="DX favorites"
+                value=""
+                title="Pick a stored DX station (call, grid, altitude)"
+                className="btn-secondary"
+                style={{ fontSize: 10, padding: "3px 4px", fontFamily: "monospace", width: "14ch", flex: "0 0 auto" }}
+                onChange={(e) => {
+                  const f = favoriteDx[Number(e.target.value)];
+                  if (!f) return;
+                  setDxCallInput(f.call);
+                  setDxGridInput(f.grid ?? "");
+                  selectDx(f.call, f.grid, true, null, f.alt ?? "");
+                }}>
+                <option value="">Favorites</option>
+                {favoriteDx.map((f, i) => (
+                  <option key={`${f.call}|${favGrid(f)}|${favAlt(f)}|${i}`} value={i}>
+                    {`${f.call.padEnd(10, "\u00a0")} ${(f.grid ?? "—").padEnd(8, "\u00a0")} ${favAlt(f)} m`}
+                  </option>
+                ))}
+              </select>
               <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
                 onClick={async () => {
                   const call = prompt("DX callsign:");
@@ -1203,25 +1620,12 @@ export default function App() {
                   const info = await rpc("callsign_lookup", { callsign: call }) as { callsign: string; grid: string | null; name: string | null };
                   const nextCall = info.callsign.trim().toUpperCase();
                   const lookedUpGrid = normalizeGrid(info.grid);
-                  const dxLocator = lookupGrid(nextCall) ?? lookedUpGrid;
-                  const locatorA = myGrid ?? wsjtxLive.de_grid;
-                  setDxCallsign(nextCall);
-                  setDxGrid(lookedUpGrid);
-                  if (myCallsign) {
-                    rpc("set_station_calls", { call_a: myCallsign, call_b: nextCall }).catch(() => {});
-                  }
-                  if (locatorA && dxLocator) {
-                    rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
-                  }
-                  addLog(
-                    dxLocator
-                      ? `DX → ${nextCall} ${dxLocator}${info.name ? ` (${info.name})` : ""}`
-                      : `DX → ${nextCall} (enter portable grid manually)`,
-                  );
+                  selectDx(nextCall, lookedUpGrid, true, info.name);
                 }}>
                 + Other
               </button>
-              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+            </div>
+            <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "nowrap" }}>              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   setCallsignDbBusy(true);
                   try {
@@ -1243,7 +1647,7 @@ export default function App() {
                 disabled={callsignDbBusy}>
                 DB Check
               </button>
-              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   setCallsignDbBusy(true);
                   try {
@@ -1259,7 +1663,7 @@ export default function App() {
                 disabled={callsignDbBusy}>
                 DB Update
               </button>
-              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   const call = prompt("Contribute callsign:");
                   if (!call) return;
@@ -1386,7 +1790,7 @@ export default function App() {
                   background: rotatorSpeechEnabled ? "rgba(63,185,80,0.25)" : "#000",
                   color: rotatorSpeechEnabled ? "var(--green)" : "var(--text-muted)",
                 }}
-                onClick={() => setRotatorSpeechEnabled(!rotatorSpeechEnabled)}
+                onClick={() => setSpeechEnabled(!rotatorSpeechEnabled)}
                 onMouseEnter={previewSpeech}
                 onFocus={previewSpeech}
               >
@@ -1400,15 +1804,17 @@ export default function App() {
             </div>
             <RotatorPanel
               currentAz={rotatorAz} currentEl={rotatorEl}
-              targetAz={lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : rotatorTargetAz}
-              targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : rotatorTargetEl}
+              targetAz={lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az : rotatorTargetAz}
+              targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el : rotatorTargetEl}
+              targetInvalid={autoTargetInvalid}
               connected={rotatorConnected}
               dxAz={dxBearing}
               dxLabel={dxCall}
+              myLabel={myCallsign}
               speechEnabled={rotatorSpeechEnabled}
               speechThresholdDeg={rotatorSpeechThresholdDeg}
               speechIntervalSec={rotatorSpeechIntervalSec}
-              onSpeechEnabledChange={setRotatorSpeechEnabled}
+              onSpeechEnabledChange={setSpeechEnabled}
               onSpeechThresholdDegChange={(value) => setRotatorSpeechThresholdDeg(Math.max(0.1, value))}
               onSpeechIntervalSecChange={(value) => setRotatorSpeechIntervalSec(Math.max(0, value))}
               mode={uiMode}
@@ -1429,7 +1835,7 @@ export default function App() {
               clicksBlocked={!rotorOn}
               onBlockedClick={() => {
                 addLog("Rotor off: compass click ignored");
-                if (rotatorSpeechEnabled && isSpeechSupported()) speak("Rotor off");
+                if (rotatorSpeechEnabled && isSpeechSupported()) void speak("Rotor off").catch(e => addLog(`Speech: ${e}`));
               }}
             />
           </div>

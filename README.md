@@ -57,9 +57,9 @@ When multiple WSJT-X instances are on the network, the **Rig** dropdown selects 
 
 **Start QSO** marks the app's session as active; it does not enable transmission. Press **Enable Tx** in WSJT-X to transmit. By default, **Abort** and **Finish QSO** only update the app's session. The optional **Halt WSJT-X Tx on Abort/Finish** checkbox also sends Halt Tx to the selected WSJT-X instance; enable **Accept UDP requests** in WSJT-X's **Settings > Reporting** to use it. If delivery fails, use **Halt Tx** in WSJT-X itself. A QSO Logged message from the selected instance automatically completes an active app session.
 
-The compass outer ring marks the DX station's bearing and callsign. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
+The compass outer ring marks the DX station's bearing and callsign. Candidate aircraft are ranked by a geometry score; see [Plane scoring](docs/plane-scoring.md) for the criteria. The [User guide](docs/user-guide.md) covers the Stations panel and DX favorites list. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
 
-**Sky Dome** is an optional, desktop-only polar view of aircraft azimuth and elevation, hidden by default. Use **Show / Hide** beside the **Az / El** display controls; the choice is remembered. It sits above the main columns, alongside the Az / El panel when visible, and scales to the window without clipping the dome. The outer edge is the horizon (0 degrees), the centre is the zenith (90 degrees), and labelled concentric rings mark 22.5, 45, and 67.5 degrees. Click an aircraft to lock it, or a point in the sky to set the rotator target.
+**Sky Dome** is an optional, desktop-only polar view of aircraft azimuth and elevation, hidden by default. Use the **Open / Close** button beside the **Az / El** display controls; the choice is remembered. It opens as a floating, resizable window (a separate native window on desktop that can leave the app window), as does the Az / El readout, whose text scales as you drag its frame larger or smaller. The outer edge is the horizon (0 degrees), the centre is the zenith (90 degrees), and labelled concentric rings mark 22.5, 45, and 67.5 degrees. Click an aircraft to lock it, or a point in the sky to set the rotator target.
 
 Locking an aircraft adds a blue estimated course across the dome: a faint approach
 extension, dashed future track, direction arrow, and one-minute markers for the
@@ -105,6 +105,15 @@ Credentials are stored in the OS credential manager (Keychain, Credential Manage
 > **One RTL-SDR shared between dump1090 and `rtl_tcp` on the receiver?** [docs/remote-dump1090](docs/remote-dump1090/README.md) has a small first-come-wins service that starts dump1090 when AirWSJT-X connects and releases the dongle again when it disconnects, so nothing has to be switched by hand.
 
 ## Building from Source
+
+On Linux desktops whose WebKitGTK lacks the Web Speech API, speech callouts use
+the first installed `spd-say`, `espeak-ng`, or `espeak` executable. Install
+`speech-dispatcher` or `espeak-ng` to enable this fallback. Missing engines and
+native launch/exit errors appear in the app's log; the Speech button indicates
+platform support, not that an engine or audio output has been verified.
+Stopping or replacing callouts cancels only AirWSJT-X's own Speech Dispatcher
+client or terminates its owned espeak process, without interrupting other clients
+such as screen readers.
 
 ### Prerequisites
 
