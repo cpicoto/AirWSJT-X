@@ -201,3 +201,113 @@ test.describe("Speech callouts — graceful degradation", () => {
     await expect(cb).toBeDisabled();
   });
 });
+
+test.describe("Speech callouts — Linux native fallback", () => {
+  test.use({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" });
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "speechSynthesis", { value: undefined, configurable: true });
+      delete (window as unknown as Record<string, unknown>).speechSynthesis;
+      Object.assign(window, { __TAURI_INTERNALS__: {} });
+      localStorage.setItem("airwsjtx.rotatorSpeech.enabled", "1");
+      localStorage.setItem("airwsjtx.rotatorSpeech.intervalSec", "2");
+    });
+  });
+
+  for (const error of [
+    "No speech engine found. Install speech-dispatcher or espeak-ng.",
+    "Cannot start espeak-ng: Permission denied",
+    "spd-say failed (exit status: 1). Check the speech engine and audio configuration.",
+  ]) {
+    test(`logs native speech failure: ${error}`, async ({ page }) => {
+      const errors: string[] = [];
+      page.on("pageerror", e => errors.push(e.message));
+      await page.addInitScript(message => Object.assign(window, { __mockSpeechError: message }), error);
+      await page.goto("/");
+      await page.getByRole("button", { name: "Manual", exact: true }).click();
+      await page.locator('svg[width="170"][height="170"]').first().click({ position: { x: 85, y: 10 } });
+      await expect(page.getByText(`Speech: ${error}`, { exact: false })).toBeVisible();
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test("logs a native failure from the lost-plane-lock callout", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", e => errors.push(e.message));
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: /Speech on/i })).toBeVisible();
+    await page.evaluate(() => {
+      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
+      emit("sidecar-message", JSON.stringify({
+        event: "plane_locked",
+        data: {
+          icao24: "abc123", callsign: "TEST123", altitude_ft: 35000,
+          az_a: 90, el_a: 45, az_b: 180, el_b: 5,
+          scatter_score: 0.42, off_path_deg: 2, state: "tracking",
+        },
+      }));
+    });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { text?: string }[] })
+        .__mockSpeechRequests?.some(request => request.text === "Azimuth, 90, Elevation, 45")
+    )).toBe(true);
+    await page.evaluate(() => {
+      Object.assign(window, { __mockSpeechError: "Lost-lock native speech failed" });
+      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
+      emit("sidecar-message", JSON.stringify({ event: "plane_unlocked", data: {} }));
+    });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { text?: string }[] })
+        .__mockSpeechRequests?.some(request => request.text === "Lost plane lock")
+    )).toBe(true);
+    await expect(page.getByText("Speech: Lost-lock native speech failed", { exact: false })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("uses native pacing and reports cancellation errors in the app log", async ({ page }) => {
+    await page.addInitScript(() => Object.assign(window, { __mockSpeechStopError: "Cannot stop espeak-ng: access denied" }));
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await page.evaluate(() => {
+      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
+      emit("sidecar-message", JSON.stringify({ event: "rotator_connected", data: { host: "127.0.0.1", port: 4533 } }));
+    });
+    await expect(page.getByText("Rotator connected (127.0.0.1:4533)", { exact: false })).toBeVisible();
+    await page.locator('svg[width="170"][height="170"]').first().click({ position: { x: 85, y: 10 } });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { cmd: string; text?: string }[] })
+        .__mockSpeechRequests?.find(request => request.cmd === "speak_native")?.text
+    )).toMatch(/^Azimuth, -?\d+, Elevation, -?\d+$/);
+    await page.getByRole("button", { name: /Speech on/i }).click();
+    await expect(page.getByText("Speech: Cannot stop espeak-ng: access denied", { exact: false })).toBeVisible();
+  });
+
+  test("turning speech off cancels a rotor-off callout too", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await page.locator('svg[width="170"][height="170"]').first().click({ position: { x: 85, y: 10 } });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { text?: string }[] })
+        .__mockSpeechRequests?.some(request => request.text === "Rotor off")
+    )).toBe(true);
+    await page.getByRole("button", { name: /Speech on/i }).click();
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { cmd: string }[] })
+        .__mockSpeechRequests?.filter(request => request.cmd === "stop_native_speech").length
+    )).toBe(1);
+  });
+
+  test("prefers the existing Web Speech API when present", async ({ page }) => {
+    await installSpeechMock(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await page.locator('svg[width="170"][height="170"]').first().click({ position: { x: 85, y: 10 } });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __speechCalls: string[] }).__speechCalls
+    )).toEqual(["Rotor off"]);
+    expect(await page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: unknown[] }).__mockSpeechRequests ?? []
+    )).toEqual([]);
+  });
+});

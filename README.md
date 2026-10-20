@@ -106,6 +106,15 @@ Credentials are stored in the OS credential manager (Keychain, Credential Manage
 
 ## Building from Source
 
+On Linux desktops whose WebKitGTK lacks the Web Speech API, speech callouts use
+the first installed `spd-say`, `espeak-ng`, or `espeak` executable. Install
+`speech-dispatcher` or `espeak-ng` to enable this fallback. Missing engines and
+native launch/exit errors appear in the app's log; the Speech button indicates
+platform support, not that an engine or audio output has been verified.
+Stopping or replacing callouts cancels only AirWSJT-X's own Speech Dispatcher
+client or terminates its owned espeak process, without interrupting other clients
+such as screen readers.
+
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) 22+

@@ -715,7 +715,7 @@ export default function App() {
   useEffect(() => {
     if (!isSpeechSupported()) return;
     if (!rotatorSpeechEnabled || !rotatorSpeechSource) {
-      if (rotatorSpeechLastAnnouncedRef.current) cancelSpeech();
+      if (rotatorSpeechLastAnnouncedRef.current) void cancelSpeech().catch(e => addLog(`Speech: ${e}`));
       rotatorSpeechLastAnnouncedRef.current = null;
       rotatorSpeechLastProcessedRef.current = null;
       return;
@@ -728,7 +728,7 @@ export default function App() {
     const speechText = `Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`;
     if (!last || last.source !== source) {
       rotatorSpeechLastProcessedRef.current = { az, el, source };
-      if (announceFirstUpdate) speak(speechText);
+      if (announceFirstUpdate) void speak(speechText).catch(e => addLog(`Speech: ${e}`));
       rotatorSpeechLastAnnouncedRef.current = { az, el, at: now, source };
       return;
     }
@@ -746,7 +746,7 @@ export default function App() {
       return () => window.clearTimeout(timer);
     }
     rotatorSpeechLastProcessedRef.current = { az, el, source };
-    speak(speechText);
+    void speak(speechText).catch(e => addLog(`Speech: ${e}`));
     rotatorSpeechLastAnnouncedRef.current = { az, el, at: now, source };
   }, [
     rotatorAz,
@@ -757,6 +757,7 @@ export default function App() {
     rotatorSpeechThresholdDeg,
     rotatorSpeechIntervalSec,
     speechRecheck,
+    addLog,
   ]);
 
   const prevAutoLockedRef = useRef(false);
@@ -764,10 +765,10 @@ export default function App() {
     const autoLocked = uiMode !== "manual" && planeTargetValid;
     if (prevAutoLockedRef.current && uiMode !== "manual" && !planeTargetValid
       && rotatorSpeechEnabled && isSpeechSupported()) {
-      speak("Lost plane lock");
+      void speak("Lost plane lock").catch(e => addLog(`Speech: ${e}`));
     }
     prevAutoLockedRef.current = autoLocked;
-  }, [uiMode, planeTargetValid, rotatorSpeechEnabled]);
+  }, [uiMode, planeTargetValid, rotatorSpeechEnabled, addLog]);
 
   const [controlWsjtx, setControlWsjtx] = useState<boolean>(() => localStorage.getItem("airwsjtx.controlWsjtx") === "1");
   useEffect(() => { localStorage.setItem("airwsjtx.controlWsjtx", controlWsjtx ? "1" : "0"); }, [controlWsjtx]);
@@ -1177,7 +1178,14 @@ export default function App() {
     lastSpeechPreviewAt.current = now;
     const az = lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : rotatorTargetAz ?? rotatorAz;
     const el = lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : rotatorTargetEl ?? rotatorEl;
-    speak(`Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`);
+    void speak(`Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`).catch(e => addLog(`Speech: ${e}`));
+  }
+  function setSpeechEnabled(enabled: boolean) {
+    setRotatorSpeechEnabled(enabled);
+    if (!enabled) {
+      void cancelSpeech().catch(e => addLog(`Speech: ${e}`));
+      rotatorSpeechLastAnnouncedRef.current = null;
+    }
   }
   const portableReadout = (
     <AzElReadout
@@ -1782,7 +1790,7 @@ export default function App() {
                   background: rotatorSpeechEnabled ? "rgba(63,185,80,0.25)" : "#000",
                   color: rotatorSpeechEnabled ? "var(--green)" : "var(--text-muted)",
                 }}
-                onClick={() => setRotatorSpeechEnabled(!rotatorSpeechEnabled)}
+                onClick={() => setSpeechEnabled(!rotatorSpeechEnabled)}
                 onMouseEnter={previewSpeech}
                 onFocus={previewSpeech}
               >
@@ -1806,7 +1814,7 @@ export default function App() {
               speechEnabled={rotatorSpeechEnabled}
               speechThresholdDeg={rotatorSpeechThresholdDeg}
               speechIntervalSec={rotatorSpeechIntervalSec}
-              onSpeechEnabledChange={setRotatorSpeechEnabled}
+              onSpeechEnabledChange={setSpeechEnabled}
               onSpeechThresholdDegChange={(value) => setRotatorSpeechThresholdDeg(Math.max(0.1, value))}
               onSpeechIntervalSecChange={(value) => setRotatorSpeechIntervalSec(Math.max(0, value))}
               mode={uiMode}
@@ -1827,7 +1835,7 @@ export default function App() {
               clicksBlocked={!rotorOn}
               onBlockedClick={() => {
                 addLog("Rotor off: compass click ignored");
-                if (rotatorSpeechEnabled && isSpeechSupported()) speak("Rotor off");
+                if (rotatorSpeechEnabled && isSpeechSupported()) void speak("Rotor off").catch(e => addLog(`Speech: ${e}`));
               }}
             />
           </div>
