@@ -1,19 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.3.25
 
 ### Added
 - Auto mode speaks "Lost plane lock" when the locked aircraft is lost.
 - Speech callouts in Auto mode now announce the locked aircraft's Az/El even when the rotator is off or not connected.
+- DX station altitude in metres, used for aircraft elevation and scatter scoring.
+- A persistent, 20-entry DX favorites list replaces the fixed station buttons. **Store DX** saves callsign, grid, and altitude; exact duplicates move to the top, and selecting a favorite switches DX to Local mode.
+- Linux desktop speech fallback when WebKitGTK lacks the Web Speech API, using the first installed `spd-say`, `espeak-ng`, or `espeak`. Install `speech-dispatcher` or `espeak-ng` to enable it.
 
 ### Changed
-- Sky Dome is now a floating, draggable, resizable window instead of a docked panel, so it no longer squeezes the main app layout. Its position and size are remembered.
+- Sky Dome and the Az / El overlay open as their own floating windows that can leave the app window on desktop; browsers fall back to draggable, resizable in-page panels. Sky Dome no longer squeezes the main app layout, and its position and size are remembered.
 - When the rotator is not connected, the Az and El rotor needles and hubs on the compass and elevation arc turn grey, and return to blue once the rotator is connected.
 - Sky Dome marks the DX station on the outer ring with its callsign, as on the Az compass.
-- Sky Dome and the Az / El overlay open as their own floating windows that can leave the app window (desktop); browsers fall back to draggable, resizable in-page panels.
 - The Az / El overlay is resized by dragging its frame, and its text scales in proportion; the Scale slider is removed. The overlay and Sky Dome each use a single **Open / Close** toggle button. Sky Dome and the overlay are hidden on first start, show a resize grip in the lower-right corner, and closing either window with its X switches its button back to Open.
 - The docked Az / El panel is disabled (`AZEL_PANEL_ENABLED` in `App.tsx`); the code is kept so it can be re-enabled.
 - On loss of plane lock in Auto mode, the last known Az/El is kept (no reset to 0) and dimmed in the display panel, overlay, and rotor panel to show it is not driven by current tracking data. Speech callouts pause and no new rotator commands are sent until the next plane is locked, avoiding rotor churn (#111).
+- Tidied the Stations panel and added WSJT-X / Local source controls for MY and DX. Valid grids from WSJT-X take priority over callbook lookup in WSJT-X mode; locally entered DX values apply once complete and valid.
+- Station callsigns support portable/mobile suffixes and prefixes, with home-callsign fallback for callbook lookup.
+- Linux native speech uses a slower US English voice with pauses before azimuth and elevation values.
+
+### Fixed
+- Linux native speech reports missing engines, launch/exit failures, and cancellation failures in the app log instead of silently failing. Stopping or replacing callouts cancels only AirWSJT-X's own Speech Dispatcher client or owned espeak process, without interrupting screen readers or other clients.
+
+### Documentation
+- Added a user guide covering the Stations panel, DX favorites, and Auto / Manual operation.
 
 ## 0.3.24
 
