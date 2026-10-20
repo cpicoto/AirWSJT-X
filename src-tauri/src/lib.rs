@@ -48,9 +48,11 @@ fn speak_native(text: String) -> Result<(), String> {
     {
         stop_native_speech_inner();
         let candidates: [(&str, &[&str]); 3] = [
-            ("spd-say", &["--wait", "--"]),
-            ("espeak-ng", &["--"]),
-            ("espeak", &["--"]),
+            // Without an explicit language the default "en" voice is used, which
+            // mispronounces "Azimuth" (short "a" as in Scottish English).
+            ("spd-say", &["-l", "en-us", "-r", "-10", "--wait", "--"]),
+            ("espeak-ng", &["-v", "en-us", "-s", "155", "--"]),
+            ("espeak", &["-v", "en-us", "-s", "155", "--"]),
         ];
         for (program, args) in candidates {
             match std::process::Command::new(program).args(args).arg(&text).spawn() {
