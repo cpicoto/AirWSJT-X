@@ -15,6 +15,8 @@
  *                        utterances may be blocked by the browser.
  */
 
+import { invoke } from "@tauri-apps/api/core";
+
 interface AndroidTtsBridge {
   isAvailable(): boolean;
   speak(text: string): void;
@@ -28,15 +30,26 @@ function androidTts(): AndroidTtsBridge | null {
   return bridge && typeof bridge.speak === "function" ? bridge : null;
 }
 
+/**
+ * Linux desktop Tauri (WebKitGTK) may be built without the Web Speech API.
+ * The Rust side then speaks through spd-say / espeak-ng / espeak.
+ */
+function linuxNativeSpeech(): boolean {
+  if (typeof window === "undefined" || "speechSynthesis" in window) return false;
+  const tauri = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  return !!tauri && /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+}
+
 /** Returns true when the platform exposes native TTS or the speechSynthesis API. */
 export function isSpeechSupported(): boolean {
-  return androidTts() !== null || (typeof window !== "undefined" && "speechSynthesis" in window);
+  return androidTts() !== null || linuxNativeSpeech() || (typeof window !== "undefined" && "speechSynthesis" in window);
 }
 
 /** Stops any speech in progress on whichever backend is active. */
 export function cancelSpeech(): void {
   const native = androidTts();
   if (native) { native.stop(); return; }
+  if (linuxNativeSpeech()) { void invoke("stop_native_speech").catch(() => {}); return; }
   if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 
@@ -54,6 +67,7 @@ export function speak(text: string): void {
   if (!isSpeechSupported()) return;
   const native = androidTts();
   if (native) { native.speak(text); return; }
+  if (linuxNativeSpeech()) { void invoke("speak_native", { text }).catch(() => {}); return; }
   const ss = window.speechSynthesis;
   ss.cancel();
   if (ss.paused) ss.resume();

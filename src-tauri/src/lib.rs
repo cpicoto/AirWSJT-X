@@ -27,6 +27,57 @@ async fn fetch_remote_db() -> Result<String, String> {
     resp.text().await.map_err(|e| e.to_string())
 }
 
+/// Linux fallback for WebKitGTK builds that lack the Web Speech API.
+/// Uses the first available of spd-say, espeak-ng or espeak.
+#[cfg(target_os = "linux")]
+static NATIVE_SPEECH: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn stop_native_speech_inner() {
+    if let Ok(mut guard) = NATIVE_SPEECH.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[tauri::command]
+fn speak_native(text: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        stop_native_speech_inner();
+        let candidates: [(&str, &[&str]); 3] = [
+            ("spd-say", &["--wait", "--"]),
+            ("espeak-ng", &["--"]),
+            ("espeak", &["--"]),
+        ];
+        for (program, args) in candidates {
+            match std::process::Command::new(program).args(args).arg(&text).spawn() {
+                Ok(child) => {
+                    if let Ok(mut guard) = NATIVE_SPEECH.lock() {
+                        *guard = Some(child);
+                    }
+                    return Ok(());
+                }
+                Err(_) => continue,
+            }
+        }
+        Err("No speech engine found. Install speech-dispatcher or espeak-ng.".into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = text;
+        Err("Native speech is only available on Linux".into())
+    }
+}
+
+#[tauri::command]
+fn stop_native_speech() {
+    #[cfg(target_os = "linux")]
+    stop_native_speech_inner();
+}
+
 pub struct SidecarState {
     pub tx: Option<tauri_plugin_shell::process::CommandChild>,
     pub credential_updates: HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
@@ -174,6 +225,8 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
             send_to_sidecar,
             fetch_remote_db,
+            speak_native,
+            stop_native_speech,
             credentials::get_source_credentials_status,
             credentials::save_source_credentials,
             credentials::set_source_poll_interval,
