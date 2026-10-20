@@ -67,7 +67,7 @@ export function speak(text: string): void {
   if (!isSpeechSupported()) return;
   const native = androidTts();
   if (native) { native.speak(text); return; }
-  if (linuxNativeSpeech()) { void invoke("speak_native", { text }).catch(() => {}); return; }
+  if (linuxNativeSpeech()) { void invoke("speak_native", { text: text.replace(/\b(Azimuth|Elevation) (?=-?\d)/g, "$1, ") }).catch(() => {}); return; }
   const ss = window.speechSynthesis;
   ss.cancel();
   if (ss.paused) ss.resume();
