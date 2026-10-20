@@ -144,31 +144,24 @@ test.describe("Speech callouts — rotator panel", () => {
     expect(calls).toEqual([]);
   });
 
-  test("speech synthesis cancel is called before each speak", async ({ page }) => {
+  test("speech works in Auto mode with a locked plane and the rotator disconnected", async ({ page }) => {
     await page.goto("/");
-    // Simulate rotator connected + movement beyond threshold
-    await page.evaluate(() => {
+    const lock = (az: number, el: number, event = "plane_locked") => page.evaluate(({ az, el, event }) => {
       const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-      if (!emit) return;
-      emit("sidecar-message", JSON.stringify({ event: "rotator_connected", data: { host: "127.0.0.1", port: 4533 } }));
-      // First position (establishes baseline, no speak)
-      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 90, elevation: 45 } }));
-    });
-    // Wait for state to settle
-    await page.waitForTimeout(100);
-    // Move by more than threshold + interval
-    await page.evaluate(() => {
-      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-      if (!emit) return;
-      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 100, elevation: 50 } }));
-    });
-    await page.waitForTimeout(2200); // exceed 2s interval
-    await page.evaluate(() => {
-      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-      if (!emit) return;
-      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 115, elevation: 55 } }));
-    });
-    await page.waitForTimeout(200);
+      emit("sidecar-message", JSON.stringify({
+        event,
+        data: {
+          icao24: "abc123", callsign: "TEST123", altitude_ft: 35000, az_a: az, el_a: el,
+          az_b: 180, el_b: 5, scatter_score: 0.42, off_path_deg: 2, state: "tracking",
+        },
+      }));
+    }, { az, el, event });
+    await lock(90, 45);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __speechCalls: string[] }).__speechCalls)).toContain("Azimuth 90, Elevation 45");
+    // A move beyond the threshold is announced once the interval has passed, with no rotator connected.
+    await page.waitForTimeout(2200);
+    await lock(115, 55, "plane_tracking");
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __speechCalls: string[] }).__speechCalls)).toContain("Azimuth 115, Elevation 55");
     const cancelCount = await page.evaluate(() =>
       (window as unknown as { __speechCancelCount: () => number }).__speechCancelCount()
     );
