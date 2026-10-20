@@ -3,9 +3,17 @@
   "identifier": "default",
   "description": "Desktop capability for AirWSJT-X with sidecar access",
   "platforms": ["linux", "macOS", "windows"],
-  "windows": ["main"],
+  "windows": ["main", "skydome", "overlay"],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-outer-position",
+    "core:window:allow-inner-size",
+    "core:window:allow-scale-factor",
     "shell:allow-open",
     "shell:allow-stdin-write",
     {

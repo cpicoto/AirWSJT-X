@@ -144,31 +144,24 @@ test.describe("Speech callouts — rotator panel", () => {
     expect(calls).toEqual([]);
   });
 
-  test("speech synthesis cancel is called before each speak", async ({ page }) => {
+  test("speech works in Auto mode with a locked plane and the rotator disconnected", async ({ page }) => {
     await page.goto("/");
-    // Simulate rotator connected + movement beyond threshold
-    await page.evaluate(() => {
+    const lock = (az: number, el: number, event = "plane_locked") => page.evaluate(({ az, el, event }) => {
       const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-      if (!emit) return;
-      emit("sidecar-message", JSON.stringify({ event: "rotator_connected", data: { host: "127.0.0.1", port: 4533 } }));
-      // First position (establishes baseline, no speak)
-      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 90, elevation: 45 } }));
-    });
-    // Wait for state to settle
-    await page.waitForTimeout(100);
-    // Move by more than threshold + interval
-    await page.evaluate(() => {
-      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-      if (!emit) return;
-      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 100, elevation: 50 } }));
-    });
-    await page.waitForTimeout(2200); // exceed 2s interval
-    await page.evaluate(() => {
-      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
-      if (!emit) return;
-      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 115, elevation: 55 } }));
-    });
-    await page.waitForTimeout(200);
+      emit("sidecar-message", JSON.stringify({
+        event,
+        data: {
+          icao24: "abc123", callsign: "TEST123", altitude_ft: 35000, az_a: az, el_a: el,
+          az_b: 180, el_b: 5, scatter_score: 0.42, off_path_deg: 2, state: "tracking",
+        },
+      }));
+    }, { az, el, event });
+    await lock(90, 45);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __speechCalls: string[] }).__speechCalls)).toContain("Azimuth 90, Elevation 45");
+    // A move beyond the threshold is announced once the interval has passed, with no rotator connected.
+    await page.waitForTimeout(2200);
+    await lock(115, 55, "plane_tracking");
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __speechCalls: string[] }).__speechCalls)).toContain("Azimuth 115, Elevation 55");
     const cancelCount = await page.evaluate(() =>
       (window as unknown as { __speechCancelCount: () => number }).__speechCancelCount()
     );
@@ -238,6 +231,39 @@ test.describe("Speech callouts — Linux native fallback", () => {
       expect(errors).toEqual([]);
     });
   }
+
+  test("logs a native failure from the lost-plane-lock callout", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", e => errors.push(e.message));
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: /Speech on/i })).toBeVisible();
+    await page.evaluate(() => {
+      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
+      emit("sidecar-message", JSON.stringify({
+        event: "plane_locked",
+        data: {
+          icao24: "abc123", callsign: "TEST123", altitude_ft: 35000,
+          az_a: 90, el_a: 45, az_b: 180, el_b: 5,
+          scatter_score: 0.42, off_path_deg: 2, state: "tracking",
+        },
+      }));
+    });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { text?: string }[] })
+        .__mockSpeechRequests?.some(request => request.text === "Azimuth, 90, Elevation, 45")
+    )).toBe(true);
+    await page.evaluate(() => {
+      Object.assign(window, { __mockSpeechError: "Lost-lock native speech failed" });
+      const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;
+      emit("sidecar-message", JSON.stringify({ event: "plane_unlocked", data: {} }));
+    });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: { text?: string }[] })
+        .__mockSpeechRequests?.some(request => request.text === "Lost plane lock")
+    )).toBe(true);
+    await expect(page.getByText("Speech: Lost-lock native speech failed", { exact: false })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
 
   test("uses native pacing and reports cancellation errors in the app log", async ({ page }) => {
     await page.addInitScript(() => Object.assign(window, { __mockSpeechStopError: "Cannot stop espeak-ng: access denied" }));

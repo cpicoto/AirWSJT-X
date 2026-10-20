@@ -3,6 +3,7 @@ interface LockState {
   callsign: string;
   altitude_ft: number;
   range_a_km?: number | null;
+  range_b_km?: number | null;
   az_a: number;
   el_a: number;
   az_b: number;
@@ -64,8 +65,8 @@ function ScoreRing({ score }: { score: number }) {
   );
 }
 
-function AzElBadge({ label, az, el, rotAz, rotEl }:
-  { label: string; az: number; el: number; rotAz?: number | null; rotEl?: number | null }) {
+function AzElBadge({ label, az, el, rotAz, rotEl, rangeKm }:
+  { label: string; az: number; el: number; rotAz?: number | null; rotEl?: number | null; rangeKm?: number | null }) {
   const azErr = rotAz != null ? Math.abs(((rotAz - az + 540) % 360) - 180) : null;
   const elErr = rotEl != null ? Math.abs(rotEl - el) : null;
   const onTarget = azErr != null && elErr != null && azErr < 3 && elErr < 3;
@@ -83,6 +84,10 @@ function AzElBadge({ label, az, el, rotAz, rotEl }:
       <div style={{ fontFamily: "monospace", fontSize: 13, marginTop: 2, whiteSpace: "nowrap" }}>
         <span style={{ color: "#c9d1d9" }}>EL </span>
         <span style={{ color: "#58a6ff", fontWeight: 700 }}>{el.toFixed(1)}°</span>
+      </div>
+      <div style={{ fontFamily: "monospace", fontSize: 13, marginTop: 2, whiteSpace: "nowrap" }}>
+        <span style={{ color: "#c9d1d9" }}>km </span>
+        <span style={{ color: "#58a6ff", fontWeight: 700 }}>{rangeKm != null && Number.isFinite(rangeKm) ? rangeKm.toFixed(1) : "--"}</span>
       </div>
       {onTarget && <div style={{ fontSize: 10, color: "#3fb950", marginTop: 3 }}>● On target</div>}
     </div>
@@ -191,17 +196,15 @@ export default function PlaneLockPanel({
           </div>
           <div style={{ fontSize: 12, color: "#8b949e", marginTop: 4 }}>
             Aircraft altitude: {Number.isFinite(locked.altitude_ft) ? `${Math.round(locked.altitude_ft).toLocaleString("en-US")} ft` : "-- ft"}
-            {" · "}Distance from MY: {locked.range_a_km != null && Number.isFinite(locked.range_a_km)
-              ? `${locked.range_a_km.toFixed(1)} km` : "-- km"}
           </div>
           <div className="locked-stations" style={{
             display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, marginTop: 6,
           }}>
             <AzElBadge label="From My Station"
               az={locked.az_a} el={locked.el_a}
-              rotAz={locked.rotator_az} rotEl={locked.rotator_el} />
+              rotAz={locked.rotator_az} rotEl={locked.rotator_el} rangeKm={locked.range_a_km} />
             <AzElBadge label="From DX Station"
-              az={locked.az_b} el={locked.el_b} />
+              az={locked.az_b} el={locked.el_b} rangeKm={locked.range_b_km} />
           </div>
           {sessionState === "ready" && (
             <div style={{

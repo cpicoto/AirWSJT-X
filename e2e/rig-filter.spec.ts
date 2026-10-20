@@ -121,7 +121,7 @@ test("manual MY station works without WSJT-X and survives incoming status", asyn
   await page.reload();
   await expect(page.locator(".station-pill").first()).toContainText("K7MDL");
   await expect(page.getByRole("textbox", { name: "MY grid", exact: true })).toHaveValue("CN87VP");
-  await page.getByRole("button", { name: "Use WSJT-X", exact: true }).click();
+  await page.getByRole("button", { name: "MY station source", exact: true }).click();
   await expect(page.getByText(/MY station reset to WSJT-X/)).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("airwsjtx.myCallOverride"))).toBe("");
 });
@@ -138,7 +138,7 @@ test("discovers rigs, selects and persists a filter, and clears it", async ({ pa
   });
   await expect(async () => {
     await filter.click();
-    await expect(page.getByRole("option")).toHaveText([
+    await expect(page.getByRole("listbox").getByRole("option")).toHaveText([
       "Any rig", "WSJT-X-A (Home)", "WSJT-X-B (Portable)",
     ], { timeout: 500 });
   }).toPass();

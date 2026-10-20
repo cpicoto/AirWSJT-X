@@ -17,21 +17,21 @@ test("distance calculations use valid 4, 6, and 8 character grid centers", () =>
 
 test("station distance follows active MY and DX grids and handles unknown grids", async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("airwsjtx.portableGridOverrides", JSON.stringify({ VE7NX: "CN89" }));
+    localStorage.setItem("airwsjtx.favoriteDx", JSON.stringify([{ call: "VE7NX", grid: "CN89" }]));
   });
   await page.goto("/");
   const distance = page.locator(".station-distance");
-  await expect(distance).toHaveText("MY–DX distance: -- km");
+  await expect(distance).toHaveText("← -- km →");
   await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
   await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN87");
   await page.getByRole("button", { name: "Apply MY station" }).click();
-  await page.getByRole("button", { name: "VE7NX", exact: true }).click();
-  await expect(distance).toHaveText("MY–DX distance: 222.4 km");
+  await page.getByRole("combobox", { name: "DX favorites" }).selectOption({ index: 1 });
+  await expect(distance).toHaveText("← 222.4 km →");
   await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN89");
   await page.getByRole("button", { name: "Apply MY station" }).click();
-  await expect(distance).toHaveText("MY–DX distance: 0.0 km");
-  await page.getByRole("button", { name: "Use WSJT-X", exact: true }).click();
-  await expect(distance).toHaveText("MY–DX distance: -- km");
+  await expect(distance).toHaveText("← 0.0 km →");
+  await page.getByRole("button", { name: "MY station source", exact: true }).click();
+  await expect(distance).toHaveText("← -- km →");
 });
 
 for (const { source, interval } of [
@@ -73,7 +73,7 @@ test(`locked tile becomes stale only beyond ${source} ${interval}s poll plus 5s`
     }, { event, age, id });
   };
   await sendTracking("plane_locked", 0);
-  await expect(page.locator(".locked-plane")).toContainText("Distance from MY: 100.0 km");
+  await expect(page.locator(".locked-plane")).toContainText("km 100.0");
   const age = page.locator(".locked-update-age");
   await page.clock.runFor((interval + 5) * 1000 + 999);
   await expect(age).toContainText(`${interval + 5}s ago`);
@@ -81,7 +81,7 @@ test(`locked tile becomes stale only beyond ${source} ${interval}s poll plus 5s`
   await page.clock.runFor(1000);
   await expect(age).toContainText(`${interval + 6}s ago — stale`);
   await sendTracking("plane_tracking", 0, "another-plane");
-  await expect(page.locator(".locked-plane")).toContainText("Distance from MY: 100.0 km");
+  await expect(page.locator(".locked-plane")).toContainText("km 100.0");
   await expect(age).toContainText(`${interval + 6}s ago — stale`);
   await page.evaluate(({ source, interval }) => {
     const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
@@ -111,7 +111,7 @@ test(`locked tile becomes stale only beyond ${source} ${interval}s poll plus 5s`
   const tile = page.locator(".locked-plane");
   await expect(tile).toContainText("UPDATED");
   await expect(tile).toContainText("35,000 ft");
-  await expect(tile).toContainText("Distance from MY: 125.6 km");
+  await expect(tile).toContainText("km 125.6");
   await expect(tile).toContainText("234.0°");
   await expect(tile).toContainText("6.0°");
   await expect(tile).toContainText("12° off-path");
@@ -168,7 +168,7 @@ test("candidate text stays within the outline at the minimum window width", asyn
   });
   expect(iconGap).toBeGreaterThanOrEqual(12);
   await expect(locked).toContainText("Aircraft altitude: 45,000 ft");
-  await expect(locked).toContainText("Distance from MY: 125.6 km");
+  await expect(locked).toContainText("km 125.6");
   const altitude = locked.getByText(/Aircraft altitude:/);
   await expect(altitude).toBeVisible();
   const fits = await altitude.evaluate(element => {
