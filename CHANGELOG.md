@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Auto mode speaks "Lost plane lock" when the locked aircraft is lost.
+- Speech callouts in Auto mode now announce the locked aircraft's Az/El even when the rotator is off or not connected.
+
+### Changed
+- On loss of plane lock in Auto mode, the last known Az/El is kept (no reset to 0) and dimmed in the display panel, overlay, and rotor panel to show it is not driven by current tracking data. Speech callouts pause and no new rotator commands are sent until the next plane is locked, avoiding rotor churn (#111).
+
 ## 0.3.24
 
 ### Fixed
