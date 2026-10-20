@@ -6,6 +6,7 @@ interface RotatorPanelProps {
   currentEl: number;
   targetAz: number | null;
   targetEl: number | null;
+  targetInvalid?: boolean;
   connected: boolean;
   dxAz?: number | null;
   dxLabel?: string | null;
@@ -334,8 +335,7 @@ function ElevationArc({
 // ─── Main RotatorPanel ────────────────────────────────────────────────────────
 
 export default function RotatorPanel({
-  currentAz, currentEl, targetAz, targetEl,
-  connected, dxAz = null, dxLabel = null,
+  currentAz, currentEl, targetAz, targetEl, targetInvalid = false, connected, dxAz = null, dxLabel = null,
   speechEnabled,
   speechThresholdDeg,
   speechIntervalSec,
@@ -431,6 +431,8 @@ export default function RotatorPanel({
         background: isManualMode ? "rgba(88,166,255,0.08)" : "rgba(255,255,255,0.02)",
         borderRadius: 6,
         border: isManualMode ? "1px solid #58a6ff44" : "1px solid #30363d",
+        opacity: targetInvalid ? 0.35 : 1,
+        filter: targetInvalid ? "grayscale(1)" : undefined,
       }}>
         <div style={{
           display: "flex",
@@ -465,9 +467,7 @@ export default function RotatorPanel({
       {!isManualMode && (
         <>
           {/* Dials */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-
-            {/* Azimuth compass */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center", opacity: targetInvalid ? 0.35 : 1, filter: targetInvalid ? "grayscale(1)" : undefined }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
                 Azimuth
@@ -486,7 +486,7 @@ export default function RotatorPanel({
             </div>
           </div>
 
-          {(azErr !== null || elErr !== null) && (
+          {!targetInvalid && (azErr !== null || elErr !== null) && (
             <div style={{
               display: "flex",
               gap: 10,
