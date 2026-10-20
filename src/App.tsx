@@ -557,8 +557,13 @@ export default function App() {
         : null
     );
 
+  // Auto mode with the rotor off/disconnected still announces the target.
   const rotatorSpeechSource = !(rotatorControlEnabled && rotatorConnected)
-    ? null
+    ? (
+      uiMode !== "manual" && manualSpeechTarget
+        ? { ...manualSpeechTarget, source: "manual" as const, announceFirstUpdate: true }
+        : null
+    )
     : uiMode === "manual"
     ? (
       manualSpeechTarget
@@ -862,7 +867,7 @@ export default function App() {
   const rotorOn = rotatorControlEnabled && rotatorConnected;
   const lastSpeechPreviewAt = useRef(0);
   function previewSpeech() {
-    if (!isSpeechSupported() || !rotatorSpeechEnabled || !rotorOn) return;
+    if (!isSpeechSupported() || !rotatorSpeechEnabled || !(rotorOn || uiMode !== "manual")) return;
     const now = Date.now();
     if (now - lastSpeechPreviewAt.current < 1200) return;
     lastSpeechPreviewAt.current = now;
