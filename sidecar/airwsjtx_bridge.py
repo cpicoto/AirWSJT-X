@@ -82,6 +82,7 @@ _station_a_call: str | None = None
 _my_call_override: str | None = None
 _my_grid_override: str | None = None
 _station_a_alt_m: float = 0.0  # user-entered altitude of MY station above sea level
+_station_b_alt_m: float = 0.0  # user-entered altitude of DX station above sea level
 _wsjtx_de_call: str | None = None
 _wsjtx_de_grid: str | None = None
 _station_b_call: str | None = None
