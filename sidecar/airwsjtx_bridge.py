@@ -87,6 +87,7 @@ _wsjtx_de_call: str | None = None
 _wsjtx_de_grid: str | None = None
 _station_b_call: str | None = None
 _dx_grid_manual: bool = False
+_STATION_GRID_RE = re.compile(r"[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?")
 _manual_pointing: bool = False
 _rotator_control_enabled: bool = True
 
@@ -451,7 +452,7 @@ def handle(msg: dict) -> None:
             _station_a_locator = params.get("locator_a")
             _station_b_locator = params.get("locator_b")
             # A DX chosen in the app must not be clobbered by WSJT-X's DX grid.
-            _dx_grid_manual = bool(_station_b_locator)
+            _dx_grid_manual = bool(params.get("dx_local", bool(_station_b_locator)))
             _start_configured_airscout_feed(force_restart=True)
             _ok(id_, {"locator_a": _station_a_locator, "locator_b": _station_b_locator})
 
@@ -677,8 +678,7 @@ def handle(msg: dict) -> None:
             call = (params.get("callsign") or "").strip().upper() or None
             grid = (params.get("grid") or "").strip().upper() or None
             if grid:
-                import re
-                if not re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?", grid):
+                if not _STATION_GRID_RE.fullmatch(grid):
                     raise ValueError("MY grid must be a valid 4, 6, or 8 character Maidenhead locator")
             if call and (not any(c.isdigit() for c in call) or not any(c.isalpha() for c in call)
                          or not all(c.isascii() and (c.isalnum() or c == "/") for c in call)):
@@ -1447,7 +1447,10 @@ def _emit_aircraft_update() -> None:
 def _on_wsjtx_status(st: WSJTXStatus) -> None:
     global _station_a_locator, _station_b_locator, _station_a_call, _wsjtx_freq_hz, _wsjtx_band_mhz
     global _wsjtx_de_call, _wsjtx_de_grid
-    _wsjtx_de_call, _wsjtx_de_grid = st.de_call, st.de_grid
+    de_grid = (st.de_grid or "").strip().upper()
+    dx_grid = (st.dx_grid or "").strip().upper()
+    _wsjtx_de_call = st.de_call
+    _wsjtx_de_grid = de_grid if _STATION_GRID_RE.fullmatch(de_grid) else None
     # Capture frequency for supervisor begin_session
     if st.freq_hz:
         _wsjtx_freq_hz = st.freq_hz
@@ -1455,8 +1458,8 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
     # Auto-populate station A call + locator from WSJT-X de_call/de_grid
     if st.de_call and not _my_call_override:
         _station_a_call = st.de_call
-    if st.de_grid and not _my_grid_override and st.de_grid != _station_a_locator:
-        _station_a_locator = st.de_grid
+    if _wsjtx_de_grid and not _my_grid_override and _wsjtx_de_grid != _station_a_locator:
+        _station_a_locator = _wsjtx_de_grid
         with _source_status_lock:
             active_source = _active_source
         if active_source == "opensky":
@@ -1465,8 +1468,8 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
             _start_adsbexchange_feed()
         else:
             _start_configured_airscout_feed()
-    if st.dx_grid and not _dx_grid_manual and st.dx_grid != _station_b_locator:
-        _station_b_locator = st.dx_grid
+    if _STATION_GRID_RE.fullmatch(dx_grid) and not _dx_grid_manual and dx_grid != _station_b_locator:
+        _station_b_locator = dx_grid
         with _source_status_lock:
             active_source = _active_source
         if active_source == "opensky":

@@ -34,7 +34,7 @@ Otherwise the score is a weighted sum of four parts:
 
 ## Limitations
 
-- **Station B altitude:** the bridge passes only station A's altitude to `scatter_geometry`, so station B's elevation assumes 0 m.
+- **Station altitudes:** the bridge passes both MY (station A) and DX (station B) altitudes to `scatter_geometry`. Each defaults to 0 m unless entered in the Stations panel.
 - **Altitude:** apart from the optional minimum-altitude filter, altitude only enters through the elevation angles.
 - **Speed, heading, vertical rate:** these do not affect the score. Heading acts only as a pass/fail filter.
 - **Separate ranking:** [`airwsjtx/tracker.py`](../airwsjtx/tracker.py) has a different ranking based on average elevation, range and track stability. Only the `rank_candidates` RPC and the supervisor use it. The UI and auto-lock do not.

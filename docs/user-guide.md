@@ -43,7 +43,7 @@ The toggle button shows which source is in use:
 
 | Label | Meaning |
 |-------|---------|
-| **WSJT-X** | The station follows the call and grid WSJT-X reports. For DX, the callbook grid is used only when WSJT-X sends none. |
+| **WSJT-X** | The station follows the call and valid grid WSJT-X reports. The callbook grid is used only when WSJT-X sends no valid grid. |
 | **Local** | The station uses the call and grid typed in the boxes. |
 
 - Click the button to switch between the two.

@@ -903,15 +903,28 @@ export default function App() {
 
   const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
   const dxCall = dxCallsign ? cleanCall(dxCallsign) || null : null;
-  const myGrid = myGridOverride || lookupGrid(myCallsign) || wsjtxLive.de_grid;
+  const wsjtxMyGrid = normalizeGrid(wsjtxLive.de_grid);
+  const myGrid = myGridOverride || (isValidLocator(wsjtxMyGrid) ? wsjtxMyGrid : lookupGrid(myCallsign));
   const wsjtxDxGrid = normalizeGrid(wsjtxLive.dx_grid);
-  const selectedDxGrid = !dxLocal && isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : (lookupGrid(dxCall) ?? dxGrid);
+  const selectedDxGrid = dxLocal ? (dxGrid ?? lookupGrid(dxCall))
+    : isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : lookupGrid(dxCall);
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
   const dxBearing = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? bearingDeg(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
+
+  useEffect(() => {
+    if (!status) return;
+    rpc("set_station_calls", { call_a: myCallsign, call_b: dxCall })
+      .catch(e => addLog(`Station calls error: ${e}`));
+    rpc("airscout_set_stations", {
+      locator_a: isValidLocator(myGrid) ? myGrid : null,
+      locator_b: isValidLocator(selectedDxGrid) ? selectedDxGrid : null,
+      dx_local: dxLocal,
+    }).catch(e => addLog(`Station geometry error: ${e}`));
+  }, [status === null, myCallsign, myGrid, myCallOverride, myGridOverride, dxCall, selectedDxGrid, dxLocal, addLog]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem(ROTATOR_CONTROL_KEY, String(rotatorControlEnabled));
@@ -937,7 +950,9 @@ export default function App() {
   useEffect(() => {
     if (!status) return;
     const saved = Number(localStorage.getItem(DX_ALT_KEY) ?? "0");
-    if (Number.isFinite(saved) && saved !== 0) rpc("set_dx_altitude", { altitude_m: saved }).catch(() => {});
+    if (Number.isFinite(saved) && saved !== 0) {
+      rpc("set_dx_altitude", { altitude_m: saved }).catch(e => addLog(`DX altitude restore error: ${e}`));
+    }
   }, [status === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1063,21 +1078,17 @@ export default function App() {
   // Selecting a DX station by hand is a local choice; WSJT-X-driven changes are not.
   function selectDx(call: string, grid: string | null, local: boolean, name?: string | null, alt?: string) {
     const dxLocator = grid ?? lookupGrid(call);
-    const locatorA = myGrid ?? wsjtxLive.de_grid;
     if (alt !== undefined || call !== dxCallsign) {
       // a different station starts at 0 m unless a favorite supplies its altitude
       const nextAlt = alt ?? "";
       setDxAltInput(nextAlt);
       localStorage.setItem(DX_ALT_KEY, nextAlt);
-      rpc("set_dx_altitude", { altitude_m: nextAlt === "" ? 0 : Number(nextAlt) }).catch(() => {});
+      rpc("set_dx_altitude", { altitude_m: nextAlt === "" ? 0 : Number(nextAlt) })
+        .catch(e => addLog(`DX altitude error: ${e}`));
     }
     setDxCallsign(call);
     setDxGrid(grid);
     if (local) chooseDxMode(true);
-    if (myCallsign) rpc("set_station_calls", { call_a: myCallsign, call_b: call }).catch(() => {});
-    if (locatorA && dxLocator) {
-      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
-    }
     addLog(dxLocator
       ? `DX → ${call} ${dxLocator}${name ? ` (${name})` : ""}`
       : `DX → ${call} (enter portable grid manually)`);
@@ -1089,7 +1100,7 @@ export default function App() {
     const wsjtxDx = cleanCall(wsjtxLive.dx_call);
     if (!wsjtxDx || !isCompleteCall(wsjtxDx)) return;
     const grid = isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : null;
-    if (wsjtxDx !== dxCallsign || (grid && grid !== dxGrid)) {
+    if (wsjtxDx !== dxCallsign || grid !== dxGrid) {
       selectDx(wsjtxDx, grid, false);
     }
   }, [wsjtxLive.dx_call, wsjtxLive.dx_grid, dxLocal]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1115,8 +1126,10 @@ export default function App() {
       addLog("DX altitude must be a number of metres between -500 and 9000");
       return;
     }
-    localStorage.setItem(DX_ALT_KEY, altText);
-    rpc("set_dx_altitude", { altitude_m: altM }).catch(e => addLog(`DX altitude error: ${e}`));
+    if (reset || (!dxLocal && !toggle)) {
+      localStorage.setItem(DX_ALT_KEY, altText);
+      rpc("set_dx_altitude", { altitude_m: altM }).catch(e => addLog(`DX altitude error: ${e}`));
+    }
     if (reset) {
       chooseDxMode(false);
       if (dxCall) savePortableGrid(dxCall, null);
@@ -1145,10 +1158,7 @@ export default function App() {
       return;
     }
     savePortableGrid(call, grid);
-    selectDx(call, grid, true);
-    setDxAltInput(altText);
-    localStorage.setItem(DX_ALT_KEY, altText);
-    rpc("set_dx_altitude", { altitude_m: altM }).catch(() => {});
+    selectDx(call, grid, true, null, altText);
     if (!toggle) {
       storeDx(call, grid ?? lookupGrid(call), altText);
       addLog(`Stored DX ${call}`);

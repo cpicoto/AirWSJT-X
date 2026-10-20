@@ -17,7 +17,7 @@ test("distance calculations use valid 4, 6, and 8 character grid centers", () =>
 
 test("station distance follows active MY and DX grids and handles unknown grids", async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("airwsjtx.portableGridOverrides", JSON.stringify({ VE7NX: "CN89" }));
+    localStorage.setItem("airwsjtx.favoriteDx", JSON.stringify([{ call: "VE7NX", grid: "CN89" }]));
   });
   await page.goto("/");
   const distance = page.locator(".station-distance");
