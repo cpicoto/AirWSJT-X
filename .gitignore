@@ -10,6 +10,7 @@ src-tauri/target/
 
 # PyInstaller
 *.spec
+!sidecar/airwsjtx_bridge.spec
 build/
 
 # Compiled sidecar binaries

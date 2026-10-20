@@ -1,6 +1,6 @@
 [package]
 name = "airwsjtx"
-version = "0.3.23"
+version = "0.3.24"
 description = "AirWSJT-X — AirScatter Ham radio supervisor"
 authors = ["AirWSJT-X contributors"]
 edition = "2021"
