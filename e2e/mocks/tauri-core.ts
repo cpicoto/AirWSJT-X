@@ -47,6 +47,15 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
 export async function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   if (cmd === "plugin:shell|open") return;
   if (cmd === "fetch_remote_db") return "[]";
+  if (cmd === "speak_native" || cmd === "stop_native_speech") {
+    const mock = window as unknown as Record<string, unknown>;
+    mock.__mockSpeechRequests = [
+      ...(mock.__mockSpeechRequests as unknown[] ?? []), { cmd, ...args },
+    ];
+    const error = cmd === "speak_native" ? mock.__mockSpeechError : mock.__mockSpeechStopError;
+    if (error) throw error;
+    return;
+  }
   if (cmd === "get_source_rate_limit_status") {
     return (window as unknown as Record<string, unknown>).__mockQuotas ?? {};
   }

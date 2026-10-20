@@ -530,7 +530,8 @@ export default function MobileApp() {
     const sameAircraft = last?.icao24 === trackedAc.icao24;
     if (sameAircraft && last && now - last.at < 2000) return;
     if (sameAircraft && last && Math.max(Math.abs(((trackedAc.az - last.az + 540) % 360) - 180), Math.abs(trackedAc.el - last.el)) < 1) return;
-    speak(`${trackedAc.callsign}, Azimuth ${Math.round(trackedAc.az)}, Elevation ${Math.round(trackedAc.el)}`);
+    void speak(`${trackedAc.callsign}, Azimuth ${Math.round(trackedAc.az)}, Elevation ${Math.round(trackedAc.el)}`)
+      .catch(e => setStatus(`Speech: ${e}`));
     speechLastRef.current = { az: trackedAc.az, el: trackedAc.el, at: now, icao24: trackedAc.icao24 };
   }, [trackedAc, settings.speechEnabled]);
 

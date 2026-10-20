@@ -5,6 +5,8 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashMap;
 mod credentials;
+#[cfg(any(target_os = "linux", test))]
+mod native_speech;
 #[cfg(target_os = "android")]
 mod mobile_storage;
 #[cfg(any(mobile, test))]
@@ -30,42 +32,16 @@ async fn fetch_remote_db() -> Result<String, String> {
 /// Linux fallback for WebKitGTK builds that lack the Web Speech API.
 /// Uses the first available of spd-say, espeak-ng or espeak.
 #[cfg(target_os = "linux")]
-static NATIVE_SPEECH: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
-
-#[cfg(target_os = "linux")]
-fn stop_native_speech_inner() {
-    if let Ok(mut guard) = NATIVE_SPEECH.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
+static NATIVE_SPEECH: native_speech::NativeSpeech = native_speech::NativeSpeech::new();
 
 #[tauri::command]
-fn speak_native(text: String) -> Result<(), String> {
+async fn speak_native(text: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        stop_native_speech_inner();
-        let candidates: [(&str, &[&str]); 3] = [
-            // Without an explicit language the default "en" voice is used, which
-            // mispronounces "Azimuth" (short "a" as in Scottish English).
-            ("spd-say", &["-l", "en-us", "-r", "-10", "--wait", "--"]),
-            ("espeak-ng", &["-v", "en-us", "-s", "155", "--"]),
-            ("espeak", &["-v", "en-us", "-s", "155", "--"]),
-        ];
-        for (program, args) in candidates {
-            match std::process::Command::new(program).args(args).arg(&text).spawn() {
-                Ok(child) => {
-                    if let Ok(mut guard) = NATIVE_SPEECH.lock() {
-                        *guard = Some(child);
-                    }
-                    return Ok(());
-                }
-                Err(_) => continue,
-            }
-        }
-        Err("No speech engine found. Install speech-dispatcher or espeak-ng.".into())
+        let utterance = NATIVE_SPEECH.start(&text)?;
+        tauri::async_runtime::spawn_blocking(move || NATIVE_SPEECH.wait(utterance))
+            .await
+            .map_err(|e| format!("Cannot monitor native speech: {e}"))?
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -75,9 +51,15 @@ fn speak_native(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop_native_speech() {
+async fn stop_native_speech() -> Result<(), String> {
     #[cfg(target_os = "linux")]
-    stop_native_speech_inner();
+    {
+        tauri::async_runtime::spawn_blocking(|| NATIVE_SPEECH.stop())
+            .await
+            .map_err(|e| format!("Cannot stop native speech: {e}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(())
 }
 
 pub struct SidecarState {
@@ -246,8 +228,18 @@ pub fn run() {
         mobile_dump1090::fetch_mobile_dump1090,
         mobile_dump1090::stop_mobile_dump1090,
     ]);
-    builder.run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    builder.build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            #[cfg(target_os = "linux")]
+            if let tauri::RunEvent::Exit = event {
+                if let Err(e) = NATIVE_SPEECH.stop() {
+                    eprintln!("Cannot stop native speech on exit: {e}");
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = event;
+        });
 }
 
 #[cfg(test)]
