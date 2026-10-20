@@ -19,6 +19,7 @@ export interface FloatState {
   targetEl: number | null;
   pathBearing: number | null;
   dxLabel: string | null;
+  myLabel: string | null;
   readoutAz: number;
   readoutEl: number;
   readoutInvalid: boolean;

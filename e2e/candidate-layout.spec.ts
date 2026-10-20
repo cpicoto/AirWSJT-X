@@ -25,12 +25,12 @@ test("station distance follows active MY and DX grids and handles unknown grids"
   await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
   await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN87");
   await page.getByRole("button", { name: "Apply MY station" }).click();
-  await page.getByRole("button", { name: "VE7NX", exact: true }).click();
+  await page.getByRole("combobox", { name: "DX favorites" }).selectOption({ index: 1 });
   await expect(distance).toHaveText("MY–DX distance: 222.4 km");
   await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN89");
   await page.getByRole("button", { name: "Apply MY station" }).click();
   await expect(distance).toHaveText("MY–DX distance: 0.0 km");
-  await page.getByRole("button", { name: "Use WSJT-X", exact: true }).click();
+  await page.getByRole("button", { name: "MY station source", exact: true }).click();
   await expect(distance).toHaveText("MY–DX distance: -- km");
 });
 

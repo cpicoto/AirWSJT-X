@@ -693,6 +693,15 @@ def handle(msg: dict) -> None:
             _start_configured_airscout_feed(force_restart=True)
             _ok(id_, {"callsign": call, "grid": grid, "altitude_m": alt_m})
 
+        elif method == "set_dx_altitude":
+            global _station_b_alt_m
+            alt_raw = params.get("altitude_m")
+            alt_m = 0.0 if alt_raw in (None, "") else float(alt_raw)
+            if not -500.0 <= alt_m <= 9000.0:
+                raise ValueError("DX altitude must be between -500 and 9000 metres")
+            _station_b_alt_m = alt_m
+            _ok(id_, {"altitude_m": alt_m})
+
         elif method == "set_station_calls":
             _station_a_call = params.get("call_a")
             _station_b_call = params.get("call_b")
@@ -1029,7 +1038,7 @@ def _do_lock(icao24: str) -> dict | None:
         return None
 
     # Compute scatter score
-    geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore
+    geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore
 
     # Build track (current pos + projections)
     track = build_track(ac, lat_a, lon_a, n_samples=6, sample_interval_s=15.0, station_alt_m=_station_a_alt_m)
@@ -1120,7 +1129,7 @@ def _select_auto_lock_candidate(aircraft: list[Aircraft]) -> Aircraft | None:
     for ac in aircraft:
         if not ac.has_position or not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
-        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore[arg-type]
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
         score = float(geo.get("scatter_score", 0.0))
         if score > best_score and score >= 0.05:
             best_score = score
@@ -1155,7 +1164,7 @@ def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
     try:
         lat_a, lon_a = locator_to_latlon(_station_a_locator)
         lat_b, lon_b = locator_to_latlon(_station_b_locator or _station_a_locator)
-        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore
     except Exception:
         return
 
@@ -1332,6 +1341,7 @@ def _get_scatter_aircraft() -> list[dict]:
             lat_b, lon_b,
             ac.lat, ac.lon, ac.altitude_m,  # type: ignore[arg-type]
             _station_a_alt_m,
+            _station_b_alt_m,
         )
         if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
@@ -1378,7 +1388,7 @@ def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
         if not ac.has_position:
             continue
         total += 1
-        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m)  # type: ignore[arg-type]
+        geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
         if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
         results.append({

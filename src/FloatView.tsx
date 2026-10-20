@@ -81,6 +81,7 @@ export default function FloatView({ kind }: { kind: FloatKind }) {
         targetEl={state.targetEl}
         pathBearing={state.pathBearing}
         dxLabel={state.dxLabel}
+        myLabel={state.myLabel}
         onClickAircraft={(icao24) => send({ type: "lock", icao24 })}
         onClickSky={(az, el) => send({ type: "sky", az, el })}
       />

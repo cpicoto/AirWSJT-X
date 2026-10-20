@@ -27,6 +27,7 @@ interface WsjtxLive {
   de_call: string | null;
   de_grid: string | null;
   dx_call: string | null;
+  dx_grid: string | null;
   transmitting: boolean;
   decoding: boolean;
   tr_period: number | null;
@@ -193,6 +194,32 @@ const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
 const MY_CALL_OVERRIDE_KEY = "airwsjtx.myCallOverride";
 const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
 const MY_ALT_KEY = "airwsjtx.myAltitudeM";
+const DX_ALT_KEY = "airwsjtx.dxAltitudeM";
+const DX_LOCAL_KEY = "airwsjtx.dxLocal";
+const FAVORITE_DX_KEY = "airwsjtx.favoriteDx";
+const FAVORITE_DX_MAX = 20;
+type FavoriteDx = { call: string; grid: string | null; alt?: string };
+const favAlt = (f: FavoriteDx) => (f.alt?.trim() ? f.alt.trim() : "0");
+const favGrid = (f: FavoriteDx) => (f.grid ?? "").trim().toUpperCase();
+const DEFAULT_FAVORITE_DX: FavoriteDx[] = [{ call: "VE7NX", grid: "CN89oh" }, { call: "W7PUA", grid: "CN84jq" }];
+function loadFavoriteDx(): FavoriteDx[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FAVORITE_DX_KEY) ?? localStorage.getItem("airwsjtx.recentDx") ?? "null") as FavoriteDx[] | null;
+    if (Array.isArray(parsed) && parsed.every(r => r && typeof r.call === "string")) {
+      const out = parsed.map(r => ({ ...r, call: cleanCall(r.call) })).filter(r => isCompleteCall(r.call));
+      for (const d of DEFAULT_FAVORITE_DX) if (out.length < 2 && !out.some(r => r.call === d.call)) out.push(d);
+      return out.slice(0, FAVORITE_DX_MAX);
+    }
+  } catch { /* fall back to defaults */ }
+  return DEFAULT_FAVORITE_DX;
+}
+const STATION_SOURCE_BTN_STYLE: React.CSSProperties = {
+  fontSize: 10, padding: "2px 0", width: 52, boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", flex: "0 0 auto",
+};
+const STATION_INPUT_STYLE: React.CSSProperties = {
+  background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
+  borderRadius: 4, padding: "2px 4px", fontSize: 11, fontFamily: "monospace", boxSizing: "content-box",
+};
 const PORTABLE_BASE_FONT_PX = 72;
 
 type PortableViewMode = "hidden" | "panel" | "overlay";
@@ -243,6 +270,25 @@ function loadOverlayRect(): SkyDomeRect {
   return clampOverlayRect({ w: 600, h: 200, x: window.innerWidth - 620, y: 90 });
 }
 
+// Callbook lookups ignore portable/mobile markers: W7GLF/P, VE7/W7GLF, W7GLF/QRP
+const CALL_SUFFIXES = new Set(["P", "M", "MM", "AM", "QRP", "R", "A", "B"]);
+function baseCall(callsign: string): string {
+  const parts = callsign.trim().toUpperCase().split("/").filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? "";
+  const rest = parts.filter(p => !CALL_SUFFIXES.has(p) && !/^\d$/.test(p));
+  if (rest.length === 0) return parts[0];
+  return rest.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+// WSJT-X can send a half-typed call such as "W7GLF/"; drop dangling slashes
+function cleanCall(call: string | null | undefined): string {
+  return (call ?? "").trim().toUpperCase().replace(/^\/+|\/+$/g, "");
+}
+
+function isCompleteCall(call: string): boolean {
+  return /^[A-Z0-9]+(\/[A-Z0-9]+)*$/.test(call) && /[A-Z]/.test(call) && /[0-9]/.test(call) && call.length >= 3;
+}
+
 function normalizeGrid(grid: string | null | undefined): string | null {
   const normalized = (grid ?? "").trim().toUpperCase();
   return normalized.length > 0 ? normalized : null;
@@ -255,7 +301,7 @@ export default function App() {
   const [log, setLog] = useState<string[]>([]);
   const [wsjtxLive, setWsjtxLive] = useState<WsjtxLive>({
     connected: false, app_id: "", freq_mhz: null, mode: null,
-    sub_mode: null, de_call: null, de_grid: null, dx_call: null,
+    sub_mode: null, de_call: null, de_grid: null, dx_call: null, dx_grid: null,
     transmitting: false, decoding: false, tr_period: null,
     rx_df: null, tx_df: null, config_name: null,
   });
@@ -345,8 +391,13 @@ export default function App() {
   const [dxGridInput, setDxGridInput] = useState("");
   const myGridEditing = useRef(false);
   const [myAltInput, setMyAltInput] = useState(() => localStorage.getItem(MY_ALT_KEY) ?? "");
+  const [dxAltInput, setDxAltInput] = useState(() => localStorage.getItem(DX_ALT_KEY) ?? "");
   const [myAltitudeM, setMyAltitudeM] = useState(() => Number(localStorage.getItem(MY_ALT_KEY) ?? "0"));
   const dxGridEditing = useRef(false);
+  const dxCallEditing = useRef(false);
+  const [favoriteDx, setFavoriteDx] = useState<FavoriteDx[]>(loadFavoriteDx);
+  const [dxLocal, setDxLocal] = useState(() => localStorage.getItem(DX_LOCAL_KEY) === "1");
+  const [dxCallInput, setDxCallInput] = useState("");
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
   const [autoLock, setAutoLock] = useState(true);
   const [uiMode, setUiMode] = useState<"rotator" | "manual">("rotator");
@@ -415,7 +466,9 @@ export default function App() {
   function lookupGrid(callsign: string | null): string | null {
     if (!callsign) return null;
     const call = callsign.trim().toUpperCase();
-    return stationGridOverrides[call] ?? remoteStationGrids[call] ?? null;
+    const base = baseCall(call);
+    return stationGridOverrides[call] ?? remoteStationGrids[call]
+      ?? stationGridOverrides[base] ?? remoteStationGrids[base] ?? null;
   }
 
   // Wire sidecar messages — handles both RPC responses and push events
@@ -448,6 +501,7 @@ export default function App() {
               de_call: evtData.de_call as string | null,
               de_grid: evtData.de_grid as string | null,
               dx_call: evtData.dx_call as string | null,
+              dx_grid: evtData.dx_grid as string | null,
               transmitting: evtData.transmitting as boolean,
               decoding: evtData.decoding as boolean,
               tr_period: evtData.tr_period as number | null,
@@ -846,9 +900,10 @@ export default function App() {
   }, [airscout?.station_a, airscout?.station_b]);
 
   const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
-  const dxCall = dxCallsign?.trim().toUpperCase() ?? null;
+  const dxCall = dxCallsign ? cleanCall(dxCallsign) || null : null;
   const myGrid = myGridOverride || lookupGrid(myCallsign) || wsjtxLive.de_grid;
-  const selectedDxGrid = lookupGrid(dxCall) ?? dxGrid;
+  const wsjtxDxGrid = normalizeGrid(wsjtxLive.dx_grid);
+  const selectedDxGrid = !dxLocal && isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : (lookupGrid(dxCall) ?? dxGrid);
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
@@ -876,6 +931,12 @@ export default function App() {
         .catch(e => addLog(`MY station restore error: ${e}`));
     }
   }, [status, myCallOverride, myGridOverride, addLog]);
+
+  useEffect(() => {
+    if (!status) return;
+    const saved = Number(localStorage.getItem(DX_ALT_KEY) ?? "0");
+    if (Number.isFinite(saved) && saved !== 0) rpc("set_dx_altitude", { altitude_m: saved }).catch(() => {});
+  }, [status === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!myCallEditing.current) setMyCallInput(myCallOverride || wsjtxLive.de_call || "");
@@ -955,6 +1016,9 @@ export default function App() {
     if (!dxGridEditing.current) setDxGridInput(selectedDxGrid ?? "");
   }, [selectedDxGrid]);
   useEffect(() => {
+    if (!dxCallEditing.current) setDxCallInput(dxCall ?? "");
+  }, [dxCall]);
+  useEffect(() => {
     const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
     setAircraftFilters(stored);
     rpc("airscout_apply_filters", { filters: stored }).catch(() => {});
@@ -973,6 +1037,121 @@ export default function App() {
     });
   }
 
+  const myUsesLocal = !!(myCallOverride || myGridOverride);
+  const dxUsesLocal = dxLocal;
+
+  // Newest first, FIFO capped at 20. A station that matches an entry exactly (call, grid and
+  // altitude) moves to the top instead of being listed twice.
+  function storeDx(rawCall: string, grid: string | null, alt: string) {
+    const call = cleanCall(rawCall);
+    if (!isCompleteCall(call)) return;
+    const entry: FavoriteDx = { call, grid: normalizeGrid(grid), alt: alt.trim() || "0" };
+    setFavoriteDx(prev => {
+      const next = [entry, ...prev.filter(r => !(r.call === call && favGrid(r) === favGrid(entry) && favAlt(r) === favAlt(entry)))]
+        .slice(0, FAVORITE_DX_MAX);
+      localStorage.setItem(FAVORITE_DX_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+  function chooseDxMode(local: boolean) {
+    setDxLocal(local);
+    localStorage.setItem(DX_LOCAL_KEY, local ? "1" : "0");
+  }
+
+  // Selecting a DX station by hand is a local choice; WSJT-X-driven changes are not.
+  function selectDx(call: string, grid: string | null, local: boolean, name?: string | null, alt?: string) {
+    const dxLocator = grid ?? lookupGrid(call);
+    const locatorA = myGrid ?? wsjtxLive.de_grid;
+    if (alt !== undefined || call !== dxCallsign) {
+      // a different station starts at 0 m unless a favorite supplies its altitude
+      const nextAlt = alt ?? "";
+      setDxAltInput(nextAlt);
+      localStorage.setItem(DX_ALT_KEY, nextAlt);
+      rpc("set_dx_altitude", { altitude_m: nextAlt === "" ? 0 : Number(nextAlt) }).catch(() => {});
+    }
+    setDxCallsign(call);
+    setDxGrid(grid);
+    if (local) chooseDxMode(true);
+    if (myCallsign) rpc("set_station_calls", { call_a: myCallsign, call_b: call }).catch(() => {});
+    if (locatorA && dxLocator) {
+      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
+    }
+    addLog(dxLocator
+      ? `DX → ${call} ${dxLocator}${name ? ` (${name})` : ""}`
+      : `DX → ${call} (enter portable grid manually)`);
+  }
+
+  // WSJT-X mode: follow both the DX call and grid WSJT-X reports (the callbook is only the fallback)
+  useEffect(() => {
+    if (dxLocal) return;
+    const wsjtxDx = cleanCall(wsjtxLive.dx_call);
+    if (!wsjtxDx || !isCompleteCall(wsjtxDx)) return;
+    const grid = isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : null;
+    if (wsjtxDx !== dxCallsign || (grid && grid !== dxGrid)) {
+      selectDx(wsjtxDx, grid, false);
+    }
+  }, [wsjtxLive.dx_call, wsjtxLive.dx_grid, dxLocal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Local mode: typed call/grid take effect as soon as they are complete and valid
+  useEffect(() => {
+    if (!dxLocal) return;
+    const call = cleanCall(dxCallInput);
+    const grid = normalizeGrid(dxGridInput);
+    if (!isCompleteCall(call)) return;
+    if (grid && !isValidLocator(grid)) return;
+    if (call === dxCallsign && (grid ?? lookupGrid(call)) === selectedDxGrid) return;
+    const t = setTimeout(() => {
+      savePortableGrid(call, grid);
+      selectDx(call, grid, true);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [dxCallInput, dxGridInput, dxLocal]); // eslint-disable-line react-hooks/exhaustive-deps
+  function applyDxStation(reset: boolean, toggle = false) {
+    const altText = dxAltInput.trim();
+    const altM = altText === "" ? 0 : Number(altText);
+    if (!Number.isFinite(altM) || altM < -500 || altM > 9000) {
+      addLog("DX altitude must be a number of metres between -500 and 9000");
+      return;
+    }
+    localStorage.setItem(DX_ALT_KEY, altText);
+    rpc("set_dx_altitude", { altitude_m: altM }).catch(e => addLog(`DX altitude error: ${e}`));
+    if (reset) {
+      chooseDxMode(false);
+      if (dxCall) savePortableGrid(dxCall, null);
+      addLog("DX station follows WSJT-X");
+      return;
+    }
+    if (!dxLocal && !toggle) {
+      // WSJT-X mode: Store DX keeps the current station and its altitude without changing mode
+      if (!dxCall) {
+        addLog("No DX station to store");
+        return;
+      }
+      storeDx(dxCall, selectedDxGrid, altText);
+      addLog(`Stored DX ${dxCall}`);
+      return;
+    }
+    chooseDxMode(true);
+    const call = cleanCall(dxCallInput) || dxCall;
+    if (!call) {
+      addLog(toggle ? "DX station is Local; enter a callsign and press Apply" : "Set DX callsign before applying DX grid");
+      return;
+    }
+    const grid = normalizeGrid(dxGridInput);
+    if (grid && !isValidLocator(grid)) {
+      addLog("DX grid must be a valid 4, 6, or 8 character Maidenhead locator");
+      return;
+    }
+    savePortableGrid(call, grid);
+    selectDx(call, grid, true);
+    setDxAltInput(altText);
+    localStorage.setItem(DX_ALT_KEY, altText);
+    rpc("set_dx_altitude", { altitude_m: altM }).catch(() => {});
+    if (!toggle) {
+      storeDx(call, grid ?? lookupGrid(call), altText);
+      addLog(`Stored DX ${call}`);
+    }
+  }
   const currentAz = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az
     : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
   const currentEl = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el
@@ -1015,6 +1194,7 @@ export default function App() {
     targetEl: lockedPlane ? lockedPlane.el_a : rotatorTargetEl,
     pathBearing: dxBearing,
     dxLabel: dxCall,
+    myLabel: myCallsign,
     readoutAz: currentAz,
     readoutEl: currentEl,
     readoutInvalid: autoTargetInvalid,
@@ -1263,6 +1443,7 @@ export default function App() {
             targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
             pathBearing={dxBearing}
             dxLabel={dxCall}
+            myLabel={myCallsign}
             onClickAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
             onClickSky={(az, el) => {
               setRotatorTargetAz(az);
@@ -1298,37 +1479,38 @@ export default function App() {
             <div className="station-distance" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
               MY–DX distance: {stationDistanceKm === null ? "-- km" : `${stationDistanceKm.toFixed(1)} km`}
             </div>
-            <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
-              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>MY</span>
+            <div style={{ display: "grid", gap: 3, marginTop: 6 }}>
+              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", width: 17, flex: "0 0 auto" }}>MY</span>
                 <input
                   aria-label="MY callsign"
                   value={myCallInput}
+                  maxLength={10}
                   onChange={e => setMyCallInput(e.target.value.toUpperCase())}
                   onFocus={() => { myCallEditing.current = true; }}
                   onBlur={() => { myCallEditing.current = false; }}
                   placeholder="Callsign"
-                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
-                    borderRadius: 4, padding: "2px 6px", fontSize: 11, width: 86, fontFamily: "monospace" }}
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
                 />
                 <input
                   aria-label="MY grid"
                   value={myGridInput}
+                  maxLength={10}
                   onChange={(e) => setMyGridInput(e.target.value.toUpperCase())}
                   onFocus={() => { myGridEditing.current = true; }}
                   onBlur={() => { myGridEditing.current = false; }}
                   placeholder={wsjtxLive.de_grid ?? "Grid"}
-                  style={{
-                    background: "var(--surface)",
-                    color: "var(--text)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "2px 6px",
-                    fontSize: 11,
-                    width: 86,
-                    fontFamily: "monospace",
-                  }}
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
                 />
+                <button className="btn-secondary" aria-label="MY station source" aria-pressed={myUsesLocal}
+                  disabled={myStationBusy}
+                  title={myUsesLocal ? "Using local MY values; click to use WSJT-X" : "Using WSJT-X values; click to use the local values typed here"}
+                  style={STATION_SOURCE_BTN_STYLE}
+                  onClick={() => { void applyMyStation(myUsesLocal); }}>
+                  {myUsesLocal ? "Local" : "WSJT-X"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 3, alignItems: "center", paddingLeft: 20 }}>
                 <input
                   aria-label="MY altitude (m)"
                   title="Station altitude above sea level, metres"
@@ -1336,76 +1518,82 @@ export default function App() {
                   onChange={(e) => setMyAltInput(e.target.value)}
                   inputMode="decimal"
                   placeholder="Alt m"
-                  style={{ background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
-                    borderRadius: 4, padding: "2px 6px", fontSize: 11, width: 56, fontFamily: "monospace" }}
+                  style={{ ...STATION_INPUT_STYLE, width: "7ch" }}
                 />
                 <button className="btn-secondary" aria-label="Apply MY station" disabled={myStationBusy}
                   style={{ fontSize: 10, padding: "2px 8px" }} onClick={() => { void applyMyStation(); }}>
                   Apply
                 </button>
-                <button className="btn-secondary" disabled={myStationBusy} style={{ fontSize: 10, padding: "2px 8px" }}
-                  onClick={() => { void applyMyStation(true); }}>Use WSJT-X</button>
               </div>
-              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 22 }}>DX</span>
+              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", width: 17, flex: "0 0 auto" }}>DX</span>
                 <input
+                  aria-label="DX callsign"
+                  value={dxCallInput}
+                  maxLength={10}
+                  onChange={(e) => { setDxCallInput(e.target.value.toUpperCase()); chooseDxMode(true); }}
+                  onFocus={() => { dxCallEditing.current = true; }}
+                  onBlur={() => { dxCallEditing.current = false; }}
+                  placeholder="Callsign"
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
+                />
+                <input
+                  aria-label="DX grid"
                   value={dxGridInput}
-                  onChange={(e) => setDxGridInput(e.target.value.toUpperCase())}
+                  maxLength={10}
+                  onChange={(e) => { setDxGridInput(e.target.value.toUpperCase()); chooseDxMode(true); }}
                   onFocus={() => { dxGridEditing.current = true; }}
                   onBlur={() => { dxGridEditing.current = false; }}
                   placeholder={dxGrid ?? "Grid"}
-                  style={{
-                    background: "var(--surface)",
-                    color: "var(--text)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "2px 6px",
-                    fontSize: 11,
-                    width: 86,
-                    fontFamily: "monospace",
-                  }}
+                  style={{ ...STATION_INPUT_STYLE, width: "10.4ch" }}
                 />
-                <button className="btn-secondary" style={{ fontSize: 10, padding: "2px 8px" }}
-                  onClick={() => {
-                    if (!dxCall) {
-                      addLog("Set DX callsign before applying DX grid");
-                      return;
-                    }
-                    const grid = normalizeGrid(dxGridInput);
-                    const locatorB = grid ?? dxGrid;
-                    const locatorA = myGrid;
-                    savePortableGrid(dxCall, grid);
-                    if (locatorA && locatorB) {
-                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: locatorB }).catch(() => {});
-                    }
-                    addLog(`DX grid ${grid ? `override → ${grid}` : "reset to callbook"}`);
-                  }}>
-                  Apply
+                <button className="btn-secondary" aria-label="DX station source" aria-pressed={dxUsesLocal}
+                  title={dxUsesLocal ? "Using local DX values; click to use WSJT-X / callbook" : "Using WSJT-X / callbook values; click to use the local values typed here"}
+                  style={STATION_SOURCE_BTN_STYLE}
+                  onClick={() => applyDxStation(dxUsesLocal, true)}>
+                  {dxUsesLocal ? "Local" : "WSJT-X"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 3, alignItems: "center", paddingLeft: 20 }}>
+                <input
+                  aria-label="DX altitude (m)"
+                  title="DX station altitude above sea level, metres (default 0)"
+                  value={dxAltInput}
+                  onChange={(e) => setDxAltInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="Alt m"
+                  style={{ ...STATION_INPUT_STYLE, width: "7ch" }}
+                />
+                <button className="btn-secondary" aria-label="Store DX station" style={{ fontSize: 10, padding: "2px 8px" }}
+                  title="Save this DX station and altitude in the DX favorites list"
+                  onClick={() => applyDxStation(false)}>
+                  Store DX
                 </button>
               </div>
             </div>
-            {/* Quick-select */}
-            <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
-              {[{ call: "VE7NX", grid: "CN89oh" }, { call: "W7PUA", grid: "CN84jq" }].map(s => (
-                <button key={s.call} className="btn-secondary"
-                  style={{ fontSize: 10, padding: "3px 8px",
-                    border: dxCall === s.call ? "1px solid var(--green)" : undefined,
-                    color: dxCall === s.call ? "var(--green)" : undefined }}
-                  onClick={() => {
-                    setDxCallsign(s.call); setDxGrid(s.grid.toUpperCase());
-                    const dxLocator = lookupGrid(s.call) ?? s.grid.toUpperCase();
-                    const locatorA = myGrid ?? wsjtxLive.de_grid;
-                    if (myCallsign) {
-                      rpc("set_station_calls", { call_a: myCallsign, call_b: s.call }).catch(() => {});
-                    }
-                    if (locatorA && dxLocator) {
-                      rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
-                    }
-                    addLog(`DX → ${s.call} ${dxLocator}`);
-                  }}>
-                  {s.call}
-                </button>
-              ))}
+            {/* DX favorites */}
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
+            <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap" }}>
+              <select
+                aria-label="DX favorites"
+                value=""
+                title="Pick a stored DX station (call, grid, altitude)"
+                className="btn-secondary"
+                style={{ fontSize: 10, padding: "3px 4px", fontFamily: "monospace", width: "14ch", flex: "0 0 auto" }}
+                onChange={(e) => {
+                  const f = favoriteDx[Number(e.target.value)];
+                  if (!f) return;
+                  setDxCallInput(f.call);
+                  setDxGridInput(f.grid ?? "");
+                  selectDx(f.call, f.grid, true, null, f.alt ?? "");
+                }}>
+                <option value="">Favorites</option>
+                {favoriteDx.map((f, i) => (
+                  <option key={`${f.call}|${favGrid(f)}|${favAlt(f)}|${i}`} value={i}>
+                    {`${f.call.padEnd(10, "\u00a0")} ${(f.grid ?? "—").padEnd(8, "\u00a0")} ${favAlt(f)} m`}
+                  </option>
+                ))}
+              </select>
               <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
                 onClick={async () => {
                   const call = prompt("DX callsign:");
@@ -1413,25 +1601,12 @@ export default function App() {
                   const info = await rpc("callsign_lookup", { callsign: call }) as { callsign: string; grid: string | null; name: string | null };
                   const nextCall = info.callsign.trim().toUpperCase();
                   const lookedUpGrid = normalizeGrid(info.grid);
-                  const dxLocator = lookupGrid(nextCall) ?? lookedUpGrid;
-                  const locatorA = myGrid ?? wsjtxLive.de_grid;
-                  setDxCallsign(nextCall);
-                  setDxGrid(lookedUpGrid);
-                  if (myCallsign) {
-                    rpc("set_station_calls", { call_a: myCallsign, call_b: nextCall }).catch(() => {});
-                  }
-                  if (locatorA && dxLocator) {
-                    rpc("airscout_set_stations", { locator_a: locatorA, locator_b: dxLocator }).catch(() => {});
-                  }
-                  addLog(
-                    dxLocator
-                      ? `DX → ${nextCall} ${dxLocator}${info.name ? ` (${info.name})` : ""}`
-                      : `DX → ${nextCall} (enter portable grid manually)`,
-                  );
+                  selectDx(nextCall, lookedUpGrid, true, info.name);
                 }}>
                 + Other
               </button>
-              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+            </div>
+            <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "nowrap" }}>              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   setCallsignDbBusy(true);
                   try {
@@ -1453,7 +1628,7 @@ export default function App() {
                 disabled={callsignDbBusy}>
                 DB Check
               </button>
-              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   setCallsignDbBusy(true);
                   try {
@@ -1469,7 +1644,7 @@ export default function App() {
                 disabled={callsignDbBusy}>
                 DB Update
               </button>
-              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
+              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   const call = prompt("Contribute callsign:");
                   if (!call) return;
@@ -1616,6 +1791,7 @@ export default function App() {
               connected={rotatorConnected}
               dxAz={dxBearing}
               dxLabel={dxCall}
+              myLabel={myCallsign}
               speechEnabled={rotatorSpeechEnabled}
               speechThresholdDeg={rotatorSpeechThresholdDeg}
               speechIntervalSec={rotatorSpeechIntervalSec}

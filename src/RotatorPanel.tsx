@@ -10,6 +10,7 @@ interface RotatorPanelProps {
   connected: boolean;
   dxAz?: number | null;
   dxLabel?: string | null;
+  myLabel?: string | null;
   speechEnabled: boolean;
   speechThresholdDeg: number;
   speechIntervalSec: number;
@@ -58,6 +59,7 @@ function CompassRose({
   size = 260,
   dxAz = null,
   dxLabel = null,
+  myLabel = null,
   onClick,
   active = true,
 }: {
@@ -66,6 +68,7 @@ function CompassRose({
   size?: number;
   dxAz?: number | null;
   dxLabel?: string | null;
+  myLabel?: string | null;
   onClick?: (az: number) => void;
   active?: boolean;
 }) {
@@ -215,6 +218,25 @@ function CompassRose({
           </g>
         );
       })()}
+
+      {/* MY station label on outer ring, on the reciprocal of the DX bearing */}
+      {dxAz !== null && myLabel && (() => {
+        const az = (dxAz + 180) % 360;
+        const lp = azToXY(az, outerR + 10);
+        const sin = Math.sin((az * Math.PI) / 180);
+        const cos = Math.cos((az * Math.PI) / 180);
+        const anchor = sin > 0.3 ? "start" : sin < -0.3 ? "end" : "middle";
+        const dy = anchor === "middle" ? (cos > 0 ? -6 : 8) : 3;
+        const dot = azToXY(az, outerR);
+        return (
+          <g pointerEvents="none">
+            <circle cx={dot.x} cy={dot.y} r={4} fill="#58a6ff" stroke="#0d1117" strokeWidth={1} />
+            <text x={lp.x} y={lp.y + dy} textAnchor={anchor} fontSize={9} fontWeight={700} fill="#58a6ff">
+              {myLabel}
+            </text>
+          </g>
+        );
+      })()}
     </svg>
   );
 }
@@ -341,7 +363,7 @@ function ElevationArc({
 // ─── Main RotatorPanel ────────────────────────────────────────────────────────
 
 export default function RotatorPanel({
-  currentAz, currentEl, targetAz, targetEl, targetInvalid = false, connected, dxAz = null, dxLabel = null,
+  currentAz, currentEl, targetAz, targetEl, targetInvalid = false, connected, dxAz = null, dxLabel = null, myLabel = null,
   speechEnabled,
   speechThresholdDeg,
   speechIntervalSec,
@@ -461,7 +483,7 @@ export default function RotatorPanel({
         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
             <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
-            <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel} onClick={handleCompassClick} active={connected} />
+            <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel} myLabel={myLabel} onClick={handleCompassClick} active={connected} />
           </div>
           <div style={{ position: "relative", width: elevWidth, alignSelf: "center", marginTop: 14 }}>
             <div style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", pointerEvents: "none" }}>Elevation</div>
@@ -478,7 +500,7 @@ export default function RotatorPanel({
               <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>
                 Azimuth
               </div>
-              <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel}
+              <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel} myLabel={myLabel}
                 onClick={connected ? handleCompassClick : undefined} active={connected} />
             </div>
 
