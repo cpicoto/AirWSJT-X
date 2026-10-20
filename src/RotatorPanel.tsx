@@ -59,6 +59,7 @@ function CompassRose({
   dxAz = null,
   dxLabel = null,
   onClick,
+  active = true,
 }: {
   current: number;
   target: number | null;
@@ -66,7 +67,9 @@ function CompassRose({
   dxAz?: number | null;
   dxLabel?: string | null;
   onClick?: (az: number) => void;
+  active?: boolean;
 }) {
+  const rotorColor = active ? "#58a6ff" : "#6e7681";
   const cx = size / 2, cy = size / 2;
   const outerR = size / 2 - 4;
   const innerR = outerR - 22;
@@ -174,24 +177,24 @@ function CompassRose({
         {/* White tip half */}
         <polygon
           points={needle(current, needleLen, 0)}
-          fill="#58a6ff"
-          stroke="#58a6ff"
+          fill={rotorColor}
+          stroke={rotorColor}
           strokeWidth={1}
           opacity={0.9}
         />
         {/* Red tail half */}
         <polygon
           points={needle((current + 180) % 360, needleLen * 0.25, 0)}
-          fill="#f85149"
-          stroke="#f85149"
+          fill={active ? "#f85149" : "#6e7681"}
+          stroke={active ? "#f85149" : "#6e7681"}
           strokeWidth={1}
           opacity={0.9}
         />
       </g>
 
       {/* Center hub */}
-      <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
-      <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
+      <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke={rotorColor} strokeWidth={2} />
+      <circle cx={cx} cy={cy} r={3} fill={rotorColor} />
 
       {/* DX station direction marker on outer ring, label just outside */}
       {dxAz !== null && (() => {
@@ -224,13 +227,16 @@ function ElevationArc({
   width = 260,
   height = 140,
   onClick,
+  active = true,
 }: {
   current: number;
   target: number | null;
   width?: number;
   height?: number;
   onClick?: (el: number) => void;
+  active?: boolean;
 }) {
+  const rotorColor = active ? "#58a6ff" : "#6e7681";
   const cx = 18;
   const cy = height - 16;
   const R = Math.max(22, Math.min(width - 30, height - 24));
@@ -296,7 +302,7 @@ function ElevationArc({
         return (
           <path
             d={`M ${arcStart.x} ${arcStart.y} A ${R} ${R} 0 0 0 ${fillEnd.x} ${fillEnd.y}`}
-            fill="none" stroke="rgba(88,166,255,0.25)" strokeWidth={18} strokeLinecap="round"
+            fill="none" stroke={active ? "rgba(88,166,255,0.25)" : "rgba(110,118,129,0.25)"} strokeWidth={18} strokeLinecap="round"
           />
         );
       })()}
@@ -314,15 +320,15 @@ function ElevationArc({
       })()}
 
       {/* Current needle */}
-      <path d={needle(current, R - 2)} stroke="#58a6ff" strokeWidth={3} strokeLinecap="round" />
+      <path d={needle(current, R - 2)} stroke={rotorColor} strokeWidth={3} strokeLinecap="round" />
       {(() => {
         const cp = elToXY(current, R - 2);
-        return <circle cx={cp.x} cy={cp.y} r={6} fill="#58a6ff" />;
+        return <circle cx={cp.x} cy={cp.y} r={6} fill={rotorColor} />;
       })()}
 
       {/* Hub */}
-      <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
-      <circle cx={cx} cy={cy} r={3} fill="#58a6ff" />
+      <circle cx={cx} cy={cy} r={8} fill="#161b22" stroke={rotorColor} strokeWidth={2} />
+      <circle cx={cx} cy={cy} r={3} fill={rotorColor} />
 
       {/* Labels */}
       <text x={arcStart.x} y={cy + 12} textAnchor="middle" fontSize={10} fill="#8b949e">0°</text>
@@ -455,11 +461,11 @@ export default function RotatorPanel({
         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
             <div style={{ fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em" }}>Azimuth</div>
-            <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel} onClick={handleCompassClick} />
+            <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel} onClick={handleCompassClick} active={connected} />
           </div>
           <div style={{ position: "relative", width: elevWidth, alignSelf: "center", marginTop: 14 }}>
             <div style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", pointerEvents: "none" }}>Elevation</div>
-            <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight} onClick={handleElevationClick} />
+            <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight} onClick={handleElevationClick} active={connected} />
           </div>
         </div>
       )}
@@ -473,7 +479,7 @@ export default function RotatorPanel({
                 Azimuth
               </div>
               <CompassRose current={currentAz} target={targetAz} size={compassSize} dxAz={dxAz} dxLabel={dxLabel}
-                onClick={connected ? handleCompassClick : undefined} />
+                onClick={connected ? handleCompassClick : undefined} active={connected} />
             </div>
 
             {/* Elevation arc */}
@@ -482,7 +488,7 @@ export default function RotatorPanel({
                 Elevation
               </div>
               <ElevationArc current={currentEl} target={targetEl} width={elevWidth} height={elevHeight}
-                onClick={connected ? handleElevationClick : undefined} />
+                onClick={connected ? handleElevationClick : undefined} active={connected} />
             </div>
           </div>
 

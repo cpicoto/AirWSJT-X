@@ -7,6 +7,12 @@
 - Speech callouts in Auto mode now announce the locked aircraft's Az/El even when the rotator is off or not connected.
 
 ### Changed
+- Sky Dome is now a floating, draggable, resizable window instead of a docked panel, so it no longer squeezes the main app layout. Its position and size are remembered.
+- When the rotator is not connected, the Az and El rotor needles and hubs on the compass and elevation arc turn grey, and return to blue once the rotator is connected.
+- Sky Dome marks the DX station on the outer ring with its callsign, as on the Az compass.
+- Sky Dome and the Az / El overlay open as their own floating windows that can leave the app window (desktop); browsers fall back to draggable, resizable in-page panels.
+- The Az / El overlay is resized by dragging its frame, and its text scales in proportion; the Scale slider is removed. The overlay and Sky Dome each use a single **Open / Close** toggle button. Sky Dome and the overlay are hidden on first start, show a resize grip in the lower-right corner, and closing either window with its X switches its button back to Open.
+- The docked Az / El panel is disabled (`AZEL_PANEL_ENABLED` in `App.tsx`); the code is kept so it can be re-enabled.
 - On loss of plane lock in Auto mode, the last known Az/El is kept (no reset to 0) and dimmed in the display panel, overlay, and rotor panel to show it is not driven by current tracking data. Speech callouts pause and no new rotator commands are sent until the next plane is locked, avoiding rotor churn (#111).
 
 ## 0.3.24

@@ -1,11 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
+import AzElReadout from "./AzElReadout";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
+import {
+  FLOAT_ACTION_EVENT, FLOAT_CLOSED_EVENT, FLOAT_READY_EVENT, FLOAT_STATE_EVENT,
+  nativeFloatSupported, syncFloatWindow,
+  type FloatAction, type FloatKind, type FloatState,
+} from "./lib/floatWindow";
 import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
 import SkyDome from "./SkyDome";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
@@ -187,16 +193,55 @@ const PORTABLE_VIEW_KEY = "airwsjtx.portableViewMode";
 const MY_CALL_OVERRIDE_KEY = "airwsjtx.myCallOverride";
 const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
 const MY_ALT_KEY = "airwsjtx.myAltitudeM";
-const PORTABLE_SCALE_KEY = "airwsjtx.portableScale";
-const PORTABLE_MIN_FONT_PX = 28;
 const PORTABLE_BASE_FONT_PX = 72;
 
 type PortableViewMode = "hidden" | "panel" | "overlay";
+// The docked Az/El panel is switched off (code kept): set to true to bring the Panel mode back.
+const AZEL_PANEL_ENABLED = false;
 const ROTATOR_SPEECH_ENABLED_KEY = "airwsjtx.rotatorSpeech.enabled";
 const ROTATOR_SPEECH_THRESHOLD_KEY = "airwsjtx.rotatorSpeech.thresholdDeg";
 const ROTATOR_SPEECH_INTERVAL_KEY = "airwsjtx.rotatorSpeech.intervalSec";
 const ROTATOR_CONTROL_KEY = "airwsjtx.rotatorControlEnabled";
 const ROTATOR_SPEECH_MIGRATED_KEY = "airwsjtx.rotatorSpeech.threshold1degMigrated";
+const SKYDOME_RECT_KEY = "airwsjtx.skyDomeRect";
+const SKYDOME_MIN_W = 280;
+const SKYDOME_MIN_H = 320;
+
+interface SkyDomeRect { x: number; y: number; w: number; h: number }
+
+function clampSkyDomeRect(r: SkyDomeRect, minW = SKYDOME_MIN_W, minH = SKYDOME_MIN_H): SkyDomeRect {
+  const w = Math.min(Math.max(r.w, minW), window.innerWidth);
+  const h = Math.min(Math.max(r.h, minH), window.innerHeight);
+  return {
+    w, h,
+    x: Math.min(Math.max(r.x, 0), Math.max(0, window.innerWidth - w)),
+    y: Math.min(Math.max(r.y, 0), Math.max(0, window.innerHeight - h)),
+  };
+}
+
+function loadSkyDomeRect(): SkyDomeRect {
+  try {
+    const p = JSON.parse(localStorage.getItem(SKYDOME_RECT_KEY) ?? "null");
+    if (p && [p.x, p.y, p.w, p.h].every(Number.isFinite)) return clampSkyDomeRect(p);
+  } catch { /* fall through to default */ }
+  return clampSkyDomeRect({ w: 460, h: 560, x: window.innerWidth - 480, y: 110 });
+}
+
+const OVERLAY_RECT_KEY = "airwsjtx.overlayRect";
+const OVERLAY_MIN_W = 220;
+const OVERLAY_MIN_H = 120;
+
+function clampOverlayRect(r: SkyDomeRect): SkyDomeRect {
+  return clampSkyDomeRect(r, OVERLAY_MIN_W, OVERLAY_MIN_H);
+}
+
+function loadOverlayRect(): SkyDomeRect {
+  try {
+    const p = JSON.parse(localStorage.getItem(OVERLAY_RECT_KEY) ?? "null");
+    if (p && [p.x, p.y, p.w, p.h].every(Number.isFinite)) return clampOverlayRect(p);
+  } catch { /* fall through to default */ }
+  return clampOverlayRect({ w: 600, h: 200, x: window.innerWidth - 620, y: 90 });
+}
 
 function normalizeGrid(grid: string | null | undefined): string | null {
   const normalized = (grid ?? "").trim().toUpperCase();
@@ -247,6 +292,32 @@ export default function App() {
     return Number.isFinite(value) && value >= 0 ? value : 2;
   });
   const [showSkyDome, setShowSkyDome] = useState(() => localStorage.getItem("airwsjtx.showSkyDome") === "true");
+  const [skyDomeRect, setSkyDomeRect] = useState(loadSkyDomeRect);
+  const skyDomeRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = skyDomeRef.current;
+    if (!showSkyDome || !el) return;
+    // Native CSS resize doesn't raise React events; persist the size it produces.
+    const ro = new ResizeObserver(() => {
+      const w = Math.round(el.offsetWidth);
+      const h = Math.round(el.offsetHeight);
+      setSkyDomeRect((r) => (r.w === w && r.h === h ? r : { ...r, w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [showSkyDome]);
+  useEffect(() => {
+    localStorage.setItem(SKYDOME_RECT_KEY, JSON.stringify(skyDomeRect));
+  }, [skyDomeRect]);
+  const skyDomeDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  useEffect(() => {
+    const onResize = () => setSkyDomeRect((r) => {
+      const c = clampSkyDomeRect(r);
+      return c.x === r.x && c.y === r.y && c.w === r.w && c.h === r.h ? r : c;
+    });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [dxCallsign, setDxCallsign] = useState<string | null>(null);
   const [dxGrid, setDxGrid] = useState<string | null>(null);
   const [stationGridOverrides, setStationGridOverrides] = useState<Record<string, string>>(() => {
@@ -285,12 +356,12 @@ export default function App() {
   const [wsjtxRigFilterBusy, setWsjtxRigFilterBusy] = useState(false);
   const [portableView, setPortableView] = useState<PortableViewMode>(() => {
     const saved = localStorage.getItem(PORTABLE_VIEW_KEY) as PortableViewMode | null;
-    return saved === "panel" || saved === "overlay" || saved === "hidden" ? saved : "panel";
+    if (saved === "panel") return AZEL_PANEL_ENABLED ? "panel" : "overlay";
+    return saved === "overlay" || saved === "hidden" ? saved : (AZEL_PANEL_ENABLED ? "panel" : "hidden");
   });
-  const [portableScale, setPortableScale] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(PORTABLE_SCALE_KEY) ?? "100");
-    return Number.isFinite(saved) && saved >= 70 && saved <= 180 ? saved : 100;
-  });
+  const [overlayRect, setOverlayRect] = useState(loadOverlayRect);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const overlayDragRef = useRef<{ dx: number; dy: number } | null>(null);
   const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
   const [callsignDbBusy, setCallsignDbBusy] = useState(false);
@@ -852,8 +923,30 @@ export default function App() {
   }, [portableView]);
 
   useEffect(() => {
-    localStorage.setItem(PORTABLE_SCALE_KEY, String(portableScale));
-  }, [portableScale]);
+    localStorage.setItem(OVERLAY_RECT_KEY, JSON.stringify(overlayRect));
+  }, [overlayRect]);
+
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+    // Native CSS resize doesn't raise React events; persist the size it produces.
+    const ro = new ResizeObserver(() => {
+      const w = Math.round(el.offsetWidth);
+      const h = Math.round(el.offsetHeight);
+      setOverlayRect((r) => (r.w === w && r.h === h ? r : { ...r, w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  useEffect(() => {
+    const onResize = () => setOverlayRect((r) => {
+      const c = clampOverlayRect(r);
+      return c.x === r.x && c.y === r.y && c.w === r.w && c.h === r.h ? r : c;
+    });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     if (!myGridEditing.current) setMyGridInput(myGrid ?? "");
@@ -884,7 +977,6 @@ export default function App() {
     : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
   const currentEl = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el
     : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
-  const portableFontPx = Math.max(PORTABLE_MIN_FONT_PX, PORTABLE_BASE_FONT_PX * portableScale / 100);
   const rotorOn = rotatorControlEnabled && rotatorConnected;
   const lastSpeechPreviewAt = useRef(0);
   function previewSpeech() {
@@ -897,28 +989,115 @@ export default function App() {
     speak(`Azimuth ${Math.round(az)}, Elevation ${Math.round(el)}`);
   }
   const portableReadout = (
-  <div className={portableView === "overlay" ? "portable-overlay" : "portable-panel"}>
-    <div className="portable-header">
-      <span>Az / El</span>
-    </div>
-    <div className="portable-grid" style={{ fontSize: `${portableFontPx}px` }}>
-      <div className="portable-readout">
-        <span className="portable-label">AZ</span>
-        <span className="portable-value" style={autoTargetInvalid ? { opacity: 0.35 } : undefined}>{Number.isFinite(currentAz) ? currentAz.toFixed(1) : "--.-"}°</span>
-      </div>
-      <div className="portable-readout">
-        <span className="portable-label">EL</span>
-        <span className="portable-value" style={autoTargetInvalid ? { opacity: 0.35 } : undefined}>{Number.isFinite(currentEl) ? currentEl.toFixed(1) : "--.-"}°</span>
-      </div>
-    </div>
-  </div>
+    <AzElReadout
+      className="portable-panel"
+      az={currentAz} el={currentEl} invalid={autoTargetInvalid} fontPx={PORTABLE_BASE_FONT_PX}
+    />
   );
 
   const portableDisplay = portableView === "hidden" ? null : portableReadout;
 
+  // Sky Dome and the Az/El overlay float in their own native windows on desktop so they can leave
+  // the app window. Browsers (and a failed window creation) fall back to in-page floating panels.
+  const [floatFallback, setFloatFallback] = useState(false);
+  const nativeFloat = nativeFloatSupported() && !floatFallback;
+  const wantSkyDomeWindow = showSkyDome;
+  const wantOverlayWindow = portableView === "overlay";
+  const floatStateRef = useRef<FloatState | null>(null);
+  floatStateRef.current = {
+    aircraft: skyDomeAircraft,
+    selectedAircraftId: lockedPlane?.icao24 ?? null,
+    stationLocator: airscout?.station_a ?? myGrid,
+    stationAltitudeM: myAltitudeM,
+    rotatorAz,
+    rotatorEl,
+    targetAz: lockedPlane ? lockedPlane.az_a : rotatorTargetAz,
+    targetEl: lockedPlane ? lockedPlane.el_a : rotatorTargetEl,
+    pathBearing: dxBearing,
+    dxLabel: dxCall,
+    readoutAz: currentAz,
+    readoutEl: currentEl,
+    readoutInvalid: autoTargetInvalid,
+  };
+  const lastFloatJsonRef = useRef("");
+  const publishFloatState = useCallback((force = false) => {
+    if (!floatStateRef.current) return;
+    const json = JSON.stringify(floatStateRef.current);
+    if (!force && json === lastFloatJsonRef.current) return;
+    lastFloatJsonRef.current = json;
+    void emit(FLOAT_STATE_EVENT, floatStateRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!nativeFloat) return;
+    for (const [kind, wanted] of [["skydome", wantSkyDomeWindow], ["overlay", wantOverlayWindow]] as const) {
+      const action = syncFloatWindow(kind, wanted);
+      action.catch((e) => {
+        if (!wanted) return;
+        addLog(`Floating ${kind} window unavailable, showing it in the app instead: ${e}`);
+        setFloatFallback(true);
+      });
+    }
+  }, [nativeFloat, wantSkyDomeWindow, wantOverlayWindow, addLog]);
+
+  useEffect(() => {
+    if (!nativeFloat) return;
+    const offs = [
+      listen(FLOAT_READY_EVENT, () => publishFloatState(true)),
+      listen<FloatAction>(FLOAT_ACTION_EVENT, (e) => {
+        const a = e.payload;
+        if (a.type === "lock") {
+          rpc("lock_aircraft", { icao24: a.icao24 }).catch(err => addLog(`Lock: ${err}`));
+        } else {
+          setRotatorTargetAz(a.az);
+          setRotatorTargetEl(a.el);
+          rpc("rotator_set", { azimuth: a.az, elevation: a.el }).catch(err => addLog(`Rotator: ${err}`));
+        }
+      }),
+      listen<{ kind: FloatKind }>(FLOAT_CLOSED_EVENT, (e) => {
+        if (e.payload.kind === "skydome") {
+          setShowSkyDome(false);
+          localStorage.setItem("airwsjtx.showSkyDome", "false");
+        } else {
+          setPortableView("hidden");
+        }
+      }),
+    ];
+    return () => { offs.forEach((p) => void p.then((f) => f())); };
+  }, [nativeFloat, publishFloatState, addLog]);
+
+  useEffect(() => {
+    if (nativeFloat && (wantSkyDomeWindow || wantOverlayWindow)) publishFloatState();
+  });
+
   return (
-    <div className={`app${portableView === "panel" || showSkyDome ? " has-display-panels" : ""}`}>
-      {portableView === "overlay" && portableDisplay}
+    <div className={`app${AZEL_PANEL_ENABLED && portableView === "panel" ? " has-display-panels" : ""}`}>
+      {!nativeFloat && portableView === "overlay" && (
+        <div
+          ref={overlayRef}
+          className="overlay-frame"
+          aria-label="Az / El overlay"
+          style={{ left: overlayRect.x, top: overlayRect.y, width: overlayRect.w, height: overlayRect.h }}
+        >
+          <AzElReadout
+            className="portable-overlay"
+            az={currentAz} el={currentEl} invalid={autoTargetInvalid}
+            headerProps={{
+              className: "portable-header overlay-drag",
+              onPointerDown: (e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                overlayDragRef.current = { dx: e.clientX - overlayRect.x, dy: e.clientY - overlayRect.y };
+              },
+              onPointerMove: (e) => {
+                const d = overlayDragRef.current;
+                if (d) setOverlayRect((r) => clampOverlayRect({ ...r, x: e.clientX - d.dx, y: e.clientY - d.dy }));
+              },
+              onPointerUp: () => { overlayDragRef.current = null; },
+              onPointerCancel: () => { overlayDragRef.current = null; },
+            }}
+          />
+        </div>
+      )}
 
       {/* ── Top bar ── */}
       <header className="topbar">
@@ -1018,22 +1197,16 @@ export default function App() {
         <div className="portable-toolbar" role="group" aria-label="Az / El display controls">
           <span>Az / El</span>
           <div className="portable-controls">
-            <button className="portable-mode" aria-pressed={portableView === "panel"} onClick={() => setPortableView("panel")}>Panel</button>
-            <button className="portable-mode" aria-pressed={portableView === "overlay"} onClick={() => setPortableView("overlay")}>Overlay</button>
-            <button className="portable-mode" aria-pressed={portableView === "hidden"} onClick={() => setPortableView("hidden")}>Hide</button>
+            {AZEL_PANEL_ENABLED && (
+              <button className="portable-mode" aria-pressed={portableView === "panel"} onClick={() => setPortableView("panel")}>Panel</button>
+            )}
+            <button
+              className="portable-mode"
+              aria-pressed={portableView === "overlay"}
+              title={portableView === "overlay" ? "Close the Az / El window" : "Open the Az / El window"}
+              onClick={() => setPortableView(portableView === "overlay" ? "hidden" : "overlay")}
+            >{portableView === "overlay" ? "Close" : "Open"}</button>
           </div>
-          <label>
-            Scale
-            <input
-              type="range"
-              min={70}
-              max={180}
-              step={5}
-              value={portableScale}
-              onChange={(e) => setPortableScale(Number(e.target.value))}
-            />
-            <span>{portableScale}%</span>
-          </label>
         </div>
 
         <div className="portable-toolbar" role="group" aria-label="Sky Dome display controls">
@@ -1043,50 +1216,61 @@ export default function App() {
               className="portable-mode"
               aria-pressed={showSkyDome}
               aria-controls="skydome-panel"
+              title={showSkyDome ? "Close the Sky Dome window" : "Open the Sky Dome window"}
               onClick={() => {
-                setShowSkyDome(true);
-                localStorage.setItem("airwsjtx.showSkyDome", "true");
+                setShowSkyDome(!showSkyDome);
+                localStorage.setItem("airwsjtx.showSkyDome", String(!showSkyDome));
               }}
-            >Show</button>
-            <button
-              className="portable-mode"
-              aria-pressed={!showSkyDome}
-              aria-controls="skydome-panel"
-              onClick={() => {
-                setShowSkyDome(false);
-                localStorage.setItem("airwsjtx.showSkyDome", "false");
-              }}
-            >Hide</button>
+            >{showSkyDome ? "Close" : "Open"}</button>
           </div>
         </div>
       </div>
 
-      {(portableView === "panel" || showSkyDome) && (
-        <div className={`display-panels${showSkyDome ? " has-skydome" : ""}`}>
-          {portableView === "panel" && portableDisplay}
-          {showSkyDome && (
-            <section className="skydome-panel" id="skydome-panel" aria-label="Sky Dome">
-              <h3 className="portable-header">Sky Dome</h3>
-              <SkyDome
-                aircraft={skyDomeAircraft}
-                selectedAircraftId={lockedPlane?.icao24 ?? null}
-                stationLocator={airscout?.station_a ?? myGrid}
-                stationAltitudeM={myAltitudeM}
-                rotatorAz={rotatorAz}
-                rotatorEl={rotatorEl}
-                targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
-                targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
-                pathBearing={dxBearing}
-                onClickAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
-                onClickSky={(az, el) => {
-                  setRotatorTargetAz(az);
-                  setRotatorTargetEl(el);
-                  rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
-                }}
-              />
-            </section>
-          )}
+      {AZEL_PANEL_ENABLED && portableView === "panel" && (
+        <div className="display-panels">
+          {portableDisplay}
         </div>
+      )}
+      {showSkyDome && !nativeFloat && (
+        <section
+          ref={skyDomeRef}
+          className="skydome-panel skydome-float"
+          id="skydome-panel"
+          aria-label="Sky Dome"
+          style={{ left: skyDomeRect.x, top: skyDomeRect.y, width: skyDomeRect.w, height: skyDomeRect.h }}
+        >
+          <h3
+            className="portable-header skydome-drag"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              skyDomeDragRef.current = { dx: e.clientX - skyDomeRect.x, dy: e.clientY - skyDomeRect.y };
+            }}
+            onPointerMove={(e) => {
+              const d = skyDomeDragRef.current;
+              if (d) setSkyDomeRect((r) => clampSkyDomeRect({ ...r, x: e.clientX - d.dx, y: e.clientY - d.dy }));
+            }}
+            onPointerUp={() => { skyDomeDragRef.current = null; }}
+            onPointerCancel={() => { skyDomeDragRef.current = null; }}
+          >Sky Dome</h3>
+          <SkyDome
+            aircraft={skyDomeAircraft}
+            selectedAircraftId={lockedPlane?.icao24 ?? null}
+            stationLocator={airscout?.station_a ?? myGrid}
+            stationAltitudeM={myAltitudeM}
+            rotatorAz={rotatorAz}
+            rotatorEl={rotatorEl}
+            targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
+            targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
+            pathBearing={dxBearing}
+            dxLabel={dxCall}
+            onClickAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
+            onClickSky={(az, el) => {
+              setRotatorTargetAz(az);
+              setRotatorTargetEl(el);
+              rpc("rotator_set", { azimuth: az, elevation: el }).catch(e => addLog(`Rotator: ${e}`));
+            }}
+          />
+        </section>
       )}
 
       {/* ── 3-column content ── */}

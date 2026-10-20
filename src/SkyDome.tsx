@@ -22,6 +22,7 @@ interface SkyDomeProps {
   targetAz: number | null;
   targetEl: number | null;
   pathBearing: number | null;
+  dxLabel?: string | null;
   size?: number;
   onClickAircraft?: (icao24: string) => void;
   onClickSky?: (az: number, el: number) => void;
@@ -50,6 +51,7 @@ export default function SkyDome({
   targetAz,
   targetEl,
   pathBearing,
+  dxLabel = null,
   size = 400,
   onClickAircraft,
   onClickSky,
@@ -262,8 +264,8 @@ export default function SkyDome({
     <div className="skydome-container">
       <svg
         aria-label="Sky Dome polar projection"
-        width={size + 30} height={size + 30}
-        viewBox={`${-15} ${-15} ${size + 30} ${size + 30}`}
+        width={size + 140} height={size + 30}
+        viewBox={`${-70} ${-15} ${size + 140} ${size + 30}`}
         style={{ cursor: onClickSky ? "crosshair" : "default", userSelect: "none" }}
         onClick={handleClick}
       >
@@ -293,6 +295,31 @@ export default function SkyDome({
 
         {/* Sweet spot zones */}
         {sweetSpot}
+
+        {/* DX station direction marker on outer ring, label just outside */}
+        {pathBearing !== null && (() => {
+          const dot = project(pathBearing, 0);
+          const rad = ((pathBearing - 90) * Math.PI) / 180;
+          const sin = Math.sin((pathBearing * Math.PI) / 180);
+          const cos = Math.cos((pathBearing * Math.PI) / 180);
+          const labelR = outerR + 10;
+          const lx = cx + labelR * Math.cos(rad);
+          const ly = cy + labelR * Math.sin(rad);
+          const side = Math.abs(sin) > 0.3;
+          const anchor = side ? (sin > 0 ? "start" : "end") : "middle";
+          const dy = anchor === "middle" ? (cos > 0 ? -6 : 8) : 3;
+          return (
+            <g pointerEvents="none" data-dx-marker>
+              <circle cx={dot.x} cy={dot.y} r={5} fill="#3fb950" stroke="#0d1117" strokeWidth={1} />
+              {dxLabel && (
+                <text x={lx} y={ly + dy} textAnchor={anchor} fontSize={11} fontWeight={700} fill="#3fb950"
+                  stroke="#0a0e14" strokeWidth={3} paintOrder="stroke">
+                  {dxLabel}
+                </text>
+              )}
+            </g>
+          );
+        })()}
 
         {selectedAircraft && course && !course.unavailableReason && (() => {
           const projected = course.points.map(point => ({ ...point, ...project(point.az, point.el) }));
