@@ -299,6 +299,7 @@ function normalizeGrid(grid: string | null | undefined): string | null {
 export default function App() {
   const [status, setStatus] = useState<{ state: string } | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  const [wsjtxError, setWsjtxError] = useState<string | null>(null);
   const [wsjtxLive, setWsjtxLive] = useState<WsjtxLive>({
     connected: false, app_id: "", freq_mhz: null, mode: null,
     sub_mode: null, de_call: null, de_grid: null, dx_call: null, dx_grid: null,
@@ -485,14 +486,17 @@ export default function App() {
 
           if (evt === "wsjtx_connected") {
             addLog(`WSJT-X connected: ${evtData.app_id}`);
+            setWsjtxError(null);
             setWsjtxLive(w => ({ ...w, connected: true, app_id: evtData.app_id as string }));
           } else if (evt === "wsjtx_disconnected") {
             addLog("WSJT-X disconnected");
             setWsjtxLive(w => ({ ...w, connected: false }));
           } else if (evt === "wsjtx_error") {
             addLog(`WSJT-X error: ${evtData.message}`);
+            setWsjtxError(evtData.message as string);
             setWsjtxLive(w => ({ ...w, connected: false }));
           } else if (evt === "wsjtx_status") {
+            setWsjtxError(null);
             setWsjtxLive(w => ({
               ...w,
               connected: true,
@@ -616,8 +620,12 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const s = await rpc("get_status") as { state: string; wsjtx_known_rigs?: unknown };
+        const s = await rpc("get_status") as { state: string; wsjtx_known_rigs?: unknown; wsjtx_error?: string | null };
         setStatus(s);
+        if (s.wsjtx_error !== undefined) {
+          setWsjtxError(s.wsjtx_error);
+          if (s.wsjtx_error) setWsjtxLive(w => ({ ...w, connected: false }));
+        }
         const rigs = s.wsjtx_known_rigs;
         if (Array.isArray(rigs) && rigs.every(isWsjtxRig)) {
           setWsjtxKnownRigs(rigs);
@@ -1392,6 +1400,12 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {wsjtxError && (
+        <div role="alert" aria-label="WSJT-X UDP error" style={{ color: "var(--red)", padding: "8px 16px" }}>
+          {wsjtxError}
+        </div>
+      )}
 
       <div className="display-toolbar">
         <div className="portable-toolbar" role="group" aria-label="Az / El display controls">

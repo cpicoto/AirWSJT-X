@@ -1,5 +1,43 @@
 import { test, expect } from "@playwright/test";
 
+test("shows UDP bind errors outside the log and clears them after reception recovers", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
+  const message = "Cannot listen for WSJT-X UDP on port 2237: port in use. Configure Log4OM UDP forwarding.";
+  await page.evaluate(message => {
+    const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({ event: "wsjtx_error", data: { message } }));
+  }, message);
+  const alert = page.getByRole("alert", { name: "WSJT-X UDP error" });
+  await expect(alert).toHaveText(message);
+  await expect(page.locator(".topbar")).toContainText("WSJT-X not connected");
+  await page.evaluate(() => {
+    const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "wsjtx_status", data: { de_call: "K7MDL", mode: "FT8", freq_mhz: 18.1 },
+    }));
+  });
+  await expect(alert).toHaveCount(0);
+  await expect(page.locator(".topbar")).toContainText("K7MDL");
+});
+
+test("restores a UDP error from status when the startup event was missed", async ({ page }) => {
+  const message = "Cannot listen for WSJT-X UDP on port 2237: port in use. Retrying automatically.";
+  await page.addInitScript(message => {
+    (window as unknown as Record<string, unknown>).__mockWsjtxError = message;
+  }, message);
+  await page.goto("/");
+  const alert = page.getByRole("alert", { name: "WSJT-X UDP error" });
+  await expect(alert).toHaveText(message);
+  await page.reload();
+  await expect(alert).toHaveText(message);
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__mockWsjtxError = null;
+  });
+  await expect(alert).toHaveCount(0);
+  await expect(page.locator(".topbar")).toContainText("WSJT-X not connected");
+});
+
 test("shows remaining quota and server retry time without inventing ADS-B Exchange quota", async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, { __mockQuotas: {

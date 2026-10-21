@@ -333,9 +333,9 @@ class WSJTXListener:
         self._connected = False
         self._last_packet = 0.0
         self._state_lock = threading.Lock()
+        self._error: str | None = None
         self._rig_name_filter = self._normalize_rig_name(rig_name_filter)
         self._active_app_id: str | None = None
-        self._active_query_mode = False
         self._sock: socket.socket | None = None
         self._query_sock: socket.socket | None = None
         self._client_addrs: dict[str, dict[tuple, float]] = {}
@@ -371,6 +371,10 @@ class WSJTXListener:
     def get_rig_name_filter(self) -> str | None:
         with self._state_lock:
             return self._rig_name_filter
+
+    def get_error(self) -> str | None:
+        with self._state_lock:
+            return self._error
 
     def _remember_rig(self, app_id: str, config_name: str | None = None) -> None:
         if not app_id or not is_wsjtx_app(app_id):
@@ -437,30 +441,23 @@ class WSJTXListener:
 
     def _make_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        if hasattr(socket, "SO_REUSEPORT"):
-            try:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            except OSError:
-                pass
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(min(self.socket_timeout_s, 0.2))
         try:
+            if hasattr(socket, "SO_REUSEPORT"):
+                try:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except OSError:
+                    pass
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.settimeout(min(self.socket_timeout_s, 0.2))
             s.bind(("", self.port))
-            self._active_query_mode = False
-        except OSError:
-            # If WSJT-X already owns the port, try loopback fallback (active query mode).
-            try:
-                s.bind(("127.0.0.1", 0))
-                self._active_query_mode = True
-            except OSError:
-                s.close()
-                raise
-        if not self._active_query_mode:
             try:
                 mreq = socket.inet_aton(self.multicast) + socket.inet_aton("0.0.0.0")
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             except OSError:
                 pass
+        except OSError:
+            s.close()
+            raise
         return s
 
     def _pack_str(self, value: str | None) -> bytes:
@@ -485,7 +482,7 @@ class WSJTXListener:
         now = time.monotonic()
         with self._state_lock:
             app_id = self._active_app_id
-            tx_sock = self._sock if self._active_query_mode else self._query_sock
+            tx_sock = self._query_sock
             destinations = [
                 addr for addr, seen in self._client_addrs.get(app_id or "", {}).items()
                 if now - seen <= self.client_addr_ttl_s
@@ -602,20 +599,38 @@ class WSJTXListener:
             return None
 
     def _run(self) -> None:
-        try:
-            sock = self._make_socket()
-        except OSError as e:
-            message = f"Cannot listen for WSJT-X UDP on port {self.port}: {e}"
-            logging.getLogger(__name__).error(message)
-            if self.on_error:
-                self.on_error(message)
-            if self.on_disconnected:
-                self.on_disconnected()
+        while not self._stop.is_set():
+            try:
+                sock = self._make_socket()
+            except OSError as e:
+                message = (
+                    f"Cannot listen for WSJT-X UDP on port {self.port}: {e}. "
+                    "Check whether another app owns the port. For Log4OM, send WSJT-X "
+                    "to a separate UDP proxy input port and forward its data to "
+                    f"port {self.port}, or use multicast with compatible receivers. "
+                    "Retrying automatically."
+                )
+                with self._state_lock:
+                    changed = self._error != message
+                    self._error = message
+                    self._connected = False
+                    self._active_app_id = None
+                if changed:
+                    logging.getLogger(__name__).error(message)
+                    if self.on_error:
+                        self.on_error(message)
+                    if self.on_disconnected:
+                        self.on_disconnected()
+                if self._stop.wait(1.0):
+                    return
+            else:
+                with self._state_lock:
+                    self._error = None
+                break
+        else:
             return
 
-        query_sock: socket.socket | None = None
-        if not self._active_query_mode:
-            query_sock = self._make_query_socket()
+        query_sock = self._make_query_socket()
         self._sock = sock
         self._query_sock = query_sock
 
@@ -625,10 +640,9 @@ class WSJTXListener:
         while not self._stop.is_set():
             now = time.monotonic()
             if now - last_heartbeat >= 2.0:
-                tx_sock = sock if self._active_query_mode else query_sock
-                if tx_sock is not None:
+                if query_sock is not None:
                     try:
-                        tx_sock.sendto(heartbeat, (self.wsjtx_host, self.port))
+                        query_sock.sendto(heartbeat, (self.wsjtx_host, self.port))
                     except OSError:
                         pass
                 last_heartbeat = now

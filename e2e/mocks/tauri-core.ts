@@ -4,6 +4,7 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
     return {
       state: mock.__mockState ?? "tracking",
       ...(!mock.__mockLegacySidecar && { wsjtx_known_rigs: mock.__mockRigs ?? [] }),
+      ...("__mockWsjtxError" in mock && { wsjtx_error: mock.__mockWsjtxError }),
     };
   },
   callsign_lookup: (p) => ({

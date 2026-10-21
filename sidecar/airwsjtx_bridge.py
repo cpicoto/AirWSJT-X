@@ -420,6 +420,7 @@ def handle(msg: dict) -> None:
             _ok(id_, {
                 "state": s.state.value,
                 "wsjtx_known_rigs": _wsjtx_listener.get_known_rigs() if _wsjtx_listener else [],
+                "wsjtx_error": _wsjtx_listener.get_error() if _wsjtx_listener else None,
                 "station_a": {"callsign": s.station_a.callsign, "locator": s.station_a.locator} if s.station_a else None,
                 "station_b": {"callsign": s.station_b.callsign, "locator": s.station_b.locator} if s.station_b else None,
                 "selected_aircraft_id": s.selected_aircraft_id,

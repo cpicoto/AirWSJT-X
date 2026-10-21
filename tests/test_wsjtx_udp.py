@@ -230,10 +230,8 @@ class WSJTXListenerFilterTests(unittest.TestCase):
 
 
 class _FakeSocket:
-    def __init__(self, packets: list[bytes], fail_first_bind: bool = False) -> None:
+    def __init__(self, packets: list[bytes]) -> None:
         self._packets = packets[:]
-        self._fail_first_bind = fail_first_bind
-        self._bind_calls = 0
         self.sent_to: list[tuple[bytes, tuple[str, int]]] = []
 
     def setsockopt(self, *_args) -> None:
@@ -242,10 +240,8 @@ class _FakeSocket:
     def settimeout(self, *_args) -> None:
         return
 
-    def bind(self, addr: tuple[str, int]) -> None:
-        self._bind_calls += 1
-        if self._fail_first_bind and self._bind_calls == 1 and addr[0] == "":
-            raise OSError("address already in use")
+    def bind(self, _addr: tuple[str, int]) -> None:
+        return
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> int:
         self.sent_to.append((data, addr))
@@ -282,42 +278,50 @@ class WSJTXListenerLoopbackTests(unittest.TestCase):
 
         self.assertIn("WSJT-X", connected_app_ids)
 
-    def test_listener_falls_back_to_active_query_mode_when_port_busy(self) -> None:
-        # First packet is our own heartbeat echo and must be ignored; next is real WSJT-X status.
-        heartbeat_echo = b"".join(
-            [
-                struct.pack(">I", WSJTX_MAGIC),
-                struct.pack(">I", 2),
-                struct.pack(">I", MSG_HEARTBEAT),
-                _enc_str("AirWSJTX"),
-                struct.pack(">I", 2),
-                _enc_str("2.0"),
-                _enc_str(""),
-            ]
-        )
-        main_socket = _FakeSocket([heartbeat_echo, _build_status_packet("Q65", 15)], fail_first_bind=True)
-        connected_event = threading.Event()
-        connected_app_ids: list[str] = []
-
-        listener = WSJTXListener(
-            on_connected=lambda app_id: (connected_app_ids.append(app_id), connected_event.set()),
-            on_status=lambda _st: None,
-            socket_timeout_s=0.05,
-        )
-
-        with patch("airwsjtx.wsjtx_udp.socket.socket", return_value=main_socket):
-            listener.start()
-            self.assertTrue(connected_event.wait(1.5))
-            listener.stop()
-            time.sleep(0.05)
-
-        self.assertTrue(listener._active_query_mode)
-        self.assertIn("WSJT-X", connected_app_ids)
-        self.assertTrue(main_socket.sent_to)
-        self.assertTrue(all(dest == ("127.0.0.1", 2237) for _, dest in main_socket.sent_to))
-
-
 class WSJTXListenerSocketTests(unittest.TestCase):
+    def _udp_receiver(self, host: str = "127.0.0.1") -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(sock.close)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        sock.bind((host, 0))
+        sock.settimeout(2)
+        return sock
+
+    def _start_listener(self, listener: WSJTXListener) -> None:
+        def cleanup() -> None:
+            listener.stop()
+            if listener._thread:
+                listener._thread.join(2)
+                self.assertFalse(listener._thread.is_alive(), "UDP listener did not stop")
+
+        self.addCleanup(cleanup)
+        listener.start()
+
+    def test_exclusive_port_reports_error_without_receiving_another_apps_traffic(self) -> None:
+        owner = self._udp_receiver("0.0.0.0")
+        port = owner.getsockname()[1]
+        sender = self._udp_receiver()
+        error = threading.Event()
+        connected = Mock()
+        status = Mock()
+        listener = WSJTXListener(
+            port=port, socket_timeout_s=0.05, on_error=lambda _: error.set(),
+            on_connected=connected, on_status=status,
+        )
+        with self.assertLogs("airwsjtx.wsjtx_udp", level="ERROR"):
+            self._start_listener(listener)
+            self.assertTrue(error.wait(2), "Exclusive UDP port conflict was silently ignored")
+        packet = _build_status_packet("FT8", 15)
+        sender.sendto(packet, ("127.0.0.1", port))
+        self.assertEqual(owner.recvfrom(4096)[0], packet)
+        self.assertIn(str(port), listener.get_error() or "")
+        self.assertIn("Log4OM", listener.get_error() or "")
+        self.assertIsNone(listener._sock)
+        self.assertFalse(listener._connected)
+        connected.assert_not_called()
+        status.assert_not_called()
+
     def test_manual_station_override_survives_wsjtx_status_and_can_be_cleared(self) -> None:
         from sidecar import airwsjtx_bridge as bridge
 
@@ -457,6 +461,19 @@ class WSJTXListenerSocketTests(unittest.TestCase):
         self.assertEqual(reply.call_args.args[1]["wsjtx_known_rigs"], [
             {"app_id": "WSJT-X-A", "config_name": "Home"},
         ])
+        self.assertIsNone(reply.call_args.args[1]["wsjtx_error"])
+
+    def test_bridge_status_preserves_listener_error_for_late_subscribers(self) -> None:
+        from sidecar import airwsjtx_bridge as bridge
+
+        listener = WSJTXListener(on_error=lambda _: listener.stop())
+        with patch.object(listener, "_make_socket", side_effect=OSError("port in use")), \
+                self.assertLogs("airwsjtx.wsjtx_udp", level="ERROR"):
+            listener._run()
+        with patch.object(bridge, "_wsjtx_listener", listener), patch.object(bridge, "_ok") as reply:
+            bridge.handle({"id": "status", "method": "get_status", "params": {}})
+        self.assertEqual(reply.call_args.args[1]["wsjtx_error"], listener.get_error())
+        self.assertIn("port in use", reply.call_args.args[1]["wsjtx_error"])
 
     def test_known_rigs_preserve_names_and_return_independent_snapshots(self) -> None:
         listener = WSJTXListener()
@@ -504,7 +521,11 @@ class WSJTXListenerSocketTests(unittest.TestCase):
     def test_startup_failure_reports_error(self) -> None:
         errors: list[str] = []
         disconnected = Mock()
-        listener = WSJTXListener(on_error=errors.append, on_disconnected=disconnected)
+        def on_error(message: str) -> None:
+            errors.append(message)
+            listener.stop()
+
+        listener = WSJTXListener(on_error=on_error, on_disconnected=disconnected)
         with patch.object(listener, "_make_socket", side_effect=OSError("port in use")):
             with self.assertLogs("airwsjtx.wsjtx_udp", level="ERROR"):
                 listener._run()
@@ -512,6 +533,85 @@ class WSJTXListenerSocketTests(unittest.TestCase):
         self.assertIn("2237", errors[0])
         self.assertIn("port in use", errors[0])
         disconnected.assert_called_once()
+
+    def test_repeated_bind_failure_does_not_flood_error_events(self) -> None:
+        errors = Mock()
+        listener = WSJTXListener(on_error=errors)
+        with patch.object(listener, "_make_socket", side_effect=OSError("port in use")) as bind, \
+                patch.object(listener._stop, "wait", side_effect=[False, False, True]), \
+                self.assertLogs("airwsjtx.wsjtx_udp", level="ERROR") as logs:
+            listener._run()
+        self.assertEqual(bind.call_count, 3)
+        errors.assert_called_once()
+        self.assertEqual(len(logs.output), 1)
+
+    def test_recovers_when_exclusive_port_is_released_and_receives_real_status(self) -> None:
+        owner = self._udp_receiver("0.0.0.0")
+        port = owner.getsockname()[1]
+        sender = self._udp_receiver()
+        error = threading.Event()
+        received = threading.Event()
+        statuses: list[WSJTXStatus] = []
+        listener = WSJTXListener(
+            port=port, socket_timeout_s=0.05, on_error=lambda _: error.set(),
+            on_status=lambda status: (statuses.append(status), received.set()),
+        )
+        with self.assertLogs("airwsjtx.wsjtx_udp", level="ERROR"):
+            self._start_listener(listener)
+            self.assertTrue(error.wait(2))
+        self.assertFalse(listener._connected)
+        owner.close()
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            sender.sendto(_build_status_packet("FT8", 15), ("127.0.0.1", port))
+            if received.wait(0.05):
+                break
+        self.assertTrue(received.is_set(), "Listener did not recover after the port was released")
+        self.assertIsNone(listener.get_error())
+        self.assertTrue(listener._connected)
+        self.assertEqual(statuses[0].mode, "FT8")
+
+    def test_proxy_forwards_real_status_and_decode_to_listener_on_separate_port(self) -> None:
+        proxy = self._udp_receiver()
+        sender = self._udp_receiver()
+        status_received = threading.Event()
+        decode_received = threading.Event()
+        statuses: list[WSJTXStatus] = []
+        decodes: list[str | None] = []
+        listener = WSJTXListener(
+            port=0, socket_timeout_s=0.05,
+            on_status=lambda status: (statuses.append(status), status_received.set()),
+            on_decode=lambda decode: (decodes.append(decode.message), decode_received.set()),
+        )
+        self._start_listener(listener)
+        deadline = time.monotonic() + 2
+        while listener._sock is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIsNotNone(listener._sock, "Listener did not bind a UDP port")
+        assert listener._sock is not None
+        destination = ("127.0.0.1", listener._sock.getsockname()[1])
+        status_packet = _build_status_packet("FT8", 15)
+        decode_packet = (
+            struct.pack(">III", WSJTX_MAGIC, 2, MSG_DECODE)
+            + _enc_str("WSJT-X") + struct.pack(">BIidI", 1, 0, -10, 0.2, 1000)
+            + _enc_str("FT8") + _enc_str("CQ K7MDL CN87") + b"\x00\x00"
+        )
+        for packet in (status_packet, decode_packet):
+            sender.sendto(packet, proxy.getsockname())
+            forwarded, _ = proxy.recvfrom(4096)
+            self.assertEqual(forwarded, packet)
+            if packet == status_packet:
+                local_status = parse_status(forwarded)
+                self.assertIsNotNone(local_status)
+                assert local_status is not None
+                self.assertEqual(local_status.de_call, "K7MDL")
+            proxy.sendto(forwarded, destination)
+        self.assertTrue(status_received.wait(2), "Forwarded status was not received")
+        self.assertTrue(decode_received.wait(2), "Forwarded decode was not received")
+        self.assertEqual(statuses[0].de_call, "K7MDL")
+        self.assertEqual(decodes, ["CQ K7MDL CN87"])
+        self.assertTrue(listener._connected)
+        self.assertIsNone(listener.get_error())
 
     def test_receives_status_over_real_udp_socket(self) -> None:
         connected = threading.Event()

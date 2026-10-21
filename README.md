@@ -90,6 +90,25 @@ AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/D
 3. Configure **MY callsign** and **MY grid** in the Stations panel (or let WSJT-X provide them)
 4. On Windows, allow AirWSJT-X and its Python sidecar through Windows Firewall
 
+#### Sharing WSJT-X with Log4OM or another UDP application
+
+Two applications cannot receive the same unicast stream when one exclusively
+owns UDP port `2237`. AirWSJT-X reports a bind error and retries that port; moving
+its listener to a random port would not redirect WSJT-X's packets.
+
+For Log4OM versions with UDP proxy support, configure its incoming **JT message**
+connection as a **UDP proxy** listening on `127.0.0.1:2238` and forwarding to
+`127.0.0.1:2237`. Keep its existing QSO-processing options. In WSJT-X
+**Settings > Reporting**, set the UDP server to `127.0.0.1`, port `2238`.
+AirWSJT-X continues listening on `2237`. Keep Log4OM running for this route:
+`WSJT-X -> Log4OM :2238 -> AirWSJT-X :2237`.
+
+Alternatively, use the same multicast group and port in every receiver, but only
+if all installed applications support multicast. Do not assume an older logger
+supports it. Receiving status and decodes does not require enabling **Accept UDP
+requests**; leave that option unchanged unless you need the optional Halt Tx
+control described above. A one-way proxy does not establish that Halt Tx works.
+
 ### Aircraft Data Sources
 
 Expand **Aircraft accounts** in the desktop aircraft panel (or mobile **Settings**) to configure credentials:
