@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.26
+
+### Fixed
+- Windows x64 and ARM64 installers now place the sidecar and its Python runtime together, avoiding temporary DLL extraction paths that Application Control may block during startup. Python, Visual C++, and TLS library signatures are preserved, and the OS-supplied Universal C Runtime is retained. Installed-package validation is still required on devices with affected policies (#116).
+
+### Dependencies
+- Updated `tauri-build` to 2.7.3, Tauri JavaScript API to 2.12.4, and Tauri CLI to 2.12.3 (#103, #104).
+- Updated `serde_json` to 1.0.154 and Tokio to 1.53.3 (#105, #106).
+- Updated React and ReactDOM to 19.3.1 (#107).
+- Updated CI artifact downloads to `actions/download-artifact` v8 and Playwright to 1.64.1 (#108, #109).
+
+### Documentation
+- Corrected Windows x64 and ARM64 repeat-build staging recipes to replace both the generated sidecar executable and runtime directory, with regression coverage (#116).
+
 ## 0.3.25
 
 ### Added

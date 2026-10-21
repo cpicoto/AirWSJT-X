@@ -59,6 +59,8 @@ When multiple WSJT-X instances are on the network, the **Rig** dropdown selects 
 
 The compass outer ring marks the DX station's bearing and callsign. Candidate aircraft are ranked by a geometry score; see [Plane scoring](docs/plane-scoring.md) for the criteria. The [User guide](docs/user-guide.md) covers the Stations panel and DX favorites list. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
 
+The **WSJT-X Decodes (UTC)** panel shows each decode's original WSJT-X time as six-digit `HHMMSS`, including delayed or replayed packets. Missing or invalid source times display an em dash instead of a browser-local arrival time.
+
 **Sky Dome** is an optional, desktop-only polar view of aircraft azimuth and elevation, hidden by default. Use the **Open / Close** button beside the **Az / El** display controls; the choice is remembered. It opens as a floating, resizable window (a separate native window on desktop that can leave the app window), as does the Az / El readout, whose text scales as you drag its frame larger or smaller. The outer edge is the horizon (0 degrees), the centre is the zenith (90 degrees), and labelled concentric rings mark 22.5, 45, and 67.5 degrees. Click an aircraft to lock it, or a point in the sky to set the rotator target.
 
 Locking an aircraft adds a blue estimated course across the dome: a faint approach
@@ -89,6 +91,25 @@ AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/D
 2. In AirWSJT-X, select your rig from the **Rig** dropdown (or **Any rig**)
 3. Configure **MY callsign** and **MY grid** in the Stations panel (or let WSJT-X provide them)
 4. On Windows, allow AirWSJT-X and its Python sidecar through Windows Firewall
+
+#### Sharing WSJT-X with Log4OM or another UDP application
+
+Two applications cannot receive the same unicast stream when one exclusively
+owns UDP port `2237`. AirWSJT-X reports a bind error and retries that port; moving
+its listener to a random port would not redirect WSJT-X's packets.
+
+For Log4OM versions with UDP proxy support, configure its incoming **JT message**
+connection as a **UDP proxy** listening on `127.0.0.1:2238` and forwarding to
+`127.0.0.1:2237`. Keep its existing QSO-processing options. In WSJT-X
+**Settings > Reporting**, set the UDP server to `127.0.0.1`, port `2238`.
+AirWSJT-X continues listening on `2237`. Keep Log4OM running for this route:
+`WSJT-X -> Log4OM :2238 -> AirWSJT-X :2237`.
+
+Alternatively, use the same multicast group and port in every receiver, but only
+if all installed applications support multicast. Do not assume an older logger
+supports it. Receiving status and decodes does not require enabling **Accept UDP
+requests**; leave that option unchanged unless you need the optional Halt Tx
+control described above. A one-way proxy does not establish that Halt Tx works.
 
 ### Aircraft Data Sources
 

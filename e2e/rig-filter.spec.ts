@@ -1,5 +1,98 @@
 import { test, expect } from "@playwright/test";
 
+async function emitDecode(page: import("@playwright/test").Page, data: Record<string, unknown>) {
+  await page.evaluate(data => {
+    const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "wsjtx_decode",
+      data: { message: "CQ K7MDL CN87", snr: -10, delta_freq_hz: 1000, mode: "FT8", ...data },
+    }));
+  }, data);
+}
+
+for (const timezoneId of ["Europe/Lisbon", "Pacific/Honolulu"]) {
+  test.describe(`decode timestamps in ${timezoneId}`, () => {
+    test.use({ timezoneId });
+
+    test("uses the WSJT-X UTC time instead of browser-local arrival time", async ({ page }) => {
+      await page.goto("/");
+      await emitDecode(page, { time_ms: 1155000 });
+      const row = page.locator(".decode-row").first();
+      await expect(page.getByRole("heading", { name: /WSJT-X Decodes \(UTC\)/ })).toBeVisible();
+      await expect(row.locator(".decode-time")).toHaveText("001915");
+    });
+  });
+}
+
+test("keeps delayed and replayed decode source times in arrival order", async ({ page }) => {
+  await page.goto("/");
+  await emitDecode(page, { message: "END OF DAY", time_ms: 86399999 });
+  await emitDecode(page, { message: "REPLAYED MIDNIGHT", time_ms: 0 });
+  const rows = page.locator(".decode-row");
+  await expect(rows.nth(0)).toContainText("000000");
+  await expect(rows.nth(0)).toContainText("REPLAYED MIDNIGHT");
+  await expect(rows.nth(1)).toContainText("235959");
+  await expect(rows.nth(1)).toContainText("END OF DAY");
+});
+
+test("rejects missing and invalid times without truncating valid six-digit times", async ({ page }) => {
+  await page.goto("/");
+  for (const time_ms of [undefined, "1155000", 1155000.5, -1, 86400000, 0xFFFFFFFF]) {
+    await emitDecode(page, { message: `INVALID ${String(time_ms)}`, time_ms });
+  }
+  await emitDecode(page, { message: "VALID", time_ms: 86399999 });
+
+  const validTime = page.locator(".decode-row").first().locator(".decode-time");
+  await expect(validTime).toHaveText("235959");
+  expect(await validTime.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.locator(".decode-time").filter({ hasText: "—" })).toHaveCount(6);
+});
+
+test("shows UDP bind errors outside the log and clears them after reception recovers", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
+  const message = "Cannot listen for WSJT-X UDP on port 2237: port in use. Configure Log4OM UDP forwarding.";
+  await page.evaluate(message => {
+    const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({ event: "wsjtx_error", data: { message } }));
+  }, message);
+  const alert = page.getByRole("alert", { name: "WSJT-X UDP error" });
+  await expect(alert).toHaveText(message);
+  await expect(page.locator(".topbar")).toContainText("WSJT-X not connected");
+  expect(await alert.evaluate(element => element.parentElement?.classList.contains("display-toolbar"))).toBe(true);
+  const contentBox = await page.locator(".content").boundingBox();
+  const logBox = await page.locator(".log-list").boundingBox();
+  expect(contentBox?.height).toBeGreaterThan(450);
+  expect(logBox?.height).toBeGreaterThan(30);
+  await expect(page.locator(".log-list")).toContainText("WSJT-X error");
+  await page.evaluate(() => {
+    const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "wsjtx_status", data: { de_call: "K7MDL", mode: "FT8", freq_mhz: 18.1 },
+    }));
+  });
+  await expect(alert).toHaveCount(0);
+  await expect(page.locator(".topbar")).toContainText("K7MDL");
+});
+
+test("restores a UDP error from status when the startup event was missed", async ({ page }) => {
+  const message = "Cannot listen for WSJT-X UDP on port 2237: port in use. Retrying automatically.";
+  await page.addInitScript(message => {
+    (window as unknown as Record<string, unknown>).__mockWsjtxError = message;
+  }, message);
+  await page.goto("/");
+  const alert = page.getByRole("alert", { name: "WSJT-X UDP error" });
+  await expect(alert).toHaveText(message);
+  await page.reload();
+  await expect(alert).toHaveText(message);
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__mockWsjtxError = null;
+  });
+  await expect(alert).toHaveCount(0);
+  await expect(page.locator(".topbar")).toContainText("WSJT-X not connected");
+});
+
 test("shows remaining quota and server retry time without inventing ADS-B Exchange quota", async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, { __mockQuotas: {

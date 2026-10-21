@@ -104,9 +104,9 @@ const mockAircraft = [
 
 // Only decodes AD7NP receives from K7MDL (not AD7NP's own TX)
 const mockDecodes = [
-  { message: "CQ K7MDL CN87", snr: -18, delta_freq_hz: 1247, mode: "Q65", ts: "" },
-  { message: "AD7NP K7MDL R-19", snr: -19, delta_freq_hz: 1250, mode: "Q65", ts: "" },
-  { message: "K7MDL AD7NP 73", snr: -16, delta_freq_hz: 1247, mode: "Q65", ts: "" },
+  { message: "CQ K7MDL CN87", snr: -18, delta_freq_hz: 1247, mode: "Q65", time_ms: 43200000 },
+  { message: "AD7NP K7MDL R-19", snr: -19, delta_freq_hz: 1250, mode: "Q65", time_ms: 43230000 },
+  { message: "K7MDL AD7NP 73", snr: -16, delta_freq_hz: 1247, mode: "Q65", time_ms: 43260000 },
 ];
 
 test.describe("AirWSJT-X Screenshots", () => {
@@ -192,7 +192,6 @@ test.describe("AirWSJT-X Screenshots", () => {
 
     // 6. Inject decodes
     for (const decode of mockDecodes) {
-      decode.ts = new Date().toLocaleTimeString();
       await emitSidecar(page, "wsjtx_decode", decode);
       await page.waitForTimeout(100);
     }
@@ -288,7 +287,6 @@ test.describe("AirWSJT-X Screenshots", () => {
     });
 
     for (const decode of mockDecodes) {
-      decode.ts = new Date().toLocaleTimeString();
       await emitSidecar(page, "wsjtx_decode", decode);
       await page.waitForTimeout(100);
     }

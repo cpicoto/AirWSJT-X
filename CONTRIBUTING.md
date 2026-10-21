@@ -110,6 +110,15 @@ change networking or TestFlight packaging.
 
 ## Guidelines
 
+For WSJT-X listener changes, run `python -m unittest tests.test_wsjtx_udp -v`.
+The real-socket cases must cover an exclusively occupied port without forwarding,
+recovery after releasing it, and status/decode delivery through a separate UDP
+proxy port. Use isolated ephemeral loopback ports, not the operator's live
+WSJT-X ports. Injecting a status directly into a fake socket does not validate
+port sharing. Packaged startup and `get_status` checks also do not establish UDP
+connectivity: verify live status and decodes in the installed app alongside the
+logger before claiming that integration works. Do not create or upload fake QSOs.
+
 - **Keep it focused.** Each PR should address one thing — a bug fix, a feature, or a refactor. Not all three.
 - **Test your changes.** Add or update tests for new functionality. Run the full test suite before submitting.
 - **Match the existing style.** Follow the conventions already in the codebase for naming, formatting, and structure.

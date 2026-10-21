@@ -420,6 +420,7 @@ def handle(msg: dict) -> None:
             _ok(id_, {
                 "state": s.state.value,
                 "wsjtx_known_rigs": _wsjtx_listener.get_known_rigs() if _wsjtx_listener else [],
+                "wsjtx_error": _wsjtx_listener.get_error() if _wsjtx_listener else None,
                 "station_a": {"callsign": s.station_a.callsign, "locator": s.station_a.locator} if s.station_a else None,
                 "station_b": {"callsign": s.station_b.callsign, "locator": s.station_b.locator} if s.station_b else None,
                 "selected_aircraft_id": s.selected_aircraft_id,
@@ -1506,6 +1507,7 @@ def _on_wsjtx_decode(dec: WSJTXDecode) -> None:
         "event": "wsjtx_decode",
         "data": {
             "message": dec.message,
+            "time_ms": dec.time_ms,
             "snr": dec.snr,
             "delta_time_s": round(dec.delta_time_s, 1),
             "delta_freq_hz": dec.delta_freq_hz,
