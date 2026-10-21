@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.27
+
+### Added
+- Watched-flight selection by exact ADS-B callsign, optional Only mode, and 20 locally saved flight/Only favorites. A watched flight bypasses candidate filters and remains locked below the normal 5% release threshold; manual unlock remains available (#121).
+- Independent, unfiltered, score-sorted Flight Data with saved-flight highlighting, alongside the existing five-entry Top Candidates list (#121).
+- Persistent vertical resizing for Flight Data and Log, collapsible numeric filters, clearer entry borders, and aligned dark favorites pickers with keyboard navigation (#121).
+- Restore the last DX callsign, grid, altitude and source mode at startup; fresh WSJT-X data takes precedence in WSJT-X mode (#121).
+
+### Fixed
+- Report configured WSJT-X UDP port conflicts visibly instead of silently listening on a random port. Retry the configured port and clear the error when reception recovers, without displacing the main application layout (#118).
+- Preserve original WSJT-X decode timestamps and display six-digit UTC HHMMSS independently of browser timezone. Missing or invalid timestamps display a dash (#119).
+- Aircraft at least 90 degrees behind a distinct MY-to-DX path score zero, including watched flights; the no-path case retains its previous behavior (#121).
+- Preserve keyboard selection, cancellation and focus navigation in DX and flight favorites (#121).
+
+### Changed
+- Keep the latest 30 log entries scrollable, newest first. Simplify MY outer-ring labels while retaining direction markers and DX labels (#121).
+
+### Documentation
+- Document Log4OM UDP forwarding, watched-flight behavior, scoring, favorites, panel resizing and DX restoration. Include updated desktop screenshots.
+- Installed desktop and TestFlight network behavior still requires device validation; automated source and packaging checks do not establish live operation.
+
 ## 0.3.26
 
 ### Fixed
