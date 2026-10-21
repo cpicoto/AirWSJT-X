@@ -116,6 +116,19 @@ async function openSky(page: Page) {
   await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
 }
 
+test("Sky Dome retains the DX dot without a reciprocal MY dot", async ({ page }) => {
+  await openSky(page);
+  await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
+  await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN87");
+  await page.getByRole("button", { name: "Apply MY station" }).click();
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("listbox").getByRole("option").first().click();
+  const dome = page.getByRole("region", { name: "Sky Dome", exact: true });
+  await expect(dome.locator("[data-dx-marker] circle")).toHaveCount(1);
+  await expect(dome.locator("[data-my-marker]")).toHaveCount(0);
+  await expect(dome.locator('circle[r="5"][fill="#58a6ff"]')).toHaveCount(0);
+});
+
 async function expectSkyPointing(page: Page, azimuth: number, elevation: number) {
   // Physical clicks on a scaled SVG have pixel rounding, roughly one degree here.
   await expect.poll(() => page.evaluate(({ azimuth, elevation }) => {

@@ -22,6 +22,12 @@ button[aria-haspopup="listbox"]:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+button[aria-label="DX favorites"]:focus {
+  outline: none;
+}
+button[aria-label="DX favorites"]:focus-visible {
+  outline: 2px solid var(--input-border);
+}
 input[type="number"] { color-scheme: dark; }
 
 /* Override component-local border colors without changing their dimensions. */
