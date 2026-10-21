@@ -1,6 +1,59 @@
 import { test, expect } from "@playwright/test";
 import { isValidLocator, locatorToLatlon } from "../src/lib/geo";
 
+test("DX favorites remain selectable by keyboard and Escape cancels navigation", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("airwsjtx.favoriteDx", JSON.stringify([
+      { call: "K7NAV1", grid: "CN90AA", alt: "100" },
+      { call: "K7NAV2", grid: "CN91AA", alt: "200" },
+    ]));
+  });
+  await page.goto("/");
+  const picker = page.getByRole("button", { name: "DX favorites", exact: true });
+  await picker.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7NAV2");
+  await expect(page.getByRole("textbox", { name: "DX altitude (m)", exact: true })).toHaveValue("200");
+  await expect(picker).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7NAV2");
+  await expect(picker).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7NAV1");
+  await expect(picker).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "+ Other", exact: true })).toBeFocused();
+});
+
+test("flight favorites support keyboard selection and restore the Only setting", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("airwsjtx.favoriteFlights", JSON.stringify([
+      { flight: "UAL123", only: true }, { flight: "DAL456", only: false },
+    ]));
+  });
+  await page.goto("/");
+  const picker = page.getByRole("button", { name: "Flight favorites", exact: true });
+  await picker.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("textbox", { name: "Priority flight number" })).toHaveValue("UAL123");
+  await expect(page.getByRole("checkbox", { name: "Show only priority flight" })).toBeChecked();
+  await expect(picker).toBeFocused();
+});
+
 test("Filters collapses numeric fields without hiding flight controls or changing values", async ({ page }) => {
   await page.goto("/");
   const filters = page.locator(".aircraft-filters");
