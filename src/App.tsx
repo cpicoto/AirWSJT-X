@@ -368,6 +368,44 @@ function normalizeGrid(grid: string | null | undefined): string | null {
 export default function App() {
   const [status, setStatus] = useState<{ state: string } | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  const flightDataRef = useRef<HTMLDivElement>(null);
+  const logCardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const observers: ResizeObserver[] = [];
+    for (const [ref, key] of [
+      [flightDataRef, "airwsjtx.flightDataHeight"],
+      [logCardRef, "airwsjtx.logHeight"],
+    ] as const) {
+      const element = ref.current;
+      if (!element) continue;
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved !== null) {
+          const height = Number(saved);
+          if (!Number.isFinite(height) || height < 80) {
+            throw new Error(`Invalid saved panel height: ${saved}`);
+          }
+          element.style.height = `${height}px`;
+        }
+      } catch (error) {
+        console.error(`Panel height restore error (${key}):`, error);
+      }
+      let previousHeight = element.offsetHeight;
+      const observer = new ResizeObserver(() => {
+        const height = element.offsetHeight;
+        if (height < 80 || height === previousHeight) return;
+        previousHeight = height;
+        try {
+          localStorage.setItem(key, String(height));
+        } catch (error) {
+          console.error(`Panel height save error (${key}):`, error);
+        }
+      });
+      observer.observe(element);
+      observers.push(observer);
+    }
+    return () => observers.forEach(observer => observer.disconnect());
+  }, []);
   const [wsjtxError, setWsjtxError] = useState<string | null>(null);
   const [wsjtxLive, setWsjtxLive] = useState<WsjtxLive>({
     connected: false, app_id: "", freq_mhz: null, mode: null,
@@ -1712,7 +1750,7 @@ export default function App() {
               </div>
             </div>
             {/* DX favorites */}
-            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6, paddingLeft: 20 }}>DX favorites</div>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
             <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap", paddingLeft: 20 }}>
               <select
                 aria-label="DX favorites"
@@ -1727,7 +1765,7 @@ export default function App() {
                   setDxGridInput(f.grid ?? "");
                   selectDx(f.call, f.grid, true, null, f.alt ?? "");
                 }}>
-                <option value="">Favorites</option>
+                <option value="">DX favorites</option>
                 {favoriteDx.map((f, i) => (
                   <option key={`${f.call}|${favGrid(f)}|${favAlt(f)}|${i}`} value={i}>
                     {`${f.call.padEnd(10, "\u00a0")} ${(f.grid ?? "—").padEnd(8, "\u00a0")} ${favAlt(f)} m`}
@@ -2236,7 +2274,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            <div className="flight-data-scroll" role="region" aria-labelledby="flight-data-title">
+            <div className="flight-data-scroll" role="region" aria-labelledby="flight-data-title" ref={flightDataRef}>
             {flightData.length === 0 ? (
               <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
                 {dxCallsign
@@ -2285,7 +2323,7 @@ export default function App() {
           </div>
 
           {/* Event log */}
-          <div className="card log-card">
+          <div className="card log-card" ref={logCardRef}>
             <h3 id="log-title">Log</h3>
             <div className="log-list" role="region" aria-labelledby="log-title" ref={logRef}>
               {log.length === 0

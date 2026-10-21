@@ -37,7 +37,9 @@ test("Flight Data and Log have working vertical resize grips and Log keeps 30 sc
   expect(await log.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
   await log.evaluate(element => { element.scrollTop = element.scrollHeight; });
   expect(await log.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-  for (const area of [page.getByRole("region", { name: "Flight Data" }), page.locator(".log-card")]) {
+  const areas = [page.getByRole("region", { name: "Flight Data" }), page.locator(".log-card")];
+  const heights: number[] = [];
+  for (const [index, area] of areas.entries()) {
     await expect(area).toHaveCSS("resize", "vertical");
     await area.scrollIntoViewIfNeeded();
     const before = (await area.boundingBox())!;
@@ -48,6 +50,17 @@ test("Flight Data and Log have working vertical resize grips and Log keeps 30 sc
     const after = (await area.boundingBox())!;
     expect(after.height).toBeLessThan(before.height - 20);
     expect(after.width).toBe(before.width);
+    heights.push(after.height);
+    const key = index === 0 ? "airwsjtx.flightDataHeight" : "airwsjtx.logHeight";
+    await expect.poll(() => page.evaluate(key => localStorage.getItem(key), key)).toBe(String(after.height));
+  }
+  await page.reload();
+  for (const [index, area] of areas.entries()) {
+    await expect(area).toHaveCSS("height", `${heights[index]}px`);
+  }
+  await page.setViewportSize({ width: 1100, height: 900 });
+  for (const [index, area] of areas.entries()) {
+    await expect(area).toHaveCSS("height", `${heights[index]}px`);
   }
 });
 
@@ -74,6 +87,8 @@ test("favorites align with station inputs and share button typography and text c
   await page.goto("/");
   const dxFavorites = page.getByRole("combobox", { name: "DX favorites" });
   const dxInput = page.getByRole("textbox", { name: "DX callsign", exact: true });
+  const dxFavoritesLabel = page.locator("div").filter({ hasText: /^DX favorites$/ });
+  await expect(dxFavorites.locator('option[value=""]')).toHaveText("DX favorites");
   const other = page.getByRole("button", { name: "+ Other", exact: true });
   const font = await other.evaluate(el => {
     const style = getComputedStyle(el);
@@ -98,6 +113,7 @@ test("favorites align with station inputs and share button typography and text c
   for (const width of [1440, 1100]) {
     await page.setViewportSize({ width, height: 900 });
     expect((await dxFavorites.boundingBox())!.x).toBe((await dxInput.boundingBox())!.x);
+    expect((await dxFavoritesLabel.boundingBox())!.x).toBe((await dxInput.boundingBox())!.x - 20);
   }
 });
 

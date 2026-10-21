@@ -34,7 +34,7 @@ The active flight starts blank with **Only** off at startup; saved flight favori
 
 Numeric aircraft filters use compact fields inside the **Filters** section, collapsed by default. Click **Filters** to expand or collapse them without changing their values. The Flight number controls remain outside this section and visible. The Flight number label sits above its input. Flight controls share a row below the numeric filters when space permits, and wrap onto another row on narrow windows so the favorites picker stays visible.
 
-Drag the bottom-right corner grip of the Flight Data scroll area or Log card to resize it vertically. The Log is scrollable and retains the latest 30 entries, newest first.
+Drag the bottom-right corner grip of the Flight Data scroll area or Log card to resize it vertically. Each height is saved locally and restored at startup; widths continue to follow the window layout. The Log is scrollable and retains the latest 30 entries, newest first.
 
 ### Manual mode details
 
