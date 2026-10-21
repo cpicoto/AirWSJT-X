@@ -190,8 +190,12 @@ test("favorites align with station inputs and share button typography and text c
   await expect(dxFavorites).toBeFocused();
   await expect(dxFavorites).toHaveCSS("border-top-color", "rgb(139, 148, 158)");
   await expect(dxFavorites).toHaveCSS("border-top-style", "solid");
-  await expect(dxFavorites).toHaveCSS("outline-color", "rgb(88, 166, 255)");
+  await expect(dxFavorites).toHaveCSS("outline-color", "rgb(139, 148, 158)");
   await expect(dxFavorites).toHaveCSS("outline-style", "solid");
+  await flightFavorites.click();
+  await dxFavorites.click();
+  await expect(dxFavorites).toHaveCSS("outline-style", "none");
+  await dxFavorites.click();
   await other.focus();
   await expect(dxFavorites).toHaveCSS("border-top-color", "rgb(139, 148, 158)");
   for (const button of await page.locator(".display-toolbar .portable-mode").all()) {
