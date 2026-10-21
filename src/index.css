@@ -18,6 +18,10 @@
 body { background: var(--bg); overflow: hidden; height: 100vh; }
 select { background: #000; color: #e6edf3; color-scheme: dark; border: 1px solid var(--border); border-radius: 4px; }
 select option { background: #000; color: #e6edf3; }
+button[aria-haspopup="listbox"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 input[type="number"] { color-scheme: dark; }
 
 /* Override component-local border colors without changing their dimensions. */

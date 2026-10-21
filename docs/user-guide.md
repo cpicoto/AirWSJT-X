@@ -85,8 +85,10 @@ The station is saved with its call, grid and altitude. In WSJT-X mode, **Store D
 
 **Use a favorite**
 
-1. Open the **Favorites** drop-down.
-2. Pick an entry. Each shows `call  grid  altitude`, for example `VE7NX  CN89oh  0 m`.
+1. Open the **DX favorites** drop-down.
+2. Pick an entry. Each shows aligned call, grid and altitude columns, for example `VE7NX  CN89oh  0 m`.
+
+DX and Flight favorites use the same dark popup and monospace entry font. Their expanded lists contain only saved entries, without a duplicate title row.
 
 Picking an entry sets the DX call, grid and altitude, and switches DX to **Local**.
 

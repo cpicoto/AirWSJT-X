@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from "react";
 export interface DarkSelectOption {
   value: string;
   label: string;
+  columns?: string[];
 }
 
 // Custom dropdown: native <select> popups ignore dark styling on some Linux webviews.
 export default function DarkSelect({
-  value, options, disabled, width = 180, popupWidth, ariaLabel, textColor = "#e6edf3", onChange,
+  value, options, disabled, width = 180, popupWidth, ariaLabel, placeholder, columnTemplate, textColor = "#e6edf3", onChange,
 }: {
   value: string;
   options: DarkSelectOption[];
@@ -15,6 +16,8 @@ export default function DarkSelect({
   width?: number | string;
   popupWidth?: number;
   ariaLabel?: string;
+  placeholder?: string;
+  columnTemplate?: string;
   textColor?: string;
   onChange: (value: string) => void;
 }) {
@@ -71,7 +74,7 @@ export default function DarkSelect({
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}
       >
-        {selected?.label ?? value}
+        {selected?.label ?? placeholder ?? value}
       </button>
       {open && rect && (
         <div
@@ -90,13 +93,18 @@ export default function DarkSelect({
               onClick={() => { setOpen(false); onChange(o.value); }}
               style={{
                 padding: "3px 6px", cursor: "pointer", color: textColor,
+                display: o.columns ? "grid" : "block",
+                gridTemplateColumns: columnTemplate, gap: o.columns ? 8 : undefined,
+                fontFamily: "monospace", fontSize: 10,
                 background: o.value === value ? "#1f2a37" : "#000",
                 whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               }}
               onMouseEnter={e => { e.currentTarget.style.background = "#1f2a37"; }}
               onMouseLeave={e => { e.currentTarget.style.background = o.value === value ? "#1f2a37" : "#000"; }}
             >
-              {o.label}
+              {o.columns
+                ? o.columns.map((column, index) => <span key={index}>{column}</span>)
+                : o.label}
             </div>
           ))}
         </div>

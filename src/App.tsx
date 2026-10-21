@@ -1750,28 +1750,29 @@ export default function App() {
               </div>
             </div>
             {/* DX favorites */}
-            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
+            <div id="dx-favorites-label" style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
             <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap", paddingLeft: 20 }}>
-              <select
-                aria-label="DX favorites"
+              <DarkSelect
+                ariaLabel="DX favorites"
                 value=""
-                title="Pick a stored DX station (call, grid, altitude)"
-                className="btn-secondary"
-                style={{ fontSize: 10, fontWeight: 600, padding: "3px 4px", width: "14ch", flex: "0 0 auto" }}
-                onChange={(e) => {
-                  const f = favoriteDx[Number(e.target.value)];
+                placeholder="DX favorites"
+                width={140}
+                popupWidth={240}
+                textColor="var(--text)"
+                columnTemplate="10ch 8ch minmax(0, 1fr)"
+                options={favoriteDx.map((f, i) => ({
+                  value: String(i),
+                  label: `${f.call} ${f.grid ?? "—"} ${favAlt(f)} m`,
+                  columns: [f.call, f.grid ?? "—", `${favAlt(f)} m`],
+                }))}
+                onChange={(value) => {
+                  const f = favoriteDx[Number(value)];
                   if (!f) return;
                   setDxCallInput(f.call);
                   setDxGridInput(f.grid ?? "");
                   selectDx(f.call, f.grid, true, null, f.alt ?? "");
-                }}>
-                <option value="">DX favorites</option>
-                {favoriteDx.map((f, i) => (
-                  <option key={`${f.call}|${favGrid(f)}|${favAlt(f)}|${i}`} value={i}>
-                    {`${f.call.padEnd(10, "\u00a0")} ${(f.grid ?? "—").padEnd(8, "\u00a0")} ${favAlt(f)} m`}
-                  </option>
-                ))}
-              </select>
+                }}
+              />
               <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
                 onClick={async () => {
                   const call = prompt("DX callsign:");
@@ -2158,12 +2159,12 @@ export default function App() {
                   <div style={{ fontFamily: "monospace", flexShrink: 0 }}>
                     <DarkSelect
                       ariaLabel="Flight favorites"
+                      placeholder="Flight favorites"
                       textColor="var(--text)"
                       width={120}
                       popupWidth={145}
                       value=""
                       options={[
-                        { value: "", label: "Flight favorites" },
                         ...favoriteFlights.map((favorite, i) => ({
                           value: String(i),
                           label: `${favorite.flight.padEnd(8, "\u00a0")}  Only: ${favorite.only ? "Yes" : "No"}`,

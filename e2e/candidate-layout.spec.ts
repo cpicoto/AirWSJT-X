@@ -83,12 +83,39 @@ test("Flight Data groups source controls and heading shares the path bearing row
   expect((await heading.boundingBox())!.y).toBe((await bearing.boundingBox())!.y);
 });
 
+test("favorite popups share typography, align DX columns, and omit title options", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("airwsjtx.favoriteDx", JSON.stringify([
+      { call: "W7GLF/P", grid: "CN88", alt: "0" },
+      { call: "K7MDL", grid: "CN87TP", alt: "1300" },
+    ]));
+    localStorage.setItem("airwsjtx.favoriteFlights", JSON.stringify([{ flight: "DAL652", only: true }]));
+  });
+  await page.goto("/");
+  const options = page.getByRole("listbox").getByRole("option");
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await expect(options).toHaveCount(2);
+  await expect(options.first()).toHaveText("W7GLF/PCN880 m");
+  const dxFont = await options.first().evaluate(el => ({
+    family: getComputedStyle(el).fontFamily, size: getComputedStyle(el).fontSize,
+  }));
+  for (let column = 0; column < 3; column++) {
+    expect((await options.nth(0).locator("span").nth(column).boundingBox())!.x)
+      .toBe((await options.nth(1).locator("span").nth(column).boundingBox())!.x);
+  }
+  await page.getByRole("button", { name: "Flight favorites", exact: true }).click();
+  await expect(options).toHaveCount(1);
+  await expect(options.first()).toHaveText(/DAL652\s+Only: Yes/);
+  await expect(options.first()).toHaveCSS("font-family", dxFont.family);
+  await expect(options.first()).toHaveCSS("font-size", dxFont.size);
+});
+
 test("favorites align with station inputs and share button typography and text colors", async ({ page }) => {
   await page.goto("/");
-  const dxFavorites = page.getByRole("combobox", { name: "DX favorites" });
+  const dxFavorites = page.getByRole("button", { name: "DX favorites", exact: true });
   const dxInput = page.getByRole("textbox", { name: "DX callsign", exact: true });
-  const dxFavoritesLabel = page.locator("div").filter({ hasText: /^DX favorites$/ });
-  await expect(dxFavorites.locator('option[value=""]')).toHaveText("DX favorites");
+  const dxFavoritesLabel = page.locator("#dx-favorites-label");
+  await expect(dxFavorites).toHaveText("DX favorites");
   const other = page.getByRole("button", { name: "+ Other", exact: true });
   const font = await other.evaluate(el => {
     const style = getComputedStyle(el);
@@ -97,6 +124,23 @@ test("favorites align with station inputs and share button typography and text c
   await expect(dxFavorites).toHaveCSS("font-family", font.family);
   await expect(dxFavorites).toHaveCSS("font-size", font.size);
   await expect(dxFavorites).toHaveCSS("font-weight", font.weight);
+  await expect(dxFavorites).toHaveCSS("width", "140px");
+  await expect(dxFavorites).toHaveCSS("padding-left", "6px");
+  await expect(dxFavorites).toHaveCSS("padding-right", "20px");
+  const flightFavorites = page.getByRole("button", { name: "Flight favorites", exact: true });
+  const arrowImage = await flightFavorites.evaluate(el => getComputedStyle(el).backgroundImage);
+  expect(arrowImage).not.toBe("none");
+  await expect(dxFavorites).toHaveCSS("background-image", arrowImage);
+  await expect(dxFavorites).toHaveCSS("background-repeat", "no-repeat");
+  await expect(dxFavorites).toHaveCSS("background-position", await flightFavorites.evaluate(el => getComputedStyle(el).backgroundPosition));
+  await dxFavorites.focus();
+  await expect(dxFavorites).toBeFocused();
+  await expect(dxFavorites).toHaveCSS("border-top-color", "rgb(139, 148, 158)");
+  await expect(dxFavorites).toHaveCSS("border-top-style", "solid");
+  await expect(dxFavorites).toHaveCSS("outline-color", "rgb(88, 166, 255)");
+  await expect(dxFavorites).toHaveCSS("outline-style", "solid");
+  await other.focus();
+  await expect(dxFavorites).toHaveCSS("border-top-color", "rgb(139, 148, 158)");
   for (const button of await page.locator(".display-toolbar .portable-mode").all()) {
     await expect(button).toHaveCSS("font-size", font.size);
     await expect(button).toHaveCSS("font-family", font.family);
@@ -124,7 +168,7 @@ test("data-entry borders are lighter without changing card borders", async ({ pa
     page.getByRole("textbox", { name: "MY callsign", exact: true }),
     page.getByRole("textbox", { name: "Priority flight number" }),
     page.getByRole("spinbutton", { name: "Min lat", exact: true }),
-    page.getByRole("combobox", { name: "DX favorites" }),
+    page.getByRole("button", { name: "DX favorites", exact: true }),
     page.getByRole("button", { name: "Flight favorites", exact: true }),
   ]) {
     await expect(field).toHaveCSS("border-top-color", "rgb(139, 148, 158)");
@@ -216,7 +260,7 @@ test("flight favorites store and restore flight number and Only mode across relo
   const options = page.getByRole("listbox").getByRole("option");
   const chooseFavorite = async (index: number) => {
     await favorites.click();
-    await options.nth(index + 1).click();
+    await options.nth(index).click();
   };
   await expect(store).toBeDisabled();
   await expect(page.getByRole("button", { name: "Clear flight", exact: true }))
@@ -228,33 +272,33 @@ test("flight favorites store and restore flight number and Only mode across relo
   await expect(store).toHaveCSS("background-color", "rgb(22, 27, 34)");
   await only.check();
   await favorites.click();
-  await expect(options).toHaveCount(1);
+  await expect(options).toHaveCount(0);
   await favorites.click();
   await store.click();
   await favorites.click();
-  await expect(options.nth(1)).toHaveText(/UAL123\s+Only: Yes/);
+  await expect(options.nth(0)).toHaveText(/UAL123\s+Only: Yes/);
   await expect(page.getByRole("listbox")).toHaveCSS("background-color", "rgb(0, 0, 0)");
-  await expect(options.nth(1)).toHaveCSS("background-color", "rgb(0, 0, 0)");
+  await expect(options.nth(0)).toHaveCSS("background-color", "rgb(0, 0, 0)");
   await favorites.click();
   await only.uncheck();
   await store.click();
   await favorites.click();
-  await expect(options).toHaveCount(3);
+  await expect(options).toHaveCount(2);
   await favorites.click();
   await chooseFavorite(1);
   await expect(flight).toHaveValue("UAL123");
   await expect(only).toBeChecked();
   await store.click();
   await favorites.click();
-  await expect(options).toHaveCount(3);
-  await expect(options.nth(1)).toHaveText(/UAL123\s+Only: Yes/);
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(0)).toHaveText(/UAL123\s+Only: Yes/);
   await favorites.click();
 
   await page.reload();
   await expect(flight).toHaveValue("");
   await expect(only).not.toBeChecked();
   await favorites.click();
-  await expect(options).toHaveCount(3);
+  await expect(options).toHaveCount(2);
   await favorites.click();
   await flight.fill("DAL456");
   await chooseFavorite(1);
@@ -334,8 +378,8 @@ test("flight favorites retain the 20 newest entries like DX favorites", async ({
   await page.getByRole("button", { name: "Store Flight#", exact: true }).click();
   await page.getByRole("button", { name: "Flight favorites", exact: true }).click();
   const options = page.getByRole("listbox").getByRole("option");
-  await expect(options).toHaveCount(21);
-  await expect(options.nth(1)).toHaveText(/DAL456\s+Only: No/);
+  await expect(options).toHaveCount(20);
+  await expect(options.nth(0)).toHaveText(/DAL456\s+Only: No/);
   await expect(options.last()).toHaveText(/UAL18\s+Only: No/);
 });
 
@@ -363,7 +407,8 @@ test("station distance follows active MY and DX grids and handles unknown grids"
   await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
   await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN87");
   await page.getByRole("button", { name: "Apply MY station" }).click();
-  await page.getByRole("combobox", { name: "DX favorites" }).selectOption({ index: 1 });
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("listbox").getByRole("option").first().click();
   await expect(distance).toHaveText("← 222.4 km →");
   await page.getByRole("textbox", { name: "MY grid", exact: true }).fill("CN89");
   await page.getByRole("button", { name: "Apply MY station" }).click();
