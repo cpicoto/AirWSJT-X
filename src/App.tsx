@@ -1712,14 +1712,14 @@ export default function App() {
               </div>
             </div>
             {/* DX favorites */}
-            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
-            <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6, paddingLeft: 20 }}>DX favorites</div>
+            <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap", paddingLeft: 20 }}>
               <select
                 aria-label="DX favorites"
                 value=""
                 title="Pick a stored DX station (call, grid, altitude)"
                 className="btn-secondary"
-                style={{ fontSize: 10, padding: "3px 4px", fontFamily: "monospace", width: "14ch", flex: "0 0 auto" }}
+                style={{ fontSize: 10, fontWeight: 600, padding: "3px 4px", width: "14ch", flex: "0 0 auto" }}
                 onChange={(e) => {
                   const f = favoriteDx[Number(e.target.value)];
                   if (!f) return;
@@ -2112,7 +2112,7 @@ export default function App() {
                       onClick={() => persistAircraftFilters({
                         ...aircraftFilters, priority_flight: "", priority_flight_exclusive: false,
                       })}
-                      style={{ flexShrink: 0, fontSize: 10, padding: "2px 3px", whiteSpace: "nowrap", borderColor: "var(--input-border)" }}
+                      style={{ flexShrink: 0, fontSize: 10, padding: "2px 3px", whiteSpace: "nowrap", color: "var(--text)", borderColor: "var(--input-border)" }}
                     >
                       Clear
                     </button>
@@ -2120,6 +2120,7 @@ export default function App() {
                   <div style={{ fontFamily: "monospace", flexShrink: 0 }}>
                     <DarkSelect
                       ariaLabel="Flight favorites"
+                      textColor="var(--text)"
                       width={120}
                       popupWidth={145}
                       value=""

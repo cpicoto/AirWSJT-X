@@ -70,6 +70,37 @@ test("Flight Data groups source controls and heading shares the path bearing row
   expect((await heading.boundingBox())!.y).toBe((await bearing.boundingBox())!.y);
 });
 
+test("favorites align with station inputs and share button typography and text colors", async ({ page }) => {
+  await page.goto("/");
+  const dxFavorites = page.getByRole("combobox", { name: "DX favorites" });
+  const dxInput = page.getByRole("textbox", { name: "DX callsign", exact: true });
+  const other = page.getByRole("button", { name: "+ Other", exact: true });
+  const font = await other.evaluate(el => {
+    const style = getComputedStyle(el);
+    return { family: style.fontFamily, size: style.fontSize, weight: style.fontWeight, color: style.color };
+  });
+  await expect(dxFavorites).toHaveCSS("font-family", font.family);
+  await expect(dxFavorites).toHaveCSS("font-size", font.size);
+  await expect(dxFavorites).toHaveCSS("font-weight", font.weight);
+  for (const button of await page.locator(".display-toolbar .portable-mode").all()) {
+    await expect(button).toHaveCSS("font-size", font.size);
+    await expect(button).toHaveCSS("font-family", font.family);
+    await expect(button).toHaveCSS("font-weight", font.weight);
+    await expect(button).toHaveCSS("color", font.color);
+  }
+  for (const control of [
+    dxFavorites,
+    page.getByRole("button", { name: "Flight favorites", exact: true }),
+    page.getByRole("button", { name: "Clear flight", exact: true }),
+  ]) {
+    await expect(control).toHaveCSS("color", font.color);
+  }
+  for (const width of [1440, 1100]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect((await dxFavorites.boundingBox())!.x).toBe((await dxInput.boundingBox())!.x);
+  }
+});
+
 test("data-entry borders are lighter without changing card borders", async ({ page }) => {
   await page.goto("/");
   await page.locator(".aircraft-filters summary").click();

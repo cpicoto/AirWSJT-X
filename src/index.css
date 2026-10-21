@@ -323,6 +323,11 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
   color: #dbeafe;
 }
 
+.display-toolbar .portable-mode {
+  font-size: 10px;
+  color: var(--text);
+}
+
 .portable-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

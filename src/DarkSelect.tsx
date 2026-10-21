@@ -7,7 +7,7 @@ export interface DarkSelectOption {
 
 // Custom dropdown: native <select> popups ignore dark styling on some Linux webviews.
 export default function DarkSelect({
-  value, options, disabled, width = 180, popupWidth, ariaLabel, onChange,
+  value, options, disabled, width = 180, popupWidth, ariaLabel, textColor = "#e6edf3", onChange,
 }: {
   value: string;
   options: DarkSelectOption[];
@@ -15,6 +15,7 @@ export default function DarkSelect({
   width?: number | string;
   popupWidth?: number;
   ariaLabel?: string;
+  textColor?: string;
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -61,7 +62,7 @@ export default function DarkSelect({
         onClick={toggle}
         style={{
           width: "100%", textAlign: "left", padding: "2px 20px 2px 6px", borderRadius: 4,
-          border: "1px solid var(--border)", color: "#e6edf3",
+          border: "1px solid var(--border)", color: textColor,
           backgroundColor: "#000",
           backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23e6edf3'/></svg>")`,
           backgroundRepeat: "no-repeat",
@@ -88,7 +89,7 @@ export default function DarkSelect({
               aria-selected={o.value === value}
               onClick={() => { setOpen(false); onChange(o.value); }}
               style={{
-                padding: "3px 6px", cursor: "pointer", color: "#e6edf3",
+                padding: "3px 6px", cursor: "pointer", color: textColor,
                 background: o.value === value ? "#1f2a37" : "#000",
                 whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               }}
