@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 test("shows UDP bind errors outside the log and clears them after reception recovers", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
   const message = "Cannot listen for WSJT-X UDP on port 2237: port in use. Configure Log4OM UDP forwarding.";
@@ -11,6 +12,12 @@ test("shows UDP bind errors outside the log and clears them after reception reco
   const alert = page.getByRole("alert", { name: "WSJT-X UDP error" });
   await expect(alert).toHaveText(message);
   await expect(page.locator(".topbar")).toContainText("WSJT-X not connected");
+  expect(await alert.evaluate(element => element.parentElement?.classList.contains("display-toolbar"))).toBe(true);
+  const contentBox = await page.locator(".content").boundingBox();
+  const logBox = await page.locator(".log-list").boundingBox();
+  expect(contentBox?.height).toBeGreaterThan(450);
+  expect(logBox?.height).toBeGreaterThan(30);
+  await expect(page.locator(".log-list")).toContainText("WSJT-X error");
   await page.evaluate(() => {
     const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;
     emit("sidecar-message", JSON.stringify({
