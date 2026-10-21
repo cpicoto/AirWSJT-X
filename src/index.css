@@ -344,6 +344,14 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
   border-bottom: 1px solid var(--border);
 }
 
+.wsjtx-error {
+  flex-basis: 100%;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--red);
+  font-size: 11px;
+}
+
 .portable-toolbar {
   padding: 6px 12px;
   background: var(--surface);

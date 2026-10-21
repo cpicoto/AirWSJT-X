@@ -1415,12 +1415,6 @@ export default function App() {
         </div>
       </header>
 
-      {wsjtxError && (
-        <div role="alert" aria-label="WSJT-X UDP error" style={{ color: "var(--red)", padding: "8px 16px" }}>
-          {wsjtxError}
-        </div>
-      )}
-
       <div className="display-toolbar">
         <div className="portable-toolbar" role="group" aria-label="Az / El display controls">
           <span>Az / El</span>
@@ -1452,6 +1446,11 @@ export default function App() {
             >{showSkyDome ? "Close" : "Open"}</button>
           </div>
         </div>
+        {wsjtxError && (
+          <div className="wsjtx-error" role="alert" aria-label="WSJT-X UDP error">
+            {wsjtxError}
+          </div>
+        )}
       </div>
 
       {AZEL_PANEL_ENABLED && portableView === "panel" && (
