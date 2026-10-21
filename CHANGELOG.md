@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.28
+
+### Fixed
+- Require aircraft to be inside the inward-facing 90-degree boundaries at both MY and DX when a distinct path is set. Aircraft behind MY, beyond DX, or on either boundary now score zero in both desktop/backend and mobile scoring. Keep the existing weighted score inside these bounds and the coincident-station exception (#123).
+- Preserve watched-flight filter overrides and tracking at zero score without inflating the aircraft's score (#123).
+- Remove the blue mouse-focus outline from DX favorites while retaining the light border and neutral keyboard focus indicator (#123).
+
+### Changed
+- Remove leftover blue MY reciprocal dots from Sky Dome and the AZ compass while retaining green DX markers. Refresh desktop screenshots and scoring documentation (#123).
+
+### Validation
+- Automated source, browser, and packaging checks do not establish installed desktop or TestFlight network operation; device validation remains required.
+
 ## 0.3.27
 
 ### Added

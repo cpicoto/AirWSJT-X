@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "airwsjtx"
-version = "0.3.27"
+version = "0.3.28"
 dependencies = [
  "httpdate",
  "keyring",
