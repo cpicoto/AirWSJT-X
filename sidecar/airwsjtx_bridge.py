@@ -100,6 +100,8 @@ _DEFAULT_FILTERS = {
     "altitude_min_ft": None,
     "heading_tolerance_deg": 30.0,
     "position_tolerance_deg": 70.0,
+    "priority_flight": "",
+    "priority_flight_exclusive": False,
 }
 
 
@@ -141,28 +143,30 @@ def _write_source_priority(priority: list[str]) -> None:
         pass
 
 
-def _read_filters() -> dict[str, float | None]:
+def _read_filters() -> dict[str, float | str | bool | None]:
     try:
         with open(_aircraft_filter_path(), "r", encoding="utf-8") as fh:
             data = json.load(fh)
         if isinstance(data, dict):
             result = dict(_DEFAULT_FILTERS)
-            for key, _default in _DEFAULT_FILTERS.items():
+            for key in ("lat_min", "lat_max", "lon_min", "lon_max", "altitude_min_ft",
+                        "heading_tolerance_deg", "position_tolerance_deg"):
                 if key in data:
                     val = data[key]
-                    if val is None or val == "":
-                        result[key] = None
-                    else:
-                        result[key] = float(val)
+                    result[key] = None if val is None or val == "" else float(val)
             return result
     except Exception:
         pass
     return dict(_DEFAULT_FILTERS)
 
 
-def _write_filters(filters: dict[str, float | None]) -> None:
+def _write_filters(filters: dict[str, float | str | bool | None]) -> None:
     try:
-        payload = {k: (None if v is None else float(v)) for k, v in filters.items()}
+        payload = {
+            key: value if key in ("priority_flight", "priority_flight_exclusive")
+            else (None if value is None else float(value))
+            for key, value in filters.items()
+        }
         with open(_aircraft_filter_path(), "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
     except Exception:
@@ -516,13 +520,21 @@ def handle(msg: dict) -> None:
                 _err(id_, "filters object required")
                 return
             next_filters = dict(_DEFAULT_FILTERS)
-            for key, _default in _DEFAULT_FILTERS.items():
+            for key in ("lat_min", "lat_max", "lon_min", "lon_max", "altitude_min_ft",
+                        "heading_tolerance_deg", "position_tolerance_deg"):
                 if key in raw_filters:
                     value = raw_filters[key]
                     if value is None or value == "":
                         next_filters[key] = None
                     else:
                         next_filters[key] = float(value)
+            priority_flight = raw_filters.get("priority_flight", "")
+            exclusive = raw_filters.get("priority_flight_exclusive", False)
+            if not isinstance(priority_flight, str) or not isinstance(exclusive, bool):
+                _err(id_, "priority_flight must be a string and priority_flight_exclusive must be a boolean")
+                return
+            next_filters["priority_flight"] = priority_flight.strip().upper()
+            next_filters["priority_flight_exclusive"] = exclusive
             global _aircraft_filters
             _aircraft_filters = next_filters
             _write_filters(_aircraft_filters)
@@ -1176,7 +1188,7 @@ def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
         _rotator.set_position(geo["az_a"], geo["el_a"])
 
     # Check if aircraft has left the scatter window
-    if geo["scatter_score"] < 0.05:
+    if geo["scatter_score"] < 0.05 and not _matches_priority_flight(ac):
         _emit({"event": "plane_out_of_window", "data": {"icao24": _locked_aircraft_id}})
         _do_unlock()
         return
@@ -1266,11 +1278,23 @@ def _start_dump1090_feed(host: str, port: int) -> None:
     _dump1090_feed.start()
 
 
+def _matches_priority_flight(ac: Aircraft) -> bool:
+    priority_flight = str(_aircraft_filters.get("priority_flight") or "").strip().upper()
+    return bool(priority_flight and ac.callsign and ac.callsign.strip().upper() == priority_flight)
+
+
 def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> bool:
     if ac.lat is None or ac.lon is None or ac.altitude_m is None:
         return False
 
     filters = dict(_aircraft_filters)
+    priority_flight = str(filters.get("priority_flight") or "").strip().upper()
+    matches_priority_flight = _matches_priority_flight(ac)
+    if filters.get("priority_flight_exclusive") and priority_flight:
+        return matches_priority_flight
+    if matches_priority_flight:
+        return True
+
     if filters.get("lat_min") is not None and ac.lat < float(filters["lat_min"]):
         return False
     if filters.get("lat_max") is not None and ac.lat > float(filters["lat_max"]):
@@ -1364,7 +1388,7 @@ def _get_scatter_aircraft() -> list[dict]:
     return results
 
 
-def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
+def _get_scatter_aircraft_with_total(*, apply_filters: bool = True) -> tuple[list[dict], int]:
     if not _station_a_locator:
         return [], 0
     try:
@@ -1392,7 +1416,7 @@ def _get_scatter_aircraft_with_total() -> tuple[list[dict], int]:
             continue
         total += 1
         geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
-        if not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
+        if apply_filters and not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b):
             continue
         results.append({
             "icao24": ac.icao24,
@@ -1414,6 +1438,7 @@ def _emit_aircraft_update() -> None:
     age_s = _aircraft_cache_age_s()
     freshness = _aircraft_cache_freshness(age_s)
     aircraft, total = _get_scatter_aircraft_with_total()
+    flight_data, _ = _get_scatter_aircraft_with_total(apply_filters=False)
     visible_aircraft = aircraft[:20]
     if _locked_aircraft_id:
         locked = next((ac for ac in aircraft[20:] if ac["icao24"] == _locked_aircraft_id), None)
@@ -1427,6 +1452,7 @@ def _emit_aircraft_update() -> None:
         "event": "airscout_update",
         "data": {
             "aircraft": visible_aircraft,
+            "flight_data": flight_data,
             "total": total,
             "station_a": _station_a_locator,
             "station_b": _station_b_locator,

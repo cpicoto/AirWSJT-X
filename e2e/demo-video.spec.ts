@@ -109,6 +109,7 @@ test.describe("Demo Video", () => {
     // First just 1 aircraft
     await emitSidecar(page, "airscout_update", {
       aircraft: [aircraft[3]],
+      flight_data: [aircraft[3]],
       total: 12, station_a: "CN87vp", station_b: "CN87tp",
       active_source: "opensky",
       last_update_epoch_s: Math.floor(Date.now() / 1000),
@@ -119,6 +120,7 @@ test.describe("Demo Video", () => {
     // Then 2 aircraft
     await emitSidecar(page, "airscout_update", {
       aircraft: [aircraft[2], aircraft[3]],
+      flight_data: [aircraft[2], aircraft[3]],
       total: 23, station_a: "CN87vp", station_b: "CN87tp",
       active_source: "opensky",
       last_update_epoch_s: Math.floor(Date.now() / 1000),
@@ -129,6 +131,7 @@ test.describe("Demo Video", () => {
     // Then all 4 aircraft
     await emitSidecar(page, "airscout_update", {
       aircraft,
+      flight_data: aircraft,
       total: 47, station_a: "CN87vp", station_b: "CN87tp",
       active_source: "opensky",
       last_update_epoch_s: Math.floor(Date.now() / 1000),

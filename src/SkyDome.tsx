@@ -323,23 +323,13 @@ export default function SkyDome({
           );
         })()}
 
-        {/* MY station label on outer ring, on the reciprocal of the DX bearing */}
+        {/* MY marker on the reciprocal of the DX bearing */}
         {pathBearing !== null && myLabel && (() => {
           const az = (pathBearing + 180) % 360;
           const dot = project(az, 0);
-          const rad = ((az - 90) * Math.PI) / 180;
-          const sin = Math.sin((az * Math.PI) / 180);
-          const cos = Math.cos((az * Math.PI) / 180);
-          const labelR = outerR + 10;
-          const anchor = Math.abs(sin) > 0.3 ? (sin > 0 ? "start" : "end") : "middle";
-          const dy = anchor === "middle" ? (cos > 0 ? -6 : 8) : 3;
           return (
             <g pointerEvents="none" data-my-marker>
               <circle cx={dot.x} cy={dot.y} r={5} fill="#58a6ff" stroke="#0d1117" strokeWidth={1} />
-              <text x={cx + labelR * Math.cos(rad)} y={cy + labelR * Math.sin(rad) + dy} textAnchor={anchor}
-                fontSize={11} fontWeight={700} fill="#58a6ff" stroke="#0a0e14" strokeWidth={3} paintOrder="stroke">
-                {myLabel}
-              </text>
             </g>
           );
         })()}

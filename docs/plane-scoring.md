@@ -8,6 +8,8 @@ The candidate list, auto-lock and the percentage shown in the UI all use `scatte
 
 **Hard gate:** if the plane is at or below the horizon from station A **or** station B (elevation ≤ 0°), the score is 0.
 
+When MY and DX are different locations, an aircraft 90° or more off the MY-to-DX bearing also scores 0. This applies to all aircraft, including a watched flight. It does not apply when MY and DX are the same location (no path set).
+
 Otherwise the score is a weighted sum of four parts:
 
 | Weight | Part | Computation |
@@ -25,11 +27,12 @@ Otherwise the score is a weighted sum of four parts:
 - **Minimum altitude:** optional, in feet.
 - **Position tolerance:** default 70°. The plane's bearing from A must be within this of the A→B bearing. Skipped when A and B are the same point.
 - **Heading tolerance:** default 30°. If the plane reports a heading and speed, its heading must be within this of the A→B bearing.
+- **Flight number:** a matching flight bypasses these filters, but uses the same geometry score. **Only** restricts candidates to that flight; otherwise it is included alongside normally filtered aircraft.
 
 ## How the score is used
 
 - **Auto-lock:** runs only from idle, completed or aborted states. Picks the highest score of at least 0.05 among planes that pass the filters.
-- **Tracking:** every update recomputes the score. Below 0.05 the plane is out of window: `plane_out_of_window` is emitted and the plane is unlocked.
+- **Tracking:** every update recomputes the score. Below 0.05 the plane is out of window: `plane_out_of_window` is emitted and the plane is unlocked, unless it matches the watched flight number. The watched flight remains locked even at 0%.
 - **Sorting:** the candidate list is sorted by score, highest first.
 
 ## Limitations

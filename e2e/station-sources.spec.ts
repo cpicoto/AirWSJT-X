@@ -57,6 +57,35 @@ test("MY follows valid WSJT-X grids ahead of callbook, while explicit local over
   await expect.poll(() => lastRpc(page, "airscout_set_stations")).toMatchObject({ locator_a: "CN85" });
 });
 
+test("last used local DX station and altitude are restored on startup", async ({ page }) => {
+  await ready(page);
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("listbox").getByRole("option").first().click();
+  const call = await page.getByRole("textbox", { name: "DX callsign", exact: true }).inputValue();
+  const grid = (await page.getByRole("textbox", { name: "DX grid", exact: true }).inputValue()).toUpperCase();
+  await page.getByRole("textbox", { name: "DX altitude (m)", exact: true }).fill("345");
+  await page.getByRole("button", { name: "Store DX station" }).click();
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue(call);
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue(grid);
+  await expect(page.getByRole("textbox", { name: "DX altitude (m)", exact: true })).toHaveValue("345");
+  await expect(page.getByRole("button", { name: "DX station source" })).toHaveText("Local");
+  await expect.poll(() => lastRpc(page, "airscout_set_stations")).toMatchObject({ locator_b: grid, dx_local: true });
+});
+
+test("last WSJT-X DX is restored until fresh WSJT-X data arrives", async ({ page }) => {
+  await ready(page);
+  await wsjtx(page, { dx_call: "K7DX", dx_grid: "CN90AA" });
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN90AA");
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7DX");
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN90AA");
+  await expect(page.getByRole("button", { name: "DX station source" })).toHaveText("WSJT-X");
+  await wsjtx(page, { dx_call: "W7NEW", dx_grid: "CN84" });
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("W7NEW");
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN84");
+});
+
 test("a favorite's grid and altitude beat stale callbook and portable grids without debounce writeback", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("airwsjtx.favoriteDx", JSON.stringify([{ call: "K7DX", grid: "CN90AA", alt: "345" }]));
@@ -64,7 +93,8 @@ test("a favorite's grid and altitude beat stale callbook and portable grids with
   });
   await ready(page);
   await wsjtx(page, {});
-  await page.getByRole("combobox", { name: "DX favorites" }).selectOption("0");
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("listbox").getByRole("option").first().click();
   await expect(page.getByRole("button", { name: "DX station source" })).toHaveText("Local");
   await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN90AA");
   await expect(page.getByRole("textbox", { name: "DX altitude (m)", exact: true })).toHaveValue("345");
@@ -130,7 +160,8 @@ test("DX altitude restore and favorite/user actions log sidecar failures", async
   });
   await ready(page);
   await expect(page.getByText(/DX altitude restore error:.*Altitude rejected/)).toBeVisible();
-  await page.getByRole("combobox", { name: "DX favorites" }).selectOption("0");
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("listbox").getByRole("option").first().click();
   await expect(page.getByText(/DX altitude error:.*Altitude rejected/).first()).toBeVisible();
   await page.getByRole("textbox", { name: "DX altitude (m)", exact: true }).fill("250");
   await page.getByRole("button", { name: "Store DX station" }).click();
@@ -148,11 +179,12 @@ test("favorites stay FIFO capped at 20 and deduplicate only exact station matche
   });
   await ready(page);
   await wsjtx(page, {});
-  const favorites = page.getByRole("combobox", { name: "DX favorites" });
+  const favorites = page.getByRole("button", { name: "DX favorites", exact: true });
   const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem("airwsjtx.favoriteDx")!) as {
     call: string; grid: string; alt: string;
   }[]);
-  await favorites.selectOption("19");
+  await favorites.click();
+  await page.getByRole("listbox").getByRole("option").nth(19).click();
   expect((await saved())[0].call).toBe("K7T00");
   await page.getByRole("button", { name: "Store DX station" }).click();
   await expect.poll(async () => (await saved())[0].call).toBe("K7T19");
@@ -166,6 +198,7 @@ test("favorites stay FIFO capped at 20 and deduplicate only exact station matche
   expect((await saved()).filter(f => f.call === "K7T19")).toHaveLength(2);
   expect((await saved()).some(f => f.call === "K7T18")).toBe(false);
   await page.reload();
-  await expect(favorites.locator("option")).toHaveCount(21);
-  await expect(favorites.locator("option").nth(1)).toContainText("250 m");
+  await favorites.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(20);
+  await expect(page.getByRole("listbox").getByRole("option").first()).toContainText("250 m");
 });

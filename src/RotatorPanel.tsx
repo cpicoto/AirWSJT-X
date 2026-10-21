@@ -219,21 +219,13 @@ function CompassRose({
         );
       })()}
 
-      {/* MY station label on outer ring, on the reciprocal of the DX bearing */}
+      {/* MY marker on the reciprocal of the DX bearing */}
       {dxAz !== null && myLabel && (() => {
         const az = (dxAz + 180) % 360;
-        const lp = azToXY(az, outerR + 10);
-        const sin = Math.sin((az * Math.PI) / 180);
-        const cos = Math.cos((az * Math.PI) / 180);
-        const anchor = sin > 0.3 ? "start" : sin < -0.3 ? "end" : "middle";
-        const dy = anchor === "middle" ? (cos > 0 ? -6 : 8) : 3;
         const dot = azToXY(az, outerR);
         return (
           <g pointerEvents="none">
             <circle cx={dot.x} cy={dot.y} r={4} fill="#58a6ff" stroke="#0d1117" strokeWidth={1} />
-            <text x={lp.x} y={lp.y + dy} textAnchor={anchor} fontSize={9} fontWeight={700} fill="#58a6ff">
-              {myLabel}
-            </text>
           </g>
         );
       })()}

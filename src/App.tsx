@@ -85,6 +85,7 @@ interface AircraftEntry {
 }
 interface AirscoutUpdate {
   aircraft: AircraftEntry[];
+  flight_data?: AircraftEntry[];
   total: number;
   station_a: string | null;
   station_b: string | null;
@@ -127,7 +128,18 @@ interface AircraftFilterSettings {
   altitude_min_ft: number | null;
   heading_tolerance_deg: number;
   position_tolerance_deg: number;
+  priority_flight: string;
+  priority_flight_exclusive: boolean;
 }
+
+type NumericAircraftFilterKey =
+  | "lat_min"
+  | "lat_max"
+  | "lon_min"
+  | "lon_max"
+  | "altitude_min_ft"
+  | "heading_tolerance_deg"
+  | "position_tolerance_deg";
 
 const DEFAULT_AIRCRAFT_FILTERS: AircraftFilterSettings = {
   lat_min: null,
@@ -137,6 +149,8 @@ const DEFAULT_AIRCRAFT_FILTERS: AircraftFilterSettings = {
   altitude_min_ft: null,
   heading_tolerance_deg: 30,
   position_tolerance_deg: 70,
+  priority_flight: "",
+  priority_flight_exclusive: false,
 };
 
 function getAircraftFilterStorageKey(stationA: string | null | undefined, stationB: string | null | undefined): string {
@@ -164,6 +178,8 @@ function loadAircraftFilters(stationA: string | null | undefined, stationB: stri
       altitude_min_ft: parsed.altitude_min_ft ?? null,
       heading_tolerance_deg: Number(parsed.heading_tolerance_deg ?? 30),
       position_tolerance_deg: Number(parsed.position_tolerance_deg ?? 70),
+      priority_flight: "",
+      priority_flight_exclusive: false,
     };
   } catch {
     return DEFAULT_AIRCRAFT_FILTERS;
@@ -210,6 +226,24 @@ const MY_GRID_OVERRIDE_KEY = "airwsjtx.myGridOverride";
 const MY_ALT_KEY = "airwsjtx.myAltitudeM";
 const DX_ALT_KEY = "airwsjtx.dxAltitudeM";
 const DX_LOCAL_KEY = "airwsjtx.dxLocal";
+const LAST_DX_KEY = "airwsjtx.lastDx";
+function loadLastDx(): { call: string | null; grid: string | null } {
+  try {
+    const raw = localStorage.getItem(LAST_DX_KEY);
+    if (!raw) return { call: null, grid: null };
+    const saved: unknown = JSON.parse(raw);
+    if (typeof saved !== "object" || saved === null
+      || !("call" in saved) || typeof saved.call !== "string" || !isCompleteCall(saved.call)
+      || !("grid" in saved) || (saved.grid !== null
+        && (typeof saved.grid !== "string" || !isValidLocator(saved.grid)))) {
+      throw new Error("Invalid saved DX station");
+    }
+    return { call: cleanCall(saved.call), grid: typeof saved.grid === "string" ? saved.grid : null };
+  } catch (e) {
+    console.error("DX station restore error:", e);
+    return { call: null, grid: null };
+  }
+}
 const FAVORITE_DX_KEY = "airwsjtx.favoriteDx";
 const FAVORITE_DX_MAX = 20;
 type FavoriteDx = { call: string; grid: string | null; alt?: string };
@@ -226,6 +260,27 @@ function loadFavoriteDx(): FavoriteDx[] {
     }
   } catch { /* fall back to defaults */ }
   return DEFAULT_FAVORITE_DX;
+}
+const FAVORITE_FLIGHTS_KEY = "airwsjtx.favoriteFlights";
+const FAVORITE_FLIGHTS_MAX = 20;
+type FavoriteFlight = { flight: string; only: boolean };
+function loadFavoriteFlights(): FavoriteFlight[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(FAVORITE_FLIGHTS_KEY) ?? "[]");
+    if (!Array.isArray(parsed) || !parsed.every((entry: unknown) =>
+      typeof entry === "object" && entry !== null
+      && "flight" in entry && typeof entry.flight === "string" && entry.flight.trim().length > 0
+      && "only" in entry && typeof entry.only === "boolean"
+    )) {
+      throw new Error("Invalid saved flight favorites");
+    }
+    return (parsed as FavoriteFlight[]).map(entry => ({
+      flight: entry.flight.trim().toUpperCase(), only: entry.only,
+    })).slice(0, FAVORITE_FLIGHTS_MAX);
+  } catch (e) {
+    console.error("Flight favorites load error:", e);
+    return [];
+  }
 }
 const STATION_SOURCE_BTN_STYLE: React.CSSProperties = {
   fontSize: 10, padding: "2px 0", width: 52, boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", flex: "0 0 auto",
@@ -313,6 +368,44 @@ function normalizeGrid(grid: string | null | undefined): string | null {
 export default function App() {
   const [status, setStatus] = useState<{ state: string } | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  const flightDataRef = useRef<HTMLDivElement>(null);
+  const logCardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const observers: ResizeObserver[] = [];
+    for (const [ref, key] of [
+      [flightDataRef, "airwsjtx.flightDataHeight"],
+      [logCardRef, "airwsjtx.logHeight"],
+    ] as const) {
+      const element = ref.current;
+      if (!element) continue;
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved !== null) {
+          const height = Number(saved);
+          if (!Number.isFinite(height) || height < 80) {
+            throw new Error(`Invalid saved panel height: ${saved}`);
+          }
+          element.style.height = `${height}px`;
+        }
+      } catch (error) {
+        console.error(`Panel height restore error (${key}):`, error);
+      }
+      let previousHeight = element.offsetHeight;
+      const observer = new ResizeObserver(() => {
+        const height = element.offsetHeight;
+        if (height < 80 || height === previousHeight) return;
+        previousHeight = height;
+        try {
+          localStorage.setItem(key, String(height));
+        } catch (error) {
+          console.error(`Panel height save error (${key}):`, error);
+        }
+      });
+      observer.observe(element);
+      observers.push(observer);
+    }
+    return () => observers.forEach(observer => observer.disconnect());
+  }, []);
   const [wsjtxError, setWsjtxError] = useState<string | null>(null);
   const [wsjtxLive, setWsjtxLive] = useState<WsjtxLive>({
     connected: false, app_id: "", freq_mhz: null, mode: null,
@@ -379,8 +472,9 @@ export default function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const [dxCallsign, setDxCallsign] = useState<string | null>(null);
-  const [dxGrid, setDxGrid] = useState<string | null>(null);
+  const [lastDx] = useState(loadLastDx);
+  const [dxCallsign, setDxCallsign] = useState<string | null>(lastDx.call);
+  const [dxGrid, setDxGrid] = useState<string | null>(lastDx.grid);
   const [stationGridOverrides, setStationGridOverrides] = useState<Record<string, string>>(() => {
     try {
       const raw = localStorage.getItem(PORTABLE_GRID_OVERRIDES_KEY);
@@ -411,6 +505,7 @@ export default function App() {
   const dxGridEditing = useRef(false);
   const dxCallEditing = useRef(false);
   const [favoriteDx, setFavoriteDx] = useState<FavoriteDx[]>(loadFavoriteDx);
+  const [favoriteFlights, setFavoriteFlights] = useState<FavoriteFlight[]>(loadFavoriteFlights);
   const [dxLocal, setDxLocal] = useState(() => localStorage.getItem(DX_LOCAL_KEY) === "1");
   const [dxCallInput, setDxCallInput] = useState("");
   const [nowEpochS, setNowEpochS] = useState(() => Math.floor(Date.now() / 1000));
@@ -429,6 +524,7 @@ export default function App() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const overlayDragRef = useRef<{ dx: number; dy: number } | null>(null);
   const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
+  const activeFlightRef = useRef({ priority_flight: "", priority_flight_exclusive: false });
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
   const [callsignDbBusy, setCallsignDbBusy] = useState(false);
   const [lockedPlane, setLockedPlane] = useState<{
@@ -446,7 +542,7 @@ export default function App() {
   const rotatorSpeechLastProcessedRef = useRef<{ az: number; el: number; source: "rotator" | "manual" } | null>(null);
 
   const addLog = useCallback((msg: string) => {
-    setLog((l) => [...l.slice(-49), `${new Date().toLocaleTimeString()} ${msg}`]);
+    setLog((l) => [...l.slice(-29), `${new Date().toLocaleTimeString()} ${msg}`]);
   }, []);
 
   useEffect(() => {
@@ -681,9 +777,9 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Scroll log to bottom
+  // Newest log entries are rendered first.
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+    if (logRef.current) logRef.current.scrollTop = 0;
   }, [log]);
 
   useEffect(() => {
@@ -842,6 +938,8 @@ export default function App() {
   })();
   const stateColor = STATE_COLOR[displayState] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
+  const flightData = [...(airscout?.flight_data ?? [])].sort((a, b) => b.scatter_score - a.scatter_score);
+  const savedFlights = new Set(favoriteFlights.map(favorite => favorite.flight.trim().toUpperCase()));
   const skyDomeAircraft = aircraft.filter((ac, index) => index < 20 || ac.icao24 === lockedPlane?.icao24);
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
   const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
@@ -915,14 +1013,36 @@ export default function App() {
   const persistAircraftFilters = useCallback((nextFilters: AircraftFilterSettings) => {
     const normalized: AircraftFilterSettings = {
       ...nextFilters,
+      priority_flight: nextFilters.priority_flight.trim().toUpperCase(),
       heading_tolerance_deg: Number.isFinite(nextFilters.heading_tolerance_deg) ? nextFilters.heading_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg,
-            position_tolerance_deg: Number.isFinite(nextFilters.position_tolerance_deg) ? nextFilters.position_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.position_tolerance_deg,
-          };
+      position_tolerance_deg: Number.isFinite(nextFilters.position_tolerance_deg) ? nextFilters.position_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.position_tolerance_deg,
+    };
+    activeFlightRef.current = {
+      priority_flight: normalized.priority_flight,
+      priority_flight_exclusive: normalized.priority_flight_exclusive,
+    };
     const storageKey = getAircraftFilterStorageKey(airscout?.station_a, airscout?.station_b);
     localStorage.setItem(storageKey, JSON.stringify(normalized));
     setAircraftFilters(normalized);
-    rpc("airscout_apply_filters", { filters: normalized }).catch(() => {});
-  }, [airscout?.station_a, airscout?.station_b]);
+    rpc("airscout_apply_filters", { filters: normalized })
+      .catch((e) => addLog(`Aircraft filter update: ${e}`));
+  }, [airscout?.station_a, airscout?.station_b, addLog]);
+
+  const storeFlight = () => {
+    const flight = aircraftFilters.priority_flight.trim().toUpperCase();
+    if (!flight) return;
+    const entry: FavoriteFlight = { flight, only: aircraftFilters.priority_flight_exclusive };
+    const next = [
+      entry,
+      ...favoriteFlights.filter(f => f.flight !== entry.flight || f.only !== entry.only),
+    ].slice(0, FAVORITE_FLIGHTS_MAX);
+    try {
+      localStorage.setItem(FAVORITE_FLIGHTS_KEY, JSON.stringify(next));
+      setFavoriteFlights(next);
+    } catch (e) {
+      addLog(`Flight favorites store error: ${e}`);
+    }
+  };
 
   const myCallsign = myCallOverride || wsjtxLive.de_call?.trim().toUpperCase() || null;
   const dxCall = dxCallsign ? cleanCall(dxCallsign) || null : null;
@@ -930,7 +1050,16 @@ export default function App() {
   const myGrid = myGridOverride || (isValidLocator(wsjtxMyGrid) ? wsjtxMyGrid : lookupGrid(myCallsign));
   const wsjtxDxGrid = normalizeGrid(wsjtxLive.dx_grid);
   const selectedDxGrid = dxLocal ? (dxGrid ?? lookupGrid(dxCall))
-    : isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid : lookupGrid(dxCall);
+    : isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid
+    : !wsjtxLive.dx_call ? (dxGrid ?? lookupGrid(dxCall)) : lookupGrid(dxCall);
+  useEffect(() => {
+    if (!dxCall) return;
+    try {
+      localStorage.setItem(LAST_DX_KEY, JSON.stringify({ call: dxCall, grid: selectedDxGrid ?? null }));
+    } catch (e) {
+      addLog(`DX station save error: ${e}`);
+    }
+  }, [dxCall, selectedDxGrid, addLog]);
   const stationDistanceKm = isValidLocator(myGrid) && isValidLocator(selectedDxGrid)
     ? haversineKm(...locatorToLatlon(myGrid), ...locatorToLatlon(selectedDxGrid))
     : null;
@@ -1059,9 +1188,12 @@ export default function App() {
     if (!dxCallEditing.current) setDxCallInput(dxCall ?? "");
   }, [dxCall]);
   useEffect(() => {
-    const stored = loadAircraftFilters(airscout?.station_a, airscout?.station_b);
+    const stored = {
+      ...loadAircraftFilters(airscout?.station_a, airscout?.station_b),
+      ...activeFlightRef.current,
+    };
     setAircraftFilters(stored);
-    rpc("airscout_apply_filters", { filters: stored }).catch(() => {});
+    rpc("airscout_apply_filters", { filters: stored }).catch(e => addLog(`Aircraft filter restore: ${e}`));
   }, [airscout?.station_a, airscout?.station_b]);
 
   function savePortableGrid(callsign: string | null, grid: string | null) {
@@ -1618,28 +1750,29 @@ export default function App() {
               </div>
             </div>
             {/* DX favorites */}
-            <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
-            <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap" }}>
-              <select
-                aria-label="DX favorites"
+            <div id="dx-favorites-label" style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
+            <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap", paddingLeft: 20 }}>
+              <DarkSelect
+                ariaLabel="DX favorites"
                 value=""
-                title="Pick a stored DX station (call, grid, altitude)"
-                className="btn-secondary"
-                style={{ fontSize: 10, padding: "3px 4px", fontFamily: "monospace", width: "14ch", flex: "0 0 auto" }}
-                onChange={(e) => {
-                  const f = favoriteDx[Number(e.target.value)];
+                placeholder="DX favorites"
+                width={140}
+                popupWidth={240}
+                textColor="var(--text)"
+                columnTemplate="10ch 8ch minmax(0, 1fr)"
+                options={favoriteDx.map((f, i) => ({
+                  value: String(i),
+                  label: `${f.call} ${f.grid ?? "—"} ${favAlt(f)} m`,
+                  columns: [f.call, f.grid ?? "—", `${favAlt(f)} m`],
+                }))}
+                onChange={(value) => {
+                  const f = favoriteDx[Number(value)];
                   if (!f) return;
                   setDxCallInput(f.call);
                   setDxGridInput(f.grid ?? "");
                   selectDx(f.call, f.grid, true, null, f.alt ?? "");
-                }}>
-                <option value="">Favorites</option>
-                {favoriteDx.map((f, i) => (
-                  <option key={`${f.call}|${favGrid(f)}|${favAlt(f)}|${i}`} value={i}>
-                    {`${f.call.padEnd(10, "\u00a0")} ${(f.grid ?? "—").padEnd(8, "\u00a0")} ${favAlt(f)} m`}
-                  </option>
-                ))}
-              </select>
+                }}
+              />
               <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
                 onClick={async () => {
                   const call = prompt("DX callsign:");
@@ -1734,6 +1867,7 @@ export default function App() {
               onUnlock={() => { setLockedPlane(null); rpc("unlock_aircraft", {}).catch(() => {}); }}
               onLockAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
               sourceStatusText={activeSource ? `${activeSource} ${activeSourceState}` : undefined}
+              priorityFlight={aircraftFilters.priority_flight}
               aircraft={aircraft.slice(0, 5).map(ac => ({
                 icao24: ac.icao24, callsign: ac.callsign, altitude_ft: ac.altitude_ft,
                 scatter_score: ac.scatter_score, az_a: ac.az_a, el_a: ac.el_a,
@@ -1906,54 +2040,37 @@ export default function App() {
               </span>}
             </h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-              <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
-                Source: <span style={{ color: "var(--text)" }}>{activeSource ?? "not set"}</span>
-                {" · "}
-                <span style={{ color: sourceDotColor }}>{activeSourceState}</span>
-                {activeSourceMessage && <span style={{ color: "var(--text-muted)" }}> — {activeSourceMessage}</span>}
-                {" · "}
-                <span style={{ color: dataFreshness === "fresh" ? "var(--green)" : dataFreshness === "stale" ? "var(--yellow)" : "var(--red)" }}>
-                  {freshnessLabel}
-                </span>
-                {cacheAgeSeconds != null && (
-                  <span style={{ color: "var(--text-muted)" }}> ({cacheAgeSeconds}s ago)</span>
-                )}
-                {totalAircraftCount > 0 && (
-                  <span style={{ marginLeft: 6, color: "var(--text)" }}>
-                    {filteredAircraftCount}/{totalAircraftCount} shown
-                  </span>
-                )}
-                {activeSource === "dump1090" && dump1090Activity && (
-                  <div style={{ color: "var(--text-muted)" }}>
-                    dump1090 {dump1090Activity.host}:{dump1090Activity.port} · {dump1090Activity.messages} messages
-                    {" · "}{dump1090Activity.aircraft} aircraft ({dump1090Activity.with_position} with position)
-                    {dump1090Activity.last_message_age_s != null
-                      ? ` · last message ${Math.round(dump1090Activity.last_message_age_s)}s ago`
-                      : " · no messages yet — idle until an aircraft is in range"}
-                  </div>
-                )}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(100px, 1fr))", gap: 4 }}>
+              <details className="aircraft-filters">
+                <summary>Filters</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
                 {[
+                  [
                   ["lat_min", "Min lat", "number"],
                   ["lat_max", "Max lat", "number"],
                   ["lon_min", "Min lon", "number"],
                   ["lon_max", "Max lon", "number"],
                   ["altitude_min_ft", "Min alt ft", "number"],
+                  ],
+                  [
                   ["heading_tolerance_deg", "Heading ±°", "number"],
                   ["position_tolerance_deg", "Path bearing ±°", "number"],
-                ].map(([key, label, type]) => {
-                  const value = aircraftFilters[key as keyof AircraftFilterSettings];
+                  ],
+                ].map((fields, groupIndex) => (
+              <div key={groupIndex} style={{ display: "flex", flexWrap: groupIndex === 0 ? "wrap" : "nowrap", gap: "6px 8px" }}>
+                {fields.map(([key, label, type]) => {
+                  const numericKey = key as NumericAircraftFilterKey;
+                  const value = aircraftFilters[numericKey];
                   return (
                     <label key={key} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 9, color: "var(--text-muted)" }}>
                       <span>{label}</span>
                       <input
                         type={type}
+                        aria-label={label}
                         value={value == null ? "" : value}
                         onChange={(e) => {
                           const next = { ...aircraftFilters };
                           const parsed = parseAircraftFilterNumber(e.target.value);
-                          (next as Record<string, number | null>)[key] = parsed;
+                          (next as Record<NumericAircraftFilterKey, number | null>)[numericKey] = parsed;
                           if (key === "heading_tolerance_deg") {
                             next.heading_tolerance_deg = parsed ?? DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg;
                           }
@@ -1965,13 +2082,109 @@ export default function App() {
                         style={{
                           background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)",
                           borderRadius: 4, padding: "2px 5px", fontSize: 10,
+                          width: key.startsWith("lat_") || key.startsWith("lon_") ? 100 : 86,
+                          fontFamily: "monospace",
                         }}
                       />
                     </label>
                   );
                 })}
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                ))}
+                </div>
+              </details>
+                <div data-flight-controls style={{ display: "flex", alignItems: "flex-end", flexWrap: "wrap", gap: "10px 8px", fontSize: 9, color: "var(--text-muted)", flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <label htmlFor="priority-flight" style={{ whiteSpace: "nowrap" }}>Flight number</label>
+                    <input
+                      id="priority-flight"
+                      aria-label="Priority flight number"
+                      type="text"
+                      maxLength={8}
+                      value={aircraftFilters.priority_flight}
+                      placeholder="e.g. UAL123"
+                      onChange={(e) => persistAircraftFilters({
+                        ...aircraftFilters,
+                        priority_flight: e.target.value.toUpperCase(),
+                      })}
+                      style={{
+                        width: 82, flexShrink: 0, fontFamily: "monospace",
+                        background: "var(--surface)", color: "var(--text)",
+                        border: "1px solid var(--border)", borderRadius: 4, padding: "2px 3px", fontSize: 10,
+                      }}
+                    />
+                    </div>
+                    <label title="Show only this flight in the candidate list" style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0, whiteSpace: "nowrap", alignSelf: "flex-end", padding: "2px 5px" }}>
+                      <input
+                        aria-label="Show only priority flight"
+                        type="checkbox"
+                        style={{ width: 13, height: 13, margin: 0 }}
+                        checked={aircraftFilters.priority_flight_exclusive}
+                        disabled={!aircraftFilters.priority_flight}
+                        onChange={(e) => persistAircraftFilters({
+                          ...aircraftFilters,
+                          priority_flight_exclusive: e.target.checked,
+                        })}
+                      />
+                      Only
+                    </label>
+                    <button
+                      className="btn-secondary"
+                      aria-label="Store Flight#"
+                      title="Save this flight number and Only setting in flight favorites"
+                      disabled={!aircraftFilters.priority_flight.trim()}
+                      onClick={storeFlight}
+                      style={{
+                        flexShrink: 0, fontSize: 10, padding: "2px 3px", whiteSpace: "nowrap", borderRadius: 3,
+                        background: "var(--surface)",
+                        color: "var(--text)",
+                        border: "1px solid var(--input-border)",
+                      }}
+                    >
+                      Store Flight#
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      aria-label="Clear flight"
+                      title="Clear the active flight filter; keep saved favorites"
+                      onClick={() => persistAircraftFilters({
+                        ...aircraftFilters, priority_flight: "", priority_flight_exclusive: false,
+                      })}
+                      style={{ flexShrink: 0, fontSize: 10, padding: "2px 3px", whiteSpace: "nowrap", color: "var(--text)", borderColor: "var(--input-border)" }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div style={{ fontFamily: "monospace", flexShrink: 0 }}>
+                    <DarkSelect
+                      ariaLabel="Flight favorites"
+                      placeholder="Flight favorites"
+                      textColor="var(--text)"
+                      width={120}
+                      popupWidth={145}
+                      value=""
+                      options={[
+                        ...favoriteFlights.map((favorite, i) => ({
+                          value: String(i),
+                          label: `${favorite.flight.padEnd(8, "\u00a0")}  Only: ${favorite.only ? "Yes" : "No"}`,
+                        })),
+                      ]}
+                      onChange={(value) => {
+                        if (value === "") return;
+                        const favorite = favoriteFlights[Number(value)];
+                        if (!favorite) return;
+                        persistAircraftFilters({
+                          ...aircraftFilters,
+                          priority_flight: favorite.flight,
+                          priority_flight_exclusive: favorite.only,
+                        });
+                      }}
+                    />
+                  </div>
+              </div>
+              <h3 id="flight-data-title" style={{ marginTop: 12 }}>Flight Data</h3>
+              <div data-aircraft-sources style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {availableSources.map((source) => {
                   const priority = sourceStatus?.priority ?? ["opensky"];
                   const idx = priority.indexOf(source);
@@ -2035,7 +2248,35 @@ export default function App() {
                 </div>
               )}
             </div>
-            {aircraft.length === 0 ? (
+            <div data-flight-status style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+              Source: <span style={{ color: "var(--text)" }}>{activeSource ?? "not set"}</span>
+              {" · "}
+              <span style={{ color: sourceDotColor }}>{activeSourceState}</span>
+              {activeSourceMessage && <span style={{ color: "var(--text-muted)" }}> — {activeSourceMessage}</span>}
+              {" · "}
+              <span style={{ color: dataFreshness === "fresh" ? "var(--green)" : dataFreshness === "stale" ? "var(--yellow)" : "var(--red)" }}>
+                {freshnessLabel}
+              </span>
+              {cacheAgeSeconds != null && (
+                <span style={{ color: "var(--text-muted)" }}> ({cacheAgeSeconds}s ago)</span>
+              )}
+              {totalAircraftCount > 0 && (
+                <span style={{ marginLeft: 6, color: "var(--text)" }}>
+                  {filteredAircraftCount}/{totalAircraftCount} shown
+                </span>
+              )}
+              {activeSource === "dump1090" && dump1090Activity && (
+                <div style={{ color: "var(--text-muted)" }}>
+                  dump1090 {dump1090Activity.host}:{dump1090Activity.port} · {dump1090Activity.messages} messages
+                  {" · "}{dump1090Activity.aircraft} aircraft ({dump1090Activity.with_position} with position)
+                  {dump1090Activity.last_message_age_s != null
+                    ? ` · last message ${Math.round(dump1090Activity.last_message_age_s)}s ago`
+                    : " · no messages yet — idle until an aircraft is in range"}
+                </div>
+              )}
+            </div>
+            <div className="flight-data-scroll" role="region" aria-labelledby="flight-data-title" ref={flightDataRef}>
+            {flightData.length === 0 ? (
               <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
                 {dxCallsign
                   ? `Waiting for aircraft data from ${activeSource ?? "selected source"}…`
@@ -2050,14 +2291,16 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {aircraft.slice(0, 5).map(ac => {
+                  {flightData.map(ac => {
                     const sc = ac.scatter_score;
                     const scColor = sc >= 0.5 ? "var(--green)" : sc >= 0.3 ? "var(--yellow)" : "var(--text-muted)";
                     const isLocked = lockedPlane?.icao24 === ac.icao24;
+                    const isFavorite = savedFlights.has(ac.callsign.trim().toUpperCase());
                     return (
                       <tr key={ac.icao24} className={isLocked ? "locked-row" : ""}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => rpc("lock_aircraft", { icao24: ac.icao24 }).catch(() => {})}>
+                        style={{ cursor: "pointer", background: isFavorite ? "#30363d" : undefined }}
+                        data-flight-favorite={isFavorite || undefined}
+                        onClick={() => rpc("lock_aircraft", { icao24: ac.icao24 }).catch(e => addLog(`Lock: ${e}`))}>
                         <td style={{ color: isLocked ? "var(--accent)" : "var(--text)", fontWeight: isLocked ? 700 : 400 }}>
                           {ac.callsign}
                         </td>
@@ -2077,15 +2320,16 @@ export default function App() {
                 </tbody>
               </table>
             )}
+            </div>
           </div>
 
-          {/* Event log — fills remaining space */}
-          <div className="card flex1">
-            <h3>Log</h3>
-            <div className="log-list" ref={logRef}>
+          {/* Event log */}
+          <div className="card log-card" ref={logCardRef}>
+            <h3 id="log-title">Log</h3>
+            <div className="log-list" role="region" aria-labelledby="log-title" ref={logRef}>
               {log.length === 0
                 ? <div className="entry">Ready.</div>
-                : [...log].reverse().slice(0, 8).map((e, i) => (
+                : [...log].reverse().map((e, i) => (
                   <div key={i} className="entry">{e}</div>
                 ))
               }

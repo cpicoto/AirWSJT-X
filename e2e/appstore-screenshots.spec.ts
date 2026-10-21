@@ -77,6 +77,7 @@ async function setupDesktopScene(page: import("@playwright/test").Page, opts: { 
 
   await emitSidecar(page, "airscout_update", {
     aircraft: mockAircraft, total: 47,
+    flight_data: mockAircraft,
     station_a: "CN87vp", station_b: "CN87tp",
     active_source: "opensky",
     last_update_epoch_s: Math.floor(Date.now() / 1000) - 3,

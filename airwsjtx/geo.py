@@ -134,8 +134,8 @@ def scatter_geometry(
     off_path = abs((az_a - az_ab + 180) % 360 - 180)
 
     # Geometry score (0-1):
-    # 1. Both stations must see the aircraft above horizon
-    if el_a <= 0 or el_b <= 0:
+    # Require mutual visibility and a forward bearing when a DX path is set.
+    if el_a <= 0 or el_b <= 0 or (d_ab > 0 and off_path >= 90.0):
         scatter_score = 0.0
     else:
         # Elevation sweet-spot: 1-20° from each station

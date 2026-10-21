@@ -29,6 +29,7 @@ interface PlaneLockPanelProps {
     az_b: number; el_b: number; off_path_deg: number;
   }[];
   sourceStatusText?: string;
+  priorityFlight?: string;
   nowEpochS: number;
   pollIntervalS: number;
 }
@@ -97,6 +98,7 @@ function AzElBadge({ label, az, el, rotAz, rotEl, rangeKm }:
 export default function PlaneLockPanel({
   locked, autoLock, sessionState, onAutoLockToggle, onUnlock, onLockAircraft, aircraft,
   sourceStatusText,
+  priorityFlight = "",
   nowEpochS,
   pollIntervalS,
 }: PlaneLockPanelProps) {
@@ -242,12 +244,15 @@ export default function PlaneLockPanel({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {aircraft.slice(0, 5).map((ac, i) => {
               const isLocked = locked?.icao24 === ac.icao24;
+              const isPriorityFlight = Boolean(priorityFlight.trim())
+                && ac.callsign.trim().toUpperCase() === priorityFlight.trim().toUpperCase();
               const scoreColor = ac.scatter_score >= 0.5 ? "#3fb950"
                 : ac.scatter_score >= 0.3 ? "#d29922" : "#8b949e";
               return (
                 <div
                   key={ac.icao24}
                   className="plane-candidate"
+                  data-priority-flight={isPriorityFlight || undefined}
                   onClick={() => onLockAircraft(ac.icao24)}
                   style={{
                     display: "grid",
@@ -261,6 +266,7 @@ export default function PlaneLockPanel({
                 >
                   <span style={{ color: "#8b949e", textAlign: "center" }}>{i + 1}</span>
                   <span title={ac.callsign} style={{ fontFamily: "monospace", fontWeight: isLocked ? 700 : 400,
+                    textDecoration: isPriorityFlight ? "underline" : undefined,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     color: isLocked ? "#58a6ff" : "#c9d1d9" }}>
                     {ac.callsign}

@@ -156,6 +156,7 @@ test.describe("AirWSJT-X Screenshots", () => {
     // 4. Aircraft data
     await emitSidecar(page, "airscout_update", {
       aircraft: mockAircraft,
+      flight_data: mockAircraft,
       total: 47,
       station_a: "CN87vp",
       station_b: "CN87tp",
@@ -253,6 +254,7 @@ test.describe("AirWSJT-X Screenshots", () => {
 
     await emitSidecar(page, "airscout_update", {
       aircraft: mockAircraft,
+      flight_data: mockAircraft,
       total: 47,
       station_a: "CN87vp",
       station_b: "CN87tp",

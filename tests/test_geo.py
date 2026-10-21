@@ -24,6 +24,27 @@ class ElevationCurvatureTests(unittest.TestCase):
         self.assertLess(geo["el_a"], 0.0)
         self.assertEqual(geo["scatter_score"], 0.0)
 
+    def test_aircraft_behind_or_abreast_of_my_station_scores_zero(self) -> None:
+        for coordinates in [
+            (0.0, 0.0, 0.0, 1.0, 0.0, -1.0),
+            (0.0, 0.0, 0.0, 1.0, 1.0, 0.0),
+            (40.0, -100.0, 40.0, -98.0, 39.72, -101.73),
+        ]:
+            with self.subTest(coordinates=coordinates):
+                geo = scatter_geometry(*coordinates, 11000.0)
+                self.assertGreater(geo["el_a"], 0.0)
+                self.assertGreater(geo["el_b"], 0.0)
+                self.assertGreaterEqual(geo["off_path_deg"], 90.0)
+                self.assertEqual(geo["scatter_score"], 0.0)
+
+    def test_forward_aircraft_retains_existing_score(self) -> None:
+        geo = scatter_geometry(40.0, -100.0, 40.0, -98.0, 40.0, -99.0, 11000.0)
+        self.assertEqual(geo["scatter_score"], 0.594)
+
+    def test_unset_path_does_not_apply_rear_aircraft_gate(self) -> None:
+        geo = scatter_geometry(0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 11000.0)
+        self.assertGreater(geo["scatter_score"], 0.0)
+
 
 class StationAltitudeTests(unittest.TestCase):
     def test_higher_station_sees_lower_elevation_and_shorter_range(self):

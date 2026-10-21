@@ -2,6 +2,7 @@
   --bg: #0d1117;
   --surface: #161b22;
   --border: #30363d;
+  --input-border: #8b949e;
   --accent: #58a6ff;
   --green: #3fb950;
   --yellow: #d29922;
@@ -17,7 +18,19 @@
 body { background: var(--bg); overflow: hidden; height: 100vh; }
 select { background: #000; color: #e6edf3; color-scheme: dark; border: 1px solid var(--border); border-radius: 4px; }
 select option { background: #000; color: #e6edf3; }
+button[aria-haspopup="listbox"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 input[type="number"] { color-scheme: dark; }
+
+/* Override component-local border colors without changing their dimensions. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+select,
+textarea,
+button[aria-haspopup="listbox"] {
+  border-color: var(--input-border) !important;
+}
 
 /* Themed scrollbars (standard properties for Firefox/Chromium 121+, WebKit pseudo-elements for older WebViews) */
 * { scrollbar-width: thin; scrollbar-color: #30363d var(--bg); }
@@ -29,6 +42,8 @@ input[type="number"] { color-scheme: dark; }
 
 .aircraft-accounts { font-size: 11px; }
 .aircraft-accounts summary { cursor: pointer; padding: 4px 0; }
+.aircraft-filters { font-size: 11px; }
+.aircraft-filters summary { cursor: pointer; padding: 4px 0; }
 .account-fields { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; }
 .account-fields label { display: grid; gap: 3px; }
 .account-fields input { width: 100%; min-width: 0; padding: 4px 6px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
@@ -131,6 +146,14 @@ button:disabled { opacity: 0.38; cursor: not-allowed; }
 .btn-danger    { background: var(--red); color: #fff; }
 .btn-success   { background: var(--green); color: #000; }
 .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+
+[data-flight-controls] input[type="text"],
+[data-flight-controls] button {
+  height: 22px;
+  line-height: 16px;
+}
+[data-flight-controls] button { display: block; }
+[data-flight-controls] label:has(input[type="checkbox"]) { height: 22px; }
 
 /* ── WSJT-X inline top-bar strip ────────────────────────────────────── */
 .wsjtx-strip {
@@ -304,6 +327,11 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
   color: #dbeafe;
 }
 
+.display-toolbar .portable-mode {
+  font-size: 10px;
+  color: var(--text);
+}
+
 .portable-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -418,7 +446,14 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
 .ac-table tr.locked-row { background: rgba(88,166,255,0.07); }
 
 /* ── Log ─────────────────────────────────────────────────────────────── */
-.log-list { font-family: monospace; font-size: 10px; color: var(--text-muted); overflow: hidden; }
+.flight-data-scroll { height: 240px; min-height: 80px; overflow: auto; resize: vertical; padding-bottom: 12px; }
+.log-card { height: 160px; min-height: 80px; flex: 0 0 auto; display: flex; flex-direction: column; resize: vertical; }
+.log-card h3 { flex-shrink: 0; }
+.log-list { flex: 1; min-height: 0; font-family: monospace; font-size: 10px; color: var(--text-muted); overflow: auto; }
+.flight-data-scroll::-webkit-resizer,
+.log-card::-webkit-resizer {
+  background: repeating-linear-gradient(135deg, transparent 0 3px, #8b949e 3px 4px);
+}
 .log-list .entry { padding: 1px 0; border-bottom: 1px solid #1c2128; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Rotator gauge (compact) ─────────────────────────────────────────── */

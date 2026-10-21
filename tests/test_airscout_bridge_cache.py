@@ -10,6 +10,21 @@ from sidecar import airwsjtx_bridge
 
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
+    def test_startup_loads_numeric_filters_but_no_active_flight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "filters.json")
+            with open(path, "w", encoding="utf-8") as file:
+                json.dump({
+                    "altitude_min_ft": 20000,
+                    "priority_flight": "UAL123",
+                    "priority_flight_exclusive": True,
+                }, file)
+            with patch.object(airwsjtx_bridge, "_aircraft_filter_path", return_value=path):
+                filters = airwsjtx_bridge._read_filters()
+        self.assertEqual(filters["altitude_min_ft"], 20000)
+        self.assertEqual(filters["priority_flight"], "")
+        self.assertFalse(filters["priority_flight_exclusive"])
+
     def test_station_altitude_rpcs_reach_all_scatter_geometry_paths(self) -> None:
         from airwsjtx.supervisor import AirWSJTXSupervisor
 
@@ -64,6 +79,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                 payload = emit.call_args.args[0]["data"]
                 expected = ranked[:20] + ([ranked[24]] if locked_id == "ac24" else [])
                 self.assertEqual(payload["aircraft"], expected)
+                self.assertEqual(payload["flight_data"], ranked)
                 self.assertEqual(payload["total"], 45)
                 self.assertEqual(len({ac["icao24"] for ac in payload["aircraft"]}), len(expected))
 
@@ -113,6 +129,98 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
         with patch.dict(airwsjtx_bridge._aircraft_filters, {"position_tolerance_deg": 70.0}):
             self.assertTrue(airwsjtx_bridge._aircraft_matches_filters(plane(-99.0), 40.0, -100.0, 40.0, -80.0))
             self.assertFalse(airwsjtx_bridge._aircraft_matches_filters(plane(-101.0), 40.0, -100.0, 40.0, -80.0))
+
+    def test_priority_flight_bypasses_filters_and_can_be_exclusive(self) -> None:
+        priority = Aircraft(
+            icao24="priority", callsign=" UAL123 ", lat=40.0, lon=-101.0,
+            altitude_m=10000, velocity_ms=200, heading_deg=270,
+            vertical_rate_ms=0, on_ground=False,
+        )
+        normal = Aircraft(
+            icao24="normal", callsign="OTHER", lat=40.0, lon=-99.0,
+            altitude_m=10000, velocity_ms=200, heading_deg=90,
+            vertical_rate_ms=0, on_ground=False,
+        )
+        filters = {
+            "lat_min": 45.0,
+            "lat_max": None,
+            "lon_min": -100.0,
+            "lon_max": None,
+            "altitude_min_ft": 20000.0,
+            "heading_tolerance_deg": 10.0,
+            "position_tolerance_deg": 10.0,
+            "priority_flight": "ual123",
+            "priority_flight_exclusive": False,
+        }
+        with patch.dict(airwsjtx_bridge._aircraft_filters, filters, clear=True):
+            self.assertTrue(airwsjtx_bridge._aircraft_matches_filters(
+                priority, 40.0, -100.0, 40.0, -80.0,
+            ))
+            self.assertFalse(airwsjtx_bridge._aircraft_matches_filters(
+                normal, 40.0, -100.0, 40.0, -80.0,
+            ))
+
+            airwsjtx_bridge._aircraft_filters.update({
+                "lat_min": None,
+                "lon_min": None,
+                "altitude_min_ft": None,
+                "heading_tolerance_deg": 180.0,
+                "position_tolerance_deg": 180.0,
+            })
+            with patch.multiple(
+                airwsjtx_bridge,
+                _station_a_locator="CN87",
+                _station_b_locator="CN89",
+            ), patch.object(
+                airwsjtx_bridge, "scatter_geometry",
+                return_value={"scatter_score": 0.73},
+            ):
+                airwsjtx_bridge._replace_aircraft_cache([priority, normal])
+                additive, total = airwsjtx_bridge._get_scatter_aircraft_with_total()
+                airwsjtx_bridge._aircraft_filters["priority_flight_exclusive"] = True
+                exclusive, exclusive_total = airwsjtx_bridge._get_scatter_aircraft_with_total()
+
+        self.assertEqual(total, 2)
+        self.assertEqual(exclusive_total, 2)
+        self.assertEqual([ac["icao24"] for ac in additive], ["priority", "normal"])
+        self.assertEqual([ac["scatter_score"] for ac in additive], [0.73, 0.73])
+        self.assertEqual([ac["icao24"] for ac in exclusive], ["priority"])
+        self.assertEqual(exclusive[0]["scatter_score"], 0.73)
+
+    def test_flight_data_bypasses_all_filters_without_changing_candidates(self) -> None:
+        planes = [
+            Aircraft(
+                icao24=f"ac{i}", callsign=f"FLIGHT{i}", lat=47.0 + i / 100, lon=-122.4,
+                altitude_m=10000, velocity_ms=200, heading_deg=270,
+                vertical_rate_ms=0, on_ground=False,
+            )
+            for i in range(25)
+        ]
+        planes.append(Aircraft(
+            icao24="no-position", callsign="MISSING", lat=None, lon=None,
+            altitude_m=10000, velocity_ms=200, heading_deg=270,
+            vertical_rate_ms=0, on_ground=False,
+        ))
+        with patch.multiple(
+            airwsjtx_bridge, _station_a_locator="CN87", _station_b_locator="CN89",
+        ), patch.dict(airwsjtx_bridge._aircraft_filters, {
+            "priority_flight": "FLIGHT0", "priority_flight_exclusive": True,
+            "lat_min": 90.0, "altitude_min_ft": 50000.0,
+        }), patch.object(
+            airwsjtx_bridge, "scatter_geometry",
+            side_effect=lambda *args: {"scatter_score": round(args[4] - 47.0, 2)},
+        ):
+            airwsjtx_bridge._replace_aircraft_cache(planes)
+            candidates, _ = airwsjtx_bridge._get_scatter_aircraft_with_total()
+            flight_data, total = airwsjtx_bridge._get_scatter_aircraft_with_total(apply_filters=False)
+        self.assertEqual([ac["callsign"] for ac in candidates], ["FLIGHT0"])
+        self.assertEqual(len(flight_data), 25)
+        self.assertEqual(total, 25)
+        self.assertNotIn("no-position", [ac["icao24"] for ac in flight_data])
+        self.assertEqual(
+            [ac["scatter_score"] for ac in flight_data],
+            [i / 100 for i in reversed(range(25))],
+        )
 
     def test_poll_rate_change_emits_updated_source_status(self) -> None:
         with patch.dict(airwsjtx_bridge._source_poll_intervals):
@@ -242,7 +350,47 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     airwsjtx_bridge._update_rotator_for_locked([ac])
                     self.assertEqual(emit.call_args.args[0]["data"]["position_updated_epoch_s"], 1000)
 
+    def test_priority_flight_remains_locked_outside_scatter_window(self) -> None:
+        ac = Aircraft(
+            icao24="abc123", callsign=" UAL123 ", lat=47.5, lon=-122.4,
+            altitude_m=10000, velocity_ms=200, heading_deg=270,
+            vertical_rate_ms=0, on_ground=False,
+        )
+        geo = {"az_a": 270, "el_a": 5, "az_b": 234, "el_b": 6,
+               "scatter_score": 0.0, "off_path_deg": 180, "range_a_km": 125.6}
+        for flight, exclusive, retained in [
+            ("ual123", False, True),
+            ("UAL123", True, True),
+            ("OTHER", False, False),
+            ("", True, False),
+        ]:
+            with self.subTest(flight=flight, exclusive=exclusive):
+                with patch.multiple(
+                    airwsjtx_bridge, _locked_aircraft_id="abc123",
+                    _station_a_locator="CN87", _station_b_locator="CN89", _rotator=None,
+                ), patch.dict(
+                    airwsjtx_bridge._aircraft_filters,
+                    {"priority_flight": flight, "priority_flight_exclusive": exclusive},
+                ), patch.object(
+                    airwsjtx_bridge, "scatter_geometry", return_value=geo,
+                ), patch.object(airwsjtx_bridge, "_emit") as emit, patch.object(
+                    airwsjtx_bridge, "_do_unlock",
+                ) as unlock:
+                    airwsjtx_bridge._update_rotator_for_locked([ac])
+                    if retained:
+                        unlock.assert_not_called()
+                        event = emit.call_args.args[0]
+                        self.assertEqual(event["event"], "plane_tracking")
+                        self.assertEqual(event["data"]["scatter_score"], 0.0)
+                        self.assertEqual(airwsjtx_bridge._locked_aircraft_id, "abc123")
+                    else:
+                        unlock.assert_called_once_with()
+                        self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
+
     def setUp(self) -> None:
+        filters = patch.object(airwsjtx_bridge, "_aircraft_filters", dict(airwsjtx_bridge._DEFAULT_FILTERS))
+        filters.start()
+        self.addCleanup(filters.stop)
         with airwsjtx_bridge._aircraft_lock:
             self._orig_cache = list(airwsjtx_bridge._aircraft_cache)
             self._orig_last_mono = airwsjtx_bridge._aircraft_last_update_monotonic
