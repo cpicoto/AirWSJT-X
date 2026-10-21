@@ -382,7 +382,7 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
 }
 .decode-row {
   display: grid;
-  grid-template-columns: 60px 48px 55px 1fr;
+  grid-template-columns: 6ch 48px 55px minmax(0, 1fr);
   gap: 6px;
   align-items: center;
   padding: 2px 4px;
@@ -393,6 +393,12 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
 .decode-row > span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.decode-row > .decode-time {
+  min-width: 6ch;
+  overflow: visible;
+  text-overflow: clip;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Aircraft table ──────────────────────────────────────────────────── */

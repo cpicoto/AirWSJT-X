@@ -42,6 +42,20 @@ interface WsjtxDecodeEntry {
   mode: string | null;
   ts: string;
 }
+const WSJTX_DAY_MS = 24 * 60 * 60 * 1000;
+function formatWsjtxDecodeTime(value: unknown): string {
+  if (typeof value !== "number"
+      || !Number.isInteger(value)
+      || value < 0
+      || value >= WSJTX_DAY_MS) {
+    return "—";
+  }
+  const totalSeconds = Math.floor(value / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map(part => String(part).padStart(2, "0")).join("");
+}
 interface WsjtxRig {
   app_id: string;
   config_name: string | null;
@@ -524,7 +538,7 @@ export default function App() {
               snr: evtData.snr as number,
               delta_freq_hz: evtData.delta_freq_hz as number,
               mode: evtData.mode as string | null,
-              ts: new Date().toLocaleTimeString(),
+              ts: formatWsjtxDecodeTime(evtData.time_ms),
             };
             setDecodes(d => [entry, ...d.slice(0, 49)]);
             addLog(`DX: ${entry.message ?? "?"} SNR ${entry.snr}dB`);
@@ -1860,13 +1874,13 @@ export default function App() {
 
           {/* WSJT-X Decodes */}
           <div className="card" style={{ flexShrink: 0 }}>
-            <h3>WSJT-X Decodes {wsjtxLive.connected && <span style={{ color: "var(--green)" }}>● live</span>}</h3>
+            <h3>WSJT-X Decodes (UTC) {wsjtxLive.connected && <span style={{ color: "var(--green)" }}>● live</span>}</h3>
             <div className="decode-list">
               {decodes.length === 0
                 ? <div style={{ color: "var(--text-muted)", fontSize: 11 }}>No decodes yet</div>
                 : decodes.slice(0, 8).map((d, i) => (
                   <div key={i} className="decode-row">
-                    <span style={{ color: "var(--text-muted)" }}>{d.ts}</span>
+                    <span className="decode-time" style={{ color: "var(--text-muted)" }}>{d.ts}</span>
                     <span style={{ color: d.snr >= -10 ? "var(--green)" : d.snr >= -20 ? "var(--yellow)" : "var(--text-muted)" }}>
                       {d.snr >= 0 ? `+${d.snr}` : d.snr}dB
                     </span>

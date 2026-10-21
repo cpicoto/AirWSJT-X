@@ -42,10 +42,10 @@ const mockAircraft = [
 ];
 
 const mockDecodes = [
-  { message: "CQ K7MDL CN87", snr: -18, delta_freq_hz: 1247, mode: "Q65", ts: "" },
-  { message: "AD7NP K7MDL R-19", snr: -19, delta_freq_hz: 1250, mode: "Q65", ts: "" },
-  { message: "K7MDL AD7NP RR73", snr: -16, delta_freq_hz: 1247, mode: "Q65", ts: "" },
-  { message: "K7MDL AD7NP 73", snr: -15, delta_freq_hz: 1247, mode: "Q65", ts: "" },
+  { message: "CQ K7MDL CN87", snr: -18, delta_freq_hz: 1247, mode: "Q65", time_ms: 43200000 },
+  { message: "AD7NP K7MDL R-19", snr: -19, delta_freq_hz: 1250, mode: "Q65", time_ms: 43230000 },
+  { message: "K7MDL AD7NP RR73", snr: -16, delta_freq_hz: 1247, mode: "Q65", time_ms: 43260000 },
+  { message: "K7MDL AD7NP 73", snr: -15, delta_freq_hz: 1247, mode: "Q65", time_ms: 43290000 },
 ];
 
 async function setupDesktopScene(page: import("@playwright/test").Page, opts: { transmitting: boolean; qsoState: string }) {
@@ -99,7 +99,6 @@ async function setupDesktopScene(page: import("@playwright/test").Page, opts: { 
   });
 
   for (const decode of mockDecodes) {
-    decode.ts = new Date().toLocaleTimeString();
     await emitSidecar(page, "wsjtx_decode", decode);
     await page.waitForTimeout(100);
   }

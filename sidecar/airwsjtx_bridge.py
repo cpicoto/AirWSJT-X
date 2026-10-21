@@ -1507,6 +1507,7 @@ def _on_wsjtx_decode(dec: WSJTXDecode) -> None:
         "event": "wsjtx_decode",
         "data": {
             "message": dec.message,
+            "time_ms": dec.time_ms,
             "snr": dec.snr,
             "delta_time_s": round(dec.delta_time_s, 1),
             "delta_freq_hz": dec.delta_freq_hz,

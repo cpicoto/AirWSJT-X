@@ -10,7 +10,8 @@ from unittest.mock import Mock, patch
 
 from airwsjtx.wsjtx_udp import (
     MSG_DECODE, MSG_HALT_TX, MSG_HEARTBEAT, MSG_QSO_LOGGED, MSG_STATUS, WSJTX_MAGIC,
-    WSJTXListener, WSJTXQsoLogged, WSJTXStatus, parse_qso_logged, parse_status,
+    WSJTXDecode, WSJTXListener, WSJTXQsoLogged, WSJTXStatus, parse_decode,
+    parse_qso_logged, parse_status,
 )
 
 
@@ -48,6 +49,19 @@ def _build_status_packet(mode: str | None, tr_period: int) -> bytes:
             struct.pack(">I", 50),  # freq_tolerance
             struct.pack(">i", tr_period),  # tr_period (signed i32)
             _enc_str(None),  # config_name
+        ]
+    )
+
+
+def _build_decode_packet(time_ms: int) -> bytes:
+    return b"".join(
+        [
+            struct.pack(">III", WSJTX_MAGIC, 2, MSG_DECODE),
+            _enc_str("WSJT-X"),
+            struct.pack(">BIidI", 1, time_ms, -10, 0.2, 1000),
+            _enc_str("FT8"),
+            _enc_str("CQ K7MDL CN87"),
+            b"\x00\x00",
         ]
     )
 
@@ -107,6 +121,33 @@ class WSJTXStatusParsingTests(unittest.TestCase):
         self.assertIsNotNone(st)
         assert st is not None
         self.assertIsNone(st.tr_period)
+
+
+class WSJTXDecodeTimestampTests(unittest.TestCase):
+    def test_parser_and_bridge_preserve_wire_time_ms(self) -> None:
+        from sidecar import airwsjtx_bridge as bridge
+
+        for time_ms in (0, 1155000, 86399999, 0xFFFFFFFF):
+            with self.subTest(time_ms=time_ms):
+                decode = parse_decode(_build_decode_packet(time_ms))
+                self.assertEqual(
+                    decode,
+                    WSJTXDecode(
+                        app_id="WSJT-X",
+                        is_new=True,
+                        time_ms=time_ms,
+                        snr=-10,
+                        delta_time_s=0.2,
+                        delta_freq_hz=1000,
+                        mode="FT8",
+                        message="CQ K7MDL CN87",
+                        low_confidence=False,
+                        off_air=False,
+                    ),
+                )
+                with patch.object(bridge, "_emit") as emit:
+                    bridge._on_wsjtx_decode(decode)
+                self.assertEqual(emit.call_args.args[0]["data"]["time_ms"], time_ms)
 
 
 class WSJTXQsoLoggedTests(unittest.TestCase):

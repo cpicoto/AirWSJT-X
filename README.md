@@ -59,6 +59,8 @@ When multiple WSJT-X instances are on the network, the **Rig** dropdown selects 
 
 The compass outer ring marks the DX station's bearing and callsign. Candidate aircraft are ranked by a geometry score; see [Plane scoring](docs/plane-scoring.md) for the criteria. The [User guide](docs/user-guide.md) covers the Stations panel and DX favorites list. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
 
+The **WSJT-X Decodes (UTC)** panel shows each decode's original WSJT-X time as six-digit `HHMMSS`, including delayed or replayed packets. Missing or invalid source times display an em dash instead of a browser-local arrival time.
+
 **Sky Dome** is an optional, desktop-only polar view of aircraft azimuth and elevation, hidden by default. Use the **Open / Close** button beside the **Az / El** display controls; the choice is remembered. It opens as a floating, resizable window (a separate native window on desktop that can leave the app window), as does the Az / El readout, whose text scales as you drag its frame larger or smaller. The outer edge is the horizon (0 degrees), the centre is the zenith (90 degrees), and labelled concentric rings mark 22.5, 45, and 67.5 degrees. Click an aircraft to lock it, or a point in the sky to set the rotator target.
 
 Locking an aircraft adds a blue estimated course across the dome: a faint approach

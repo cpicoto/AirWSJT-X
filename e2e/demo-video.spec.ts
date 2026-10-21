@@ -20,10 +20,6 @@ async function setState(page: import("@playwright/test").Page, state: string) {
   }, state);
 }
 
-function ts() {
-  return new Date().toLocaleTimeString();
-}
-
 const aircraft = [
   {
     icao24: "a1b2c3", callsign: "UAL1547", lat: 47.68, lon: -122.25,
@@ -191,13 +187,8 @@ test.describe("Demo Video", () => {
       config_name: "10 GHz",
     };
 
-    // Build timestamps with proper 15s spacing
-    const t0 = new Date();
-    t0.setSeconds(0, 0); // align to minute boundary
-    const qsoTs = (seq: number) => {
-      const t = new Date(t0.getTime() + seq * 15000);
-      return t.toLocaleTimeString();
-    };
+    // Build WSJT-X UTC milliseconds-since-midnight with proper 15s spacing.
+    const qsoTimeMs = (seq: number) => 12 * 60 * 60 * 1000 + seq * 15000;
 
     // Seq 0 (even) — K7MDL CQ: AD7NP is receiving, decodes CQ
     await emitSidecar(page, "wsjtx_status", {
@@ -206,7 +197,7 @@ test.describe("Demo Video", () => {
     await page.waitForTimeout(3000);
     await emitSidecar(page, "wsjtx_decode", {
       message: "CQ K7MDL CN87", snr: -18,
-      delta_freq_hz: 1247, mode: "Q65", ts: qsoTs(0),
+      delta_freq_hz: 1247, mode: "Q65", time_ms: qsoTimeMs(0),
     });
     await page.waitForTimeout(2000);
 
@@ -224,7 +215,7 @@ test.describe("Demo Video", () => {
     await page.waitForTimeout(3000);
     await emitSidecar(page, "wsjtx_decode", {
       message: "AD7NP K7MDL R-19", snr: -19,
-      delta_freq_hz: 1250, mode: "Q65", ts: qsoTs(2),
+      delta_freq_hz: 1250, mode: "Q65", time_ms: qsoTimeMs(2),
     });
     await page.waitForTimeout(2000);
 
@@ -241,7 +232,7 @@ test.describe("Demo Video", () => {
     await page.waitForTimeout(3000);
     await emitSidecar(page, "wsjtx_decode", {
       message: "K7MDL AD7NP 73", snr: -16,
-      delta_freq_hz: 1247, mode: "Q65", ts: qsoTs(4),
+      delta_freq_hz: 1247, mode: "Q65", time_ms: qsoTimeMs(4),
     });
     await page.waitForTimeout(2000);
 
