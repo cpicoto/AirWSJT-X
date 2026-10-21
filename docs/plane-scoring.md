@@ -8,7 +8,7 @@ The candidate list, auto-lock and the percentage shown in the UI all use `scatte
 
 **Hard gate:** if the plane is at or below the horizon from station A **or** station B (elevation ≤ 0°), the score is 0.
 
-When MY and DX are different locations, an aircraft 90° or more off the MY-to-DX bearing also scores 0. This applies to all aircraft, including a watched flight. It does not apply when MY and DX are the same location (no path set).
+When MY and DX are different locations, the aircraft must be within the inward-facing half-plane at both endpoints: less than 90° off MY-to-DX as seen from MY, and less than 90° off DX-to-MY as seen from DX. Aircraft behind MY, beyond DX, or on either 90° boundary score 0. This applies to all aircraft, including a watched flight; watched flights can still appear and remain locked at 0%. It does not apply when MY and DX are the same location (no path set).
 
 Otherwise the score is a weighted sum of four parts:
 

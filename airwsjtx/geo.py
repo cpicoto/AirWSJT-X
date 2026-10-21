@@ -132,10 +132,11 @@ def scatter_geometry(
 
     # Off-path: angle between A→P bearing and A→B bearing
     off_path = abs((az_a - az_ab + 180) % 360 - 180)
+    off_path_b = heading_delta_deg(az_b, bearing_deg(lat_b, lon_b, lat_a, lon_a))
 
     # Geometry score (0-1):
-    # Require mutual visibility and a forward bearing when a DX path is set.
-    if el_a <= 0 or el_b <= 0 or (d_ab > 0 and off_path >= 90.0):
+    # Require mutual visibility and an inward bearing from both path endpoints.
+    if el_a <= 0 or el_b <= 0 or (d_ab > 0 and (off_path >= 90.0 or off_path_b >= 90.0)):
         scatter_score = 0.0
     else:
         # Elevation sweet-spot: 1-20° from each station

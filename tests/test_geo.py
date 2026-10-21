@@ -41,6 +41,15 @@ class ElevationCurvatureTests(unittest.TestCase):
         geo = scatter_geometry(40.0, -100.0, 40.0, -98.0, 40.0, -99.0, 11000.0)
         self.assertEqual(geo["scatter_score"], 0.594)
 
+    def test_aircraft_beyond_or_abreast_of_dx_scores_zero(self) -> None:
+        for lat_p, lon_p in [(0.0, 1.5), (0.0, 3.0), (1.0, 1.0)]:
+            with self.subTest(lat_p=lat_p, lon_p=lon_p):
+                for stations in [(0.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 0.0)]:
+                    geo = scatter_geometry(*stations, lat_p, lon_p, 10000.0)
+                    self.assertGreater(geo["el_a"], 0.0)
+                    self.assertGreater(geo["el_b"], 0.0)
+                    self.assertEqual(geo["scatter_score"], 0.0)
+
     def test_unset_path_does_not_apply_rear_aircraft_gate(self) -> None:
         geo = scatter_geometry(0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 11000.0)
         self.assertGreater(geo["scatter_score"], 0.0)

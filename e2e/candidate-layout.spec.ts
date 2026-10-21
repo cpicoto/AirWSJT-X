@@ -1,5 +1,18 @@
 import { test, expect } from "@playwright/test";
-import { isValidLocator, locatorToLatlon } from "../src/lib/geo";
+import { isValidLocator, locatorToLatlon, scatterGeometry } from "../src/lib/geo";
+
+test("scatter scoring requires inward bearings from both endpoints", () => {
+  for (const [lat, lon] of [[0, -1], [1, 0], [0, 1.5], [0, 3], [1, 1]]) {
+    for (const reverse of [false, true]) {
+      const geo = scatterGeometry(0, reverse ? 1 : 0, 0, reverse ? 0 : 1, lat, lon, 10000);
+      expect(geo.el_a).toBeGreaterThan(0);
+      expect(geo.el_b).toBeGreaterThan(0);
+      expect(geo.scatter_score).toBe(0);
+    }
+  }
+  expect(scatterGeometry(40, -100, 40, -98, 40, -99, 11000).scatter_score).toBe(0.594);
+  expect(scatterGeometry(0, 0, 0, 0, 0, -1, 11000).scatter_score).toBeGreaterThan(0);
+});
 
 test("DX favorites remain selectable by keyboard and Escape cancels navigation", async ({ page }) => {
   await page.addInitScript(() => {

@@ -152,9 +152,10 @@ export function scatterGeometry(
   const srA = slantRangeKm(dA, altitudeM, stationAAltM);
   const srB = slantRangeKm(dB, altitudeM, stationBAltM);
   const offPath = Math.abs(((azA - azAB + 180) % 360 + 360) % 360 - 180);
+  const offPathB = headingDeltaDeg(azB, bearingDeg(latB, lonB, latA, lonA));
 
   let score: number;
-  if (elA <= 0 || elB <= 0) {
+  if (elA <= 0 || elB <= 0 || (dAB > 0 && (offPath >= 90 || offPathB >= 90))) {
     score = 0;
   } else {
     const elScore = (el: number) => {
