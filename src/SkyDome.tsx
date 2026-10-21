@@ -53,7 +53,6 @@ export default function SkyDome({
   targetEl,
   pathBearing,
   dxLabel = null,
-  myLabel = null,
   size = 400,
   onClickAircraft,
   onClickSky,
@@ -319,17 +318,6 @@ export default function SkyDome({
                   {dxLabel}
                 </text>
               )}
-            </g>
-          );
-        })()}
-
-        {/* MY marker on the reciprocal of the DX bearing */}
-        {pathBearing !== null && myLabel && (() => {
-          const az = (pathBearing + 180) % 360;
-          const dot = project(az, 0);
-          return (
-            <g pointerEvents="none" data-my-marker>
-              <circle cx={dot.x} cy={dot.y} r={5} fill="#58a6ff" stroke="#0d1117" strokeWidth={1} />
             </g>
           );
         })()}

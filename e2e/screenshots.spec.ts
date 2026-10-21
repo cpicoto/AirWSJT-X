@@ -211,6 +211,8 @@ test.describe("AirWSJT-X Screenshots", () => {
     await expect(page.locator(".ac-table").getByText("UAL1547")).toBeVisible();
     await expect(page.locator(".call").getByText("K7MDL", { exact: true })).toBeVisible();
     await expect(page.locator(".grid").getByText("CN87TP", { exact: true })).toBeVisible();
+    await expect(page.locator('svg circle[r="4"][fill="#3fb950"]')).toHaveCount(1);
+    await expect(page.locator('svg circle[r="4"][fill="#58a6ff"]')).toHaveCount(0);
   });
 
   test("desktop — active QSO with TX", async ({ page }) => {

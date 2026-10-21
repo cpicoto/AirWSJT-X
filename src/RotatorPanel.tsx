@@ -59,7 +59,6 @@ function CompassRose({
   size = 260,
   dxAz = null,
   dxLabel = null,
-  myLabel = null,
   onClick,
   active = true,
 }: {
@@ -219,16 +218,6 @@ function CompassRose({
         );
       })()}
 
-      {/* MY marker on the reciprocal of the DX bearing */}
-      {dxAz !== null && myLabel && (() => {
-        const az = (dxAz + 180) % 360;
-        const dot = azToXY(az, outerR);
-        return (
-          <g pointerEvents="none">
-            <circle cx={dot.x} cy={dot.y} r={4} fill="#58a6ff" stroke="#0d1117" strokeWidth={1} />
-          </g>
-        );
-      })()}
     </svg>
   );
 }
