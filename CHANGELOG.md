@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.30
 
 ### Added
 - Add a display-only predicted usable time remaining column to Flight Data using mutual radio visibility and the inward-facing 90-degree geometry window. Keep all filters, scores, ranking and auto-lock unchanged; show unavailable data and the 30-minute cap explicitly.
@@ -8,6 +8,13 @@
 
 ### Fixed
 - Make candidate position and heading filters, path-alignment scores and Off° independent of MY/DX station order by checking both ends. Preserve station-specific pointing readouts and watched-flight overrides, and honor an explicit zero heading tolerance.
+
+### Changed
+- Prefer the repository's virtual-environment Python for desktop sidecar builds when available, and ignore local virtual environments and generated unsuffixed sidecar output (#127).
+- Keep predicted usable time observational only: the default heading tolerance, existing lock retention, and all duration-independent selection rules remain unchanged.
+
+### Validation
+- Automated checks do not establish installed desktop, live radio/rotator, or installed TestFlight network operation. Predicted usable time is not a reflection-quality or signal-strength guarantee.
 
 ## 0.3.29
 
