@@ -377,6 +377,13 @@ class AircraftFilterGeometryTests(unittest.TestCase):
         self.assertTrue(heading_within_tolerance(0.0, 20.0, 30.0))
         self.assertFalse(heading_within_tolerance(0.0, 90.0, 30.0))
 
+    def test_heading_tolerance_accepts_both_directions_with_inclusive_boundaries(self) -> None:
+        for path in (0.0, 20.0, 180.0, 350.0):
+            for offset in (0.0, 180.0):
+                for delta, expected in ((-30.0, True), (30.0, True), (-30.1, False), (30.1, False)):
+                    with self.subTest(path=path, offset=offset, delta=delta):
+                        self.assertEqual(heading_within_tolerance(path, path + offset + delta, 30.0), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

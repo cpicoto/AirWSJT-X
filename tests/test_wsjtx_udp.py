@@ -370,7 +370,8 @@ class WSJTXListenerSocketTests(unittest.TestCase):
                             _station_a_call=None, _station_a_locator=None,
                             _wsjtx_de_call=None, _wsjtx_de_grid=None,
                             _wsjtx_freq_hz=None, _wsjtx_band_mhz=None):
-            with patch.object(bridge, "_start_configured_airscout_feed"), patch.object(bridge, "_emit"):
+            with patch.object(bridge, "_start_configured_airscout_feed"), \
+                    patch.object(bridge, "_emit_aircraft_update"), patch.object(bridge, "_emit"):
                 bridge.handle({"id": "my", "method": "set_my_station_override",
                                "params": {"callsign": "K7MDL", "grid": "CN87VP"}})
                 status = _make_status("WSJT-X")
@@ -388,7 +389,8 @@ class WSJTXListenerSocketTests(unittest.TestCase):
         with patch.multiple(bridge, _my_call_override=None, _my_grid_override=None,
                             _station_a_call=None, _station_a_locator=None,
                             _wsjtx_de_call=None, _wsjtx_de_grid=None, _station_a_alt_m=0.0):
-            with patch.object(bridge, "_start_configured_airscout_feed"), patch.object(bridge, "_emit"):
+            with patch.object(bridge, "_start_configured_airscout_feed"), \
+                    patch.object(bridge, "_emit_aircraft_update"), patch.object(bridge, "_emit"):
                 bridge.handle({"id": "a", "method": "set_my_station_override",
                                "params": {"grid": "CN87VP", "altitude_m": 1250}})
                 self.assertEqual(bridge._station_a_alt_m, 1250.0)
@@ -402,14 +404,18 @@ class WSJTXListenerSocketTests(unittest.TestCase):
                             _station_a_locator="CN87VP", _station_b_locator=None,
                             _dx_grid_manual=False, _wsjtx_freq_hz=None, _wsjtx_band_mhz=None):
             with patch.object(bridge, "_start_configured_airscout_feed"), \
-                    patch.object(bridge, "_start_opensky_feed"), patch.object(bridge, "_emit"):
+                    patch.object(bridge, "_start_opensky_feed"), \
+                    patch.object(bridge, "_emit_aircraft_update") as refresh, patch.object(bridge, "_emit"):
                 status = _make_status("WSJT-X")
                 status.dx_grid = "JN34VJ"
                 bridge._on_wsjtx_status(status)
+                refresh.assert_called_once_with(try_auto_lock=False)
                 self.assertEqual(bridge._station_b_locator, "JN34VJ")
                 bridge.handle({"id": "dx", "method": "airscout_set_stations",
                                "params": {"locator_a": "CN87VP", "locator_b": "CN89OH"}})
+                self.assertEqual(refresh.call_count, 2)
                 bridge._on_wsjtx_status(status)
+                self.assertEqual(refresh.call_count, 2)
                 self.assertEqual(bridge._station_b_locator, "CN89OH")
 
     def test_dx_source_can_follow_wsjtx_again_without_changing_grid(self) -> None:
@@ -420,7 +426,8 @@ class WSJTXListenerSocketTests(unittest.TestCase):
                             _station_a_call=None, _wsjtx_de_call=None, _wsjtx_de_grid=None,
                             _dx_grid_manual=False, _wsjtx_freq_hz=None, _wsjtx_band_mhz=None,
                             _active_source=None):
-            with patch.object(bridge, "_start_configured_airscout_feed"), patch.object(bridge, "_emit"):
+            with patch.object(bridge, "_start_configured_airscout_feed"), \
+                    patch.object(bridge, "_emit_aircraft_update"), patch.object(bridge, "_emit"):
                 status = _make_status("WSJT-X")
                 params = {"locator_a": "CN87VP", "locator_b": "CN89OH", "dx_local": True}
                 bridge.handle({"id": "local", "method": "airscout_set_stations", "params": params})

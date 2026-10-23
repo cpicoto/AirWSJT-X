@@ -298,6 +298,19 @@ def _aircraft_cache_freshness(age_s: float | None) -> str:
     return "expired"
 
 
+def _current_aircraft_snapshot() -> list[Aircraft]:
+    global _aircraft_last_update_monotonic, _aircraft_last_update_epoch_s
+    now = time.monotonic()
+    with _aircraft_lock:
+        age_s = (max(0.0, now - _aircraft_last_update_monotonic)
+                 if _aircraft_last_update_monotonic is not None else None)
+        if _aircraft_cache_freshness(age_s) == "expired":
+            _aircraft_cache.clear()
+            _aircraft_last_update_monotonic = None
+            _aircraft_last_update_epoch_s = None
+        return list(_aircraft_cache)
+
+
 def _emit(msg: dict) -> None:
     """Thread-safe write to stdout."""
     with _stdout_lock:
@@ -459,6 +472,7 @@ def handle(msg: dict) -> None:
             # A DX chosen in the app must not be clobbered by WSJT-X's DX grid.
             _dx_grid_manual = bool(params.get("dx_local", bool(_station_b_locator)))
             _start_configured_airscout_feed(force_restart=True)
+            _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"locator_a": _station_a_locator, "locator_b": _station_b_locator})
 
         elif method == "airscout_get_dump1090_host":
@@ -472,6 +486,7 @@ def handle(msg: dict) -> None:
             # Reconnect immediately only if the dump1090 feed is running.
             if _dump1090_feed is not None:
                 _start_dump1090_feed(host, _dump1090_port)
+                _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"host": host, "port": _dump1090_port})
 
         elif method == "airscout_start_dump1090":
@@ -480,6 +495,7 @@ def handle(msg: dict) -> None:
             _dump1090_host = host
             _dump1090_port = port
             _start_dump1090_feed(host, port)
+            _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"host": host, "port": port})
 
         elif method == "airscout_set_sources":
@@ -489,6 +505,7 @@ def handle(msg: dict) -> None:
                 _source_priority = next_priority
             _write_source_priority(next_priority)
             _start_configured_airscout_feed(force_restart=True)
+            _emit_aircraft_update(try_auto_lock=False)
             with _source_priority_lock:
                 priority = list(_source_priority)
             with _source_status_lock:
@@ -539,6 +556,7 @@ def handle(msg: dict) -> None:
             _aircraft_filters = next_filters
             _write_filters(_aircraft_filters)
             _emit({"event": "airscout_filters_updated", "data": {"filters": dict(next_filters)}})
+            _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"filters": dict(next_filters)})
 
         elif method == "airscout_get_aircraft":
@@ -705,6 +723,7 @@ def handle(msg: dict) -> None:
             _station_a_call = call or _wsjtx_de_call
             _station_a_locator = grid or _wsjtx_de_grid
             _start_configured_airscout_feed(force_restart=True)
+            _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"callsign": call, "grid": grid, "altitude_m": alt_m})
 
         elif method == "set_dx_altitude":
@@ -714,11 +733,13 @@ def handle(msg: dict) -> None:
             if not -500.0 <= alt_m <= 9000.0:
                 raise ValueError("DX altitude must be between -500 and 9000 metres")
             _station_b_alt_m = alt_m
+            _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"altitude_m": alt_m})
 
         elif method == "set_station_calls":
             _station_a_call = params.get("call_a")
             _station_b_call = params.get("call_b")
+            _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {})
 
         elif method == "wsjtx_set_rig_name_filter":
@@ -873,6 +894,7 @@ def _try_fallback(failed_source: str, reason: str) -> None:
     with _source_status_lock:
         _active_source = fallback
     _emit_source_status()
+    _emit_aircraft_update(try_auto_lock=False)
 
 
 def _bbox_for_locators() -> tuple[float, float, float, float] | None:
@@ -1328,20 +1350,7 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
 
 def _get_scatter_aircraft() -> list[dict]:
     """Compute scatter geometry for all cached aircraft and return sorted list."""
-    global _aircraft_last_update_monotonic, _aircraft_last_update_epoch_s
-    now_monotonic = time.monotonic()
-    with _aircraft_lock:
-        age_s = (
-            max(0.0, now_monotonic - _aircraft_last_update_monotonic)
-            if _aircraft_last_update_monotonic is not None
-            else None
-        )
-        if _aircraft_cache_freshness(age_s) == "expired":
-            _aircraft_cache.clear()
-            _aircraft_last_update_monotonic = None
-            _aircraft_last_update_epoch_s = None
-            return []
-        snapshot = list(_aircraft_cache)
+    snapshot = _current_aircraft_snapshot()
     if not _station_a_locator:
         return []
     try:
@@ -1389,6 +1398,7 @@ def _get_scatter_aircraft() -> list[dict]:
 
 
 def _get_scatter_aircraft_with_total(*, apply_filters: bool = True) -> tuple[list[dict], int]:
+    snapshot = _current_aircraft_snapshot()
     if not _station_a_locator:
         return [], 0
     try:
@@ -1408,9 +1418,6 @@ def _get_scatter_aircraft_with_total(*, apply_filters: bool = True) -> tuple[lis
 
     results = []
     total = 0
-    with _aircraft_lock:
-        snapshot = list(_aircraft_cache)
-
     for ac in snapshot:
         if not ac.has_position:
             continue
@@ -1434,7 +1441,7 @@ def _get_scatter_aircraft_with_total(*, apply_filters: bool = True) -> tuple[lis
     return results, total
 
 
-def _emit_aircraft_update() -> None:
+def _emit_aircraft_update(*, try_auto_lock: bool = True) -> None:
     age_s = _aircraft_cache_age_s()
     freshness = _aircraft_cache_freshness(age_s)
     aircraft, total = _get_scatter_aircraft_with_total()
@@ -1463,17 +1470,20 @@ def _emit_aircraft_update() -> None:
         },
     })
     # Update tracking or try auto-lock
-    with _aircraft_lock:
-        snapshot = list(_aircraft_cache)
+    snapshot = _current_aircraft_snapshot()
     if _locked_aircraft_id:
-        _update_rotator_for_locked(snapshot)
-    else:
+        if any(ac["icao24"] == _locked_aircraft_id for ac in aircraft):
+            _update_rotator_for_locked(snapshot)
+        else:
+            _do_unlock()
+    elif try_auto_lock:
         _try_auto_lock(snapshot)
 
 
 def _on_wsjtx_status(st: WSJTXStatus) -> None:
     global _station_a_locator, _station_b_locator, _station_a_call, _wsjtx_freq_hz, _wsjtx_band_mhz
     global _wsjtx_de_call, _wsjtx_de_grid
+    previous_locators = (_station_a_locator, _station_b_locator)
     de_grid = (st.de_grid or "").strip().upper()
     dx_grid = (st.dx_grid or "").strip().upper()
     _wsjtx_de_call = st.de_call
@@ -1505,6 +1515,8 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
             _start_adsbexchange_feed()
         else:
             _start_configured_airscout_feed()
+    if (_station_a_locator, _station_b_locator) != previous_locators:
+        _emit_aircraft_update(try_auto_lock=False)
     _emit({
         "event": "wsjtx_status",
         "data": {

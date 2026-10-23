@@ -66,8 +66,9 @@ def heading_delta_deg(source_deg: float, target_deg: float) -> float:
 
 
 def heading_within_tolerance(path_bearing_deg: float, aircraft_heading_deg: float, tolerance_deg: float = 30.0) -> bool:
-    """Return True when an aircraft heading is within the allowed path corridor."""
-    return heading_delta_deg(aircraft_heading_deg, path_bearing_deg) <= abs(tolerance_deg)
+    """Return True when an aircraft heading follows either direction of the path."""
+    delta = heading_delta_deg(aircraft_heading_deg, path_bearing_deg)
+    return min(delta, 180.0 - delta) <= abs(tolerance_deg)
 
 
 def elevation_deg(surface_km: float, altitude_m: float, station_alt_m: float = 0.0) -> float:

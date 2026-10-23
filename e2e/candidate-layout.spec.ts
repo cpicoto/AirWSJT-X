@@ -84,6 +84,27 @@ test("Filters collapses numeric fields without hiding flight controls or changin
   await expect(field).toHaveValue("45");
 });
 
+test("angular filters allow backspacing to empty and typing replacement values", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".aircraft-filters summary").click();
+  for (const [label, defaultValue] of [["Heading ±°", "30"], ["Path bearing ±°", "70"]]) {
+    const field = page.getByRole("spinbutton", { name: label, exact: true });
+    await expect(field).toHaveValue(defaultValue);
+    await field.focus();
+    await field.press("End");
+    await field.press("Backspace");
+    await field.press("Backspace");
+    await expect(field).toHaveValue("");
+    await field.pressSequentially("180");
+    await expect(field).toHaveValue("180");
+    await field.press("Tab");
+    await expect(field).toHaveValue("180");
+    await field.fill("");
+    await field.press("Tab");
+    await expect(field).toHaveValue(defaultValue);
+  }
+});
+
 test("Flight Data and Log have working vertical resize grips and Log keeps 30 scrollable entries", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();

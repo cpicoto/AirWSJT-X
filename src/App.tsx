@@ -524,6 +524,7 @@ export default function App() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const overlayDragRef = useRef<{ dx: number; dy: number } | null>(null);
   const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
+  const [aircraftFilterDraft, setAircraftFilterDraft] = useState<{ key: NumericAircraftFilterKey; value: string } | null>(null);
   const activeFlightRef = useRef({ priority_flight: "", priority_flight_exclusive: false });
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
   const [callsignDbBusy, setCallsignDbBusy] = useState(false);
@@ -2066,10 +2067,23 @@ export default function App() {
                       <input
                         type={type}
                         aria-label={label}
-                        value={value == null ? "" : value}
+                        title={numericKey === "heading_tolerance_deg"
+                          ? "Allowed heading deviation from the MY–DX path in either direction (approaching or departing)"
+                          : undefined}
+                        value={aircraftFilterDraft?.key === numericKey ? aircraftFilterDraft.value : value ?? ""}
+                        onBlur={(e) => {
+                          setAircraftFilterDraft(null);
+                          if (e.target.value.trim() === "" && (numericKey === "heading_tolerance_deg" || numericKey === "position_tolerance_deg")) {
+                            persistAircraftFilters({ ...aircraftFilters, [numericKey]: DEFAULT_AIRCRAFT_FILTERS[numericKey] });
+                          }
+                        }}
                         onChange={(e) => {
+                          setAircraftFilterDraft({ key: numericKey, value: e.target.value });
                           const next = { ...aircraftFilters };
                           const parsed = parseAircraftFilterNumber(e.target.value);
+                          if (parsed === null && (key === "heading_tolerance_deg" || key === "position_tolerance_deg")) {
+                            return;
+                          }
                           (next as Record<NumericAircraftFilterKey, number | null>)[numericKey] = parsed;
                           if (key === "heading_tolerance_deg") {
                             next.heading_tolerance_deg = parsed ?? DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg;

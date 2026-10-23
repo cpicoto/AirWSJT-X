@@ -2,6 +2,16 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "AirWSJT-X: Desktop Sidecar Build",
+			"type": "process",
+			"command": "node",
+			"args": ["scripts/build-desktop-sidecar.js"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		},
+		{
 			"label": "AirWSJT-X: Build Android APK",
 			"type": "shell",
 			"command": "npm",
@@ -21,6 +31,7 @@
 		},
 		{
 			"label": "AirWSJT-X: Desktop Build",
+			"dependsOn": ["AirWSJT-X: Desktop Sidecar Build"],
 			"type": "shell",
 			"command": "npm",
 			"args": [
@@ -32,6 +43,13 @@
 				"--config",
 				"src-tauri/tauri.desktop.conf.json"
 			],
+			"windows": {
+				"args": [
+					"run", "tauri", "--", "build", "--no-bundle",
+					"--config", "src-tauri\\tauri.desktop.conf.json",
+					"--config", "src-tauri\\tauri.windows-desktop.conf.json"
+				]
+			},
 			"isBackground": false,
 			"problemMatcher": [
 				"$rustc"

@@ -197,11 +197,18 @@ GitHub Actions builds signed Android APKs for pushes and pull requests targeting
 ### Desktop (VS Code)
 
 Open in VS Code and use **Terminal > Run Task**:
-- **AirWSJT-X: Desktop Build** — frontend + release desktop binary (`Ctrl+Shift+B`)
+- **AirWSJT-X: Desktop Sidecar Build** — rebuild Python with PyInstaller and stage the host-target sidecar (and its runtime on Windows)
+- **AirWSJT-X: Desktop Build** — rebuild Python sidecar, then frontend + release desktop binary (`Ctrl+Shift+B`)
 - **AirWSJT-X: Desktop Run** — launch the built release binary
-- **AirWSJT-X: Desktop Build and Run** — build release binary, then launch
+- **AirWSJT-X: Desktop Build and Run** — rebuild sidecar and release binary, then launch
 - **AirWSJT-X: Desktop Dev** — launch `tauri dev` with hot-reloading
 - **AirWSJT-X: Build Android APK** — build the Android APK (requires Android SDK/NDK setup) (currently untested)
+
+The desktop build tasks require `python`, PyInstaller, and `rustc` on PATH.
+Close the running desktop app before rebuilding on Windows so its executable
+and Python runtime files are not locked. A failed sidecar build stops the task
+chain instead of launching an app with an older backend. These tasks are for
+ordinary host-native desktop builds, not macOS TestFlight/MAS packaging.
 
 ### Windows ARM64
 

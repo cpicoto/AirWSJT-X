@@ -17,6 +17,8 @@ The **Auto** and **Manual** buttons at the top of the rotator panel choose what 
 ### Auto mode details
 
 - **Plane lock lost:** the last known Az and El stay on screen, greyed out to show they are no longer valid. No new rotator commands are sent, so the rotator stays where it was. The app announces "Lost plane lock" if speech is on.
+- **Automatic unlock:** each aircraft-list refresh releases a locked plane if it is no longer in the full filtered aircraft list with valid airborne position and altitude data. This also applies after station or flight-filter changes. Falling outside the displayed top five candidates does not release the lock.
+- **Expired aircraft data:** cache data older than 120 seconds is removed before refreshing lists or tracking. Changing settings cannot revive an expired aircraft or keep its lock active.
 - **Next plane locked:** the values return to normal and the new Az and El are sent to the rotator.
 - **No rotator needed:** Auto mode speech works even when the rotator is off or not connected, so you can point an antenna by voice. Speech is silent in Auto while there is no valid plane lock.
 - **Which plane:** candidates are ranked by a geometry score; see [Plane scoring](plane-scoring.md).
@@ -33,6 +35,10 @@ The **Auto** and **Manual** buttons at the top of the rotator panel choose what 
 The active flight starts blank with **Only** off at startup; saved flight favorites remain available. **Clear**, next to **Store Flight#**, disables the active flight filter without deleting favorites. Choose a favorite to activate its flight number and Only setting again.
 
 Numeric aircraft filters use compact fields inside the **Filters** section, collapsed by default. Click **Filters** to expand or collapse them without changing their values. The Flight number controls remain outside this section and visible. The Flight number label sits above its input. Flight controls share a row below the numeric filters when space permits, and wrap onto another row on narrow windows so the favorites picker stays visible.
+
+Numeric fields can be cleared while editing. Leaving **Heading ±°** or **Path bearing ±°** blank restores its default (30° or 70°, respectively) when you leave the field.
+
+**Heading ±°** accepts aircraft traveling along the MY–DX path in either direction. At the default 30°, both approaching and departing headings within 30° of the path axis qualify; cross-path headings are excluded. **Path bearing ±°** independently filters the aircraft's position relative to MY's bearing toward DX.
 
 Drag the bottom-right corner grip of the Flight Data scroll area or Log card to resize it vertically. Each height is saved locally and restored at startup; widths continue to follow the window layout. The Log is scrollable and retains the latest 30 entries, newest first.
 
