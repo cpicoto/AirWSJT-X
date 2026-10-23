@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.29
+
+### Fixed
+- Refresh Flight Data and Top Candidates immediately after station, flight-favorite/filter, and source changes, including WSJT-X grid updates and source fallback. Settings refreshes do not initiate new auto-locks; normal feed updates retain auto-lock behavior (#125).
+- Release a locked aircraft when it leaves the full filtered list or lacks usable airborne position and altitude data. Keep valid locks outside the top-five display limit and do not auto-lock a replacement in the same refresh (#125).
+- Remove aircraft cache data older than 120 seconds before list refresh and tracking, so settings changes cannot revive expired candidates or retain their locks (#125).
+- Accept aircraft heading along the MY-DX path in either direction within the configured tolerance. Allow clearing numeric fields while editing; blank angular filters restore their defaults on blur (#125).
+
+### Changed
+- Rebuild and stage the Python sidecar before VS Code desktop builds, including the installed runtime on Windows. Stop the build chain if the sidecar build fails. Release signing, entitlements, and macOS TestFlight packaging remain unchanged (#125).
+- Update aircraft-lock, filter, and desktop-build documentation and regression coverage.
+
+### Validation
+- Automated checks do not establish installed desktop, live radio/rotator, or installed TestFlight network operation; device validation remains required.
+
 ## 0.3.28
 
 ### Fixed
