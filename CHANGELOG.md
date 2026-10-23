@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Add a display-only predicted usable time remaining column to Flight Data using mutual radio visibility and the inward-facing 90-degree geometry window. Keep all filters, scores, ranking and auto-lock unchanged; show unavailable data and the 30-minute cap explicitly.
+- Show feed-reported aircraft ground-track heading in Flight Data as HDG°, with an explicit unavailable indicator, to help diagnose heading-filter exclusions without changing candidate rules.
+
+### Fixed
+- Make candidate position and heading filters, path-alignment scores and Off° independent of MY/DX station order by checking both ends. Preserve station-specific pointing readouts and watched-flight overrides, and honor an explicit zero heading tolerance.
+
 ## 0.3.29
 
 ### Fixed

@@ -451,6 +451,12 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
 .ac-table td:first-child { text-align: left; }
 .ac-table tr.locked-row { background: rgba(88,166,255,0.07); }
 
+@media (max-width: 1000px) {
+  .flight-data-scroll .ac-table { font-size: 9px; }
+  .flight-data-scroll .ac-table th,
+  .flight-data-scroll .ac-table td { padding-left: 1px; padding-right: 1px; }
+}
+
 /* ── Log ─────────────────────────────────────────────────────────────── */
 .flight-data-scroll { height: 240px; min-height: 80px; overflow: auto; resize: vertical; padding-bottom: 12px; }
 .log-card { height: 160px; min-height: 80px; flex: 0 0 auto; display: flex; flex-direction: column; resize: vertical; }

@@ -1332,17 +1332,24 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
             return False
 
     path_unset = abs(lat_a - lat_b) < 1e-9 and abs(lon_a - lon_b) < 1e-9
+    path_bearings = (
+        bearing_deg(lat_a, lon_a, lat_b, lon_b),
+        bearing_deg(lat_b, lon_b, lat_a, lon_a),
+    )
     if not path_unset:
         position_tol = filters.get("position_tolerance_deg")
         position_tol = 70.0 if position_tol is None else float(position_tol)
-        az_to_plane = bearing_deg(lat_a, lon_a, ac.lat, ac.lon)
-        if heading_delta_deg(az_to_plane, bearing_deg(lat_a, lon_a, lat_b, lon_b)) > abs(position_tol):
+        deviations = (
+            heading_delta_deg(bearing_deg(lat_a, lon_a, ac.lat, ac.lon), path_bearings[0]),
+            heading_delta_deg(bearing_deg(lat_b, lon_b, ac.lat, ac.lon), path_bearings[1]),
+        )
+        if max(deviations) > abs(position_tol):
             return False
 
     if ac.heading_deg is not None and ac.velocity_ms not in (None, 0):
-        bearing = bearing_deg(lat_a, lon_a, lat_b, lon_b)
-        tolerance = float(filters.get("heading_tolerance_deg") or 30.0)
-        if not heading_within_tolerance(bearing, ac.heading_deg, tolerance):
+        tolerance = filters.get("heading_tolerance_deg")
+        tolerance = 30.0 if tolerance is None else float(tolerance)
+        if not all(heading_within_tolerance(bearing, ac.heading_deg, tolerance) for bearing in path_bearings):
             return False
 
     return True
@@ -1463,6 +1470,8 @@ def _emit_aircraft_update(*, try_auto_lock: bool = True) -> None:
             "total": total,
             "station_a": _station_a_locator,
             "station_b": _station_b_locator,
+            "station_a_alt_m": _station_a_alt_m,
+            "station_b_alt_m": _station_b_alt_m,
             "active_source": active_source,
             "last_update_epoch_s": last_update_epoch_s,
             "cache_age_s": round(age_s, 1) if age_s is not None else None,

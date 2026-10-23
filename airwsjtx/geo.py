@@ -110,7 +110,7 @@ def scatter_geometry(
       az_a, el_a, range_a_km  — bearing/elevation/slant from A to P
       az_b, el_b, range_b_km  — bearing/elevation/slant from B to P
       dist_ab_km              — A↔B great-circle distance
-      off_path_deg            — how far P is off the A-B midpoint bearing
+      off_path_deg            — larger bearing deviation from the path at A or B
       scatter_score           — 0-1 suitability score
     """
     # Distances
@@ -131,13 +131,14 @@ def scatter_geometry(
     sr_a = slant_range_km(d_a, altitude_m, station_a_alt_m)
     sr_b = slant_range_km(d_b, altitude_m, station_b_alt_m)
 
-    # Off-path: angle between A→P bearing and A→B bearing
-    off_path = abs((az_a - az_ab + 180) % 360 - 180)
+    # Use the worse endpoint so swapping MY and DX cannot improve alignment.
+    off_path_a = heading_delta_deg(az_a, az_ab)
     off_path_b = heading_delta_deg(az_b, bearing_deg(lat_b, lon_b, lat_a, lon_a))
+    off_path = max(off_path_a, off_path_b)
 
     # Geometry score (0-1):
     # Require mutual visibility and an inward bearing from both path endpoints.
-    if el_a <= 0 or el_b <= 0 or (d_ab > 0 and (off_path >= 90.0 or off_path_b >= 90.0)):
+    if el_a <= 0 or el_b <= 0 or (d_ab > 0 and off_path >= 90.0):
         scatter_score = 0.0
     else:
         # Elevation sweet-spot: 1-20° from each station

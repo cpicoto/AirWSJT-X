@@ -7,6 +7,24 @@ const courseAircraft: SkyCourseAircraft = {
   lat: 0, lon: -0.2, altitude_ft: 33000, heading_deg: 90, velocity_kts: 450,
 };
 
+test("scatter scores and off-path angles are unchanged when MY and DX swap", () => {
+  for (const [lat, lon] of [[0.2, 0.3], [0.2, 1.7], [0.1, 1], [0, -0.5]]) {
+    const forward = scatterGeometry(0, 0, 0, 2, lat, lon, 11000, 150, 500);
+    const reverse = scatterGeometry(0, 2, 0, 0, lat, lon, 11000, 500, 150);
+    expect(forward.scatter_score).toBe(reverse.scatter_score);
+    expect(forward.off_path_deg).toBe(reverse.off_path_deg);
+    expect(forward.az_a).toBe(reverse.az_b);
+    expect(forward.el_a).toBe(reverse.el_b);
+    expect(forward.range_a_km).toBe(reverse.range_b_km);
+    expect(forward.az_b).toBe(reverse.az_a);
+    expect(forward.el_b).toBe(reverse.el_a);
+    expect(forward.range_b_km).toBe(reverse.range_a_km);
+  }
+  const nearEndpoint = scatterGeometry(0, 0, 0, 2, 0.2, 0.3, 11000);
+  expect(nearEndpoint.off_path_deg).toBeCloseTo(33.7, 1);
+  expect(nearEndpoint.scatter_score).toBeGreaterThan(0);
+});
+
 test("course projection follows ground speed, track and station-relative elevation", () => {
   const course = predictSkyCourse(courseAircraft, courseStation);
   expect(course.unavailableReason).toBeNull();

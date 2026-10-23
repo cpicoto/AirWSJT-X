@@ -1,5 +1,76 @@
 import { test, expect } from "@playwright/test";
 import { isValidLocator, locatorToLatlon, scatterGeometry } from "../src/lib/geo";
+import { formatUsableTime, predictUsableTime } from "../src/lib/usableTime";
+import type { SkyCourseAircraft } from "../src/lib/skyCourse";
+
+const usableAircraft: SkyCourseAircraft = {
+  lat: 0, lon: 0.5, altitude_ft: 10000 / 0.3048, heading_deg: 90, velocity_kts: 360,
+};
+const usableA = { lat: 0, lon: 0, altitudeM: 0 };
+const usableB = { lat: 0, lon: 1, altitudeM: 0 };
+
+test("usable time ends at the first path boundary and is reciprocal", () => {
+  const expectedSeconds = (Math.PI * 6371 / 360) / (360 * 1.852 / 3600);
+  for (const heading of [90, 270]) {
+    const plane = { ...usableAircraft, heading_deg: heading };
+    const forward = predictUsableTime(plane, usableA, usableB);
+    const reverse = predictUsableTime(plane, usableB, usableA);
+    expect(forward.seconds).toBeCloseTo(expectedSeconds, 0);
+    expect(forward).toEqual(reverse);
+    expect(forward.capped).toBe(false);
+    expect(formatUsableTime(forward)).toBe("5:00");
+    expect(predictUsableTime({ ...plane, velocity_kts: 720 }, usableA, usableB).seconds)
+      .toBeCloseTo(expectedSeconds / 2, 0);
+  }
+});
+
+test("crossing aircraft usable time ends at the mutual radio horizon", () => {
+  const plane = { ...usableAircraft, lon: 0, heading_deg: 0, velocity_kts: 720 };
+  const a = { lat: 0, lon: -1, altitudeM: 0 };
+  const b = { lat: 0, lon: 1, altitudeM: 0 };
+  const radius = 6371 * 4 / 3;
+  const horizonKm = radius * Math.acos(radius / (radius + 10));
+  const latitudeAtExit = Math.acos(Math.cos(horizonKm / 6371) / Math.cos(Math.PI / 180));
+  const expectedSeconds = latitudeAtExit * 6371 / (720 * 1.852 / 3600);
+  const prediction = predictUsableTime(plane, a, b);
+  expect(prediction.seconds).toBeCloseTo(expectedSeconds, 0);
+  expect(prediction).toEqual(predictUsableTime(plane, b, a));
+  const highA = { ...a, altitudeM: 2000 };
+  const elevated = predictUsableTime(plane, highA, b);
+  expect(elevated.seconds!).toBeLessThan(prediction.seconds!);
+  expect(elevated).toEqual(predictUsableTime(plane, b, highA));
+  const coincident = predictUsableTime(plane, a, a);
+  expect(coincident.seconds).toBeGreaterThan(0);
+});
+
+test("usable time distinguishes outside, missing inputs and the prediction cap", () => {
+  for (const plane of [
+    { ...usableAircraft, lon: -0.1 },
+    { ...usableAircraft, lon: 1.1 },
+    { ...usableAircraft, lat: 10 },
+    { ...usableAircraft, lon: -0.1, heading_deg: null },
+  ]) {
+    const result = predictUsableTime(plane, usableA, usableB);
+    expect(result.seconds).toBe(0);
+    expect(formatUsableTime(result)).toBe("0:00");
+  }
+  for (const changes of [
+    { heading_deg: null }, { heading_deg: NaN }, { velocity_kts: null },
+    { velocity_kts: 0 }, { velocity_kts: -1 }, { velocity_kts: Infinity },
+    { lat: NaN }, { lon: 181 }, { altitude_ft: NaN },
+  ]) {
+    const result = predictUsableTime({ ...usableAircraft, ...changes }, usableA, usableB);
+    expect(result.seconds).toBeNull();
+    expect(result.reason.length).toBeGreaterThan(0);
+    expect(formatUsableTime(result)).toBe("—");
+  }
+  expect(predictUsableTime(usableAircraft, null, usableB).seconds).toBeNull();
+  expect(predictUsableTime(usableAircraft, usableA, { ...usableB, altitudeM: NaN }).seconds).toBeNull();
+  const capped = predictUsableTime({ ...usableAircraft, velocity_kts: 1 }, usableA, usableB);
+  expect(capped.seconds).toBe(1800);
+  expect(capped.capped).toBe(true);
+  expect(formatUsableTime(capped)).toBe("≥30m");
+});
 
 test("scatter scoring requires inward bearings from both endpoints", () => {
   for (const [lat, lon] of [[0, -1], [1, 0], [0, 1.5], [0, 3], [1, 1]]) {
@@ -340,6 +411,80 @@ test("Flight Data shows all scored aircraft while candidates keep their selectio
   expect(await region.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
   await region.evaluate(element => { element.scrollTop = element.scrollHeight; });
   await expect(rows.last()).toBeInViewport();
+});
+
+test("Flight Data distinguishes reported heading from station azimuth and missing heading", async ({ page }) => {
+  await page.setViewportSize({ width: 840, height: 800 });
+  await page.goto("/");
+  const planes = [0, 270, 359.6, null].map((heading, i) => ({
+    icao24: `heading${i}`, callsign: `HDG${i}`,
+    lat: 47.5, lon: -122.4, altitude_ft: 30000, heading_deg: heading, velocity_kts: 450,
+    az_a: 345, el_a: 1, az_b: 173, el_b: 2, off_path_deg: 7, range_a_km: 289,
+    scatter_score: 0.38 - i / 100,
+  }));
+  await page.evaluate(planes => {
+    const emit = Reflect.get(window, "__tauriMockEmit") as (event: string, payload: string) => void;
+    emit("sidecar-message", JSON.stringify({
+      event: "airscout_update",
+      data: { aircraft: [], flight_data: planes, total: planes.length,
+        station_a: "CN84XS67", station_b: "CN89JI" },
+    }));
+  }, planes);
+  const region = page.getByRole("region", { name: "Flight Data" });
+  const header = region.getByRole("columnheader", { name: "HDG°", exact: true });
+  await expect(header).toBeVisible();
+  await expect(header).toHaveAttribute("title", /ground-track.*true north/);
+  const rows = region.locator("tbody tr");
+  await expect(rows).toHaveCount(4);
+  for (const [i, expected] of ["0°", "270°", "0°", "—"].entries()) {
+    await expect(rows.nth(i).locator("td").nth(3)).toHaveText(expected);
+    await expect(rows.nth(i).locator("td").nth(4)).toHaveText("345°");
+  }
+  await expect(rows.last().locator("td").nth(3)).toHaveAttribute("title", "Aircraft heading not reported");
+  expect(await region.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.locator(".plane-candidate")).toHaveCount(0);
+});
+
+test("Flight Data usable time is display-only and uses applied station geometry", async ({ page }) => {
+  await page.setViewportSize({ width: 840, height: 800 });
+  await page.goto("/");
+  const a = { ...usableA, lat: 0.5, lon: 1 };
+  const b = { ...usableB, lat: 0.5, lon: 3 };
+  const planes = [360, 1, null, 360].map((speed, i) => ({
+    icao24: `usable${i}`, callsign: `USE${i}`,
+    lat: 0.5, lon: i === 3 ? 0 : 2, altitude_ft: 10000 / 0.3048,
+    heading_deg: 90, velocity_kts: speed, az_a: 90, el_a: 4, az_b: 270,
+    el_b: 4, off_path_deg: 0, range_a_km: 111, scatter_score: 0.38 - i / 100,
+  }));
+  const send = async (reverse = false, altitude = 0) => {
+    await page.evaluate(({ planes, reverse, altitude }) => {
+      const emit = Reflect.get(window, "__tauriMockEmit") as (event: string, payload: string) => void;
+      emit("sidecar-message", JSON.stringify({
+        event: "airscout_update",
+        data: { aircraft: [planes[0]], flight_data: planes, total: planes.length,
+          station_a: reverse ? "JJ10" : "JJ00", station_b: reverse ? "JJ00" : "JJ10",
+          station_a_alt_m: reverse ? 0 : altitude, station_b_alt_m: reverse ? altitude : 0 },
+      }));
+    }, { planes, reverse, altitude });
+  };
+  await send();
+  const region = page.getByRole("region", { name: "Flight Data" });
+  await expect(region.getByRole("columnheader", { name: "Use", exact: true })).toHaveAttribute("title", /ignores optional filters and score/);
+  const cells = region.locator("tbody tr td:last-child");
+  const expected = formatUsableTime(predictUsableTime(planes[0], a, b));
+  await expect(cells).toHaveText([expected, "≥30m", "—", "0:00"]);
+  await expect(cells.nth(2)).toHaveAttribute("title", /ground speed is unavailable/);
+  const scores = await region.locator("tbody tr td:nth-child(3)").allTextContents();
+  await expect(page.locator(".plane-candidate")).toHaveCount(1);
+  await expect(page.locator(".plane-candidate")).toContainText("USE0");
+  await send(true);
+  await expect(cells).toHaveText([expected, "≥30m", "—", "0:00"]);
+  await page.getByRole("textbox", { name: "DX altitude (m)", exact: true }).fill("9000");
+  await expect(cells.first()).toHaveText(expected);
+  await send(false, 9000);
+  await expect(cells.first()).toHaveText(formatUsableTime(predictUsableTime(planes[0], { ...a, altitudeM: 9000 }, b)));
+  expect(await region.locator("tbody tr td:nth-child(3)").allTextContents()).toEqual(scores);
+  expect(await region.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
 test("flight favorites store and restore flight number and Only mode across reloads", async ({ page }) => {

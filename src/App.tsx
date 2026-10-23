@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
 import PlaneLockPanel from "./PlaneLockPanel";
@@ -15,6 +15,7 @@ import {
 import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
 import SkyDome from "./SkyDome";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
+import { formatUsableTime, predictUsableTime } from "./lib/usableTime";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -89,6 +90,8 @@ interface AirscoutUpdate {
   total: number;
   station_a: string | null;
   station_b: string | null;
+  station_a_alt_m?: number;
+  station_b_alt_m?: number;
   active_source?: string | null;
   last_update_epoch_s?: number | null;
   cache_age_s?: number | null;
@@ -939,7 +942,18 @@ export default function App() {
   })();
   const stateColor = STATE_COLOR[displayState] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
-  const flightData = [...(airscout?.flight_data ?? [])].sort((a, b) => b.scatter_score - a.scatter_score);
+  const flightData = useMemo(() => [...(airscout?.flight_data ?? [])]
+    .sort((a, b) => b.scatter_score - a.scatter_score), [airscout?.flight_data]);
+  const usableTimes = useMemo(() => {
+    const station = (grid: string | null | undefined, altitudeM: number | undefined) => {
+      if (!isValidLocator(grid) || altitudeM === undefined) return null;
+      const [lat, lon] = locatorToLatlon(grid);
+      return { lat, lon, altitudeM };
+    };
+    const a = station(airscout?.station_a, airscout?.station_a_alt_m);
+    const b = station(airscout?.station_b, airscout?.station_b_alt_m);
+    return new Map(flightData.map(ac => [ac.icao24, predictUsableTime(ac, a, b)]));
+  }, [flightData, airscout?.station_a, airscout?.station_b, airscout?.station_a_alt_m, airscout?.station_b_alt_m]);
   const savedFlights = new Set(favoriteFlights.map(favorite => favorite.flight.trim().toUpperCase()));
   const skyDomeAircraft = aircraft.filter((ac, index) => index < 20 || ac.icao24 === lockedPlane?.icao24);
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
@@ -2068,7 +2082,9 @@ export default function App() {
                         type={type}
                         aria-label={label}
                         title={numericKey === "heading_tolerance_deg"
-                          ? "Allowed heading deviation from the MY–DX path in either direction (approaching or departing)"
+                          ? "Allowed heading deviation from both endpoint path bearings, in either direction (approaching or departing)"
+                          : numericKey === "position_tolerance_deg"
+                          ? "Allowed aircraft bearing deviation toward the other station, checked at both MY and DX"
                           : undefined}
                         value={aircraftFilterDraft?.key === numericKey ? aircraftFilterDraft.value : value ?? ""}
                         onBlur={(e) => {
@@ -2301,7 +2317,9 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Call</th><th>FL</th><th>Score</th>
+                    <th title="Feed-reported aircraft ground-track direction, degrees clockwise from true north">HDG°</th>
                     <th>AZ-A</th><th>EL-A</th><th>Off°</th><th>km</th>
+                    <th title="Estimated usable time remaining from the latest aircraft report (m:ss). Above both radio horizons and inside both 90° path boundaries; ignores optional filters and score. Constant altitude, ground speed and great-circle track; 30-minute limit. Not a signal-quality guarantee.">Use</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2310,6 +2328,7 @@ export default function App() {
                     const scColor = sc >= 0.5 ? "var(--green)" : sc >= 0.3 ? "var(--yellow)" : "var(--text-muted)";
                     const isLocked = lockedPlane?.icao24 === ac.icao24;
                     const isFavorite = savedFlights.has(ac.callsign.trim().toUpperCase());
+                    const usableTime = usableTimes.get(ac.icao24);
                     return (
                       <tr key={ac.icao24} className={isLocked ? "locked-row" : ""}
                         style={{ cursor: "pointer", background: isFavorite ? "#30363d" : undefined }}
@@ -2320,6 +2339,9 @@ export default function App() {
                         </td>
                         <td>{Math.round(ac.altitude_ft / 100)}</td>
                         <td style={{ color: scColor, fontWeight: 600 }}>{(sc * 100).toFixed(0)}%</td>
+                        <td title={ac.heading_deg == null ? "Aircraft heading not reported" : "Feed-reported ground-track direction"}>
+                          {ac.heading_deg == null ? "—" : `${Math.round(ac.heading_deg) % 360}°`}
+                        </td>
                         <td>{ac.az_a.toFixed(0)}°</td>
                         <td style={{ color: ac.el_a > 0 && ac.el_a < 20 ? "var(--green)" : "var(--text-muted)" }}>
                           {ac.el_a.toFixed(0)}°
@@ -2328,6 +2350,7 @@ export default function App() {
                           {ac.off_path_deg.toFixed(0)}°
                         </td>
                         <td style={{ color: "var(--text-muted)" }}>{ac.range_a_km}</td>
+                        <td title={usableTime?.reason}>{usableTime ? formatUsableTime(usableTime) : "—"}</td>
                       </tr>
                     );
                   })}

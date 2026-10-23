@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 
 # Node
 node_modules/
@@ -23,3 +24,4 @@ src-tauri/binaries/airwsjtx_bridge-*
 src-tauri/gen/schemas/windows-schema.json
 src-tauri/gen/schemas/linux-schema.json
 test-results/.last-run.json
+src-tauri/binaries/airwsjtx_bridge

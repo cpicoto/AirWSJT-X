@@ -64,5 +64,24 @@ class StationAltitudeTests(unittest.TestCase):
         self.assertEqual(elevation_deg(200.0, 9000.0), elevation_deg(200.0, 9000.0, 0.0))
 
 
+class StationSwapTests(unittest.TestCase):
+    def test_score_and_off_path_are_reciprocal(self) -> None:
+        for lat_p, lon_p in [(0.2, 0.3), (0.2, 1.7), (0.1, 1.0), (0.0, -0.5)]:
+            with self.subTest(lat_p=lat_p, lon_p=lon_p):
+                forward = scatter_geometry(0, 0, 0, 2, lat_p, lon_p, 11000, 150, 500)
+                reverse = scatter_geometry(0, 2, 0, 0, lat_p, lon_p, 11000, 500, 150)
+                self.assertEqual(forward["scatter_score"], reverse["scatter_score"])
+                self.assertEqual(forward["off_path_deg"], reverse["off_path_deg"])
+                for field in ("az", "el", "range"):
+                    suffix = "_km" if field == "range" else ""
+                    self.assertEqual(forward[f"{field}_a{suffix}"], reverse[f"{field}_b{suffix}"])
+                    self.assertEqual(forward[f"{field}_b{suffix}"], reverse[f"{field}_a{suffix}"])
+
+    def test_path_alignment_uses_worse_endpoint(self) -> None:
+        geo = scatter_geometry(0, 0, 0, 2, 0.2, 0.3, 11000)
+        self.assertAlmostEqual(geo["off_path_deg"], 33.7, delta=0.1)
+        self.assertGreater(geo["scatter_score"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

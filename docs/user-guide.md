@@ -30,6 +30,12 @@ The **Auto** and **Manual** buttons at the top of the rotator panel choose what 
 
 **Flight Data**, below the aircraft sources, shows all received aircraft with valid airborne position and altitude data, without candidate filters or the candidate payload limit. It is scrollable and sorted by scatter score, highest first. Rows matching any locally saved flight favorite have a grey background.
 
+**HDG°** shows the feed-reported aircraft ground-track direction clockwise from true north (0° north, 90° east), or a dash when unavailable. This is the direction used by the heading filter, not **AZ-A** (MY's bearing to the aircraft) or **Off°** (position deviation from the station path). A high-scoring aircraft may still fail the heading filter.
+
+**Use** shows estimated usable time remaining as `m:ss`, measured from the latest reported aircraft position. It predicts the first exit from the window where the aircraft is strictly above both radio horizons and inside both inward-facing 90° path boundaries. The path boundaries are skipped for coincident stations. `0:00` means currently outside that window (not time until a future entry); `≥30m` means still inside at the 30-minute prediction limit. A dash and tooltip explain unavailable station or aircraft motion data.
+
+This is an observational estimate only: it ignores optional candidate filters and the 5% score threshold, and does not change scores, sorting, candidate membership or auto-lock. Prediction assumes constant altitude, ground speed and great-circle track using the applied MY/DX altitudes and the existing K=4/3 radio-horizon model. It samples every five seconds and refines the first exit to about 0.1 seconds; displayed times are truncated to whole seconds. It updates with aircraft reports and applied station changes, not as a live countdown. Turns, climbs, stale reports, terrain, antenna patterns and actual signal strength are not modeled; this is not a guarantee of a usable radio reflection. Swapping the same physical stations and altitudes preserves the estimate.
+
 **Top Candidates** keeps its existing filters, ranking, and five-entry limit. The currently selected **Flight number** is underlined in its text color when it appears there; saved favorites do not change candidate selection.
 
 The active flight starts blank with **Only** off at startup; saved flight favorites remain available. **Clear**, next to **Store Flight#**, disables the active flight filter without deleting favorites. Choose a favorite to activate its flight number and Only setting again.
@@ -38,7 +44,7 @@ Numeric aircraft filters use compact fields inside the **Filters** section, coll
 
 Numeric fields can be cleared while editing. Leaving **Heading ±°** or **Path bearing ±°** blank restores its default (30° or 70°, respectively) when you leave the field.
 
-**Heading ±°** accepts aircraft traveling along the MY–DX path in either direction. At the default 30°, both approaching and departing headings within 30° of the path axis qualify; cross-path headings are excluded. **Path bearing ±°** independently filters the aircraft's position relative to MY's bearing toward DX.
+**Heading ±°** accepts aircraft traveling along the MY–DX path in either direction. At the default 30°, both approaching and departing headings within 30° of both endpoint path axes qualify; cross-path headings are excluded. **Path bearing ±°** independently checks the aircraft's position from both stations: its bearing must be within the tolerance of the direction toward the other station at each end. **Off°** shows the larger of these two position deviations, and scoring uses that same worse-end alignment. Swapping MY and DX therefore preserves candidates and scores for identical aircraft data, filters and physical station altitudes; the station-specific pointing readouts swap ends.
 
 Drag the bottom-right corner grip of the Flight Data scroll area or Log card to resize it vertically. Each height is saved locally and restored at startup; widths continue to follow the window layout. The Log is scrollable and retains the latest 30 entries, newest first.
 

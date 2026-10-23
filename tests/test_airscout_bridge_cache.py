@@ -10,6 +10,16 @@ from sidecar import airwsjtx_bridge
 
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
+    def test_aircraft_update_includes_applied_station_altitudes(self) -> None:
+        with patch.multiple(airwsjtx_bridge, _station_a_alt_m=150.0, _station_b_alt_m=1000.0,
+                            _locked_aircraft_id=None, _aircraft_cache=[]), \
+                patch.object(airwsjtx_bridge, "_get_scatter_aircraft_with_total", return_value=([], 0)), \
+                patch.object(airwsjtx_bridge, "_emit") as emit:
+            airwsjtx_bridge._emit_aircraft_update(try_auto_lock=False)
+        payload = emit.call_args.args[0]["data"]
+        self.assertEqual(payload["station_a_alt_m"], 150.0)
+        self.assertEqual(payload["station_b_alt_m"], 1000.0)
+
     def test_settings_refresh_expires_cache_without_tracking_or_relocking(self) -> None:
         from airwsjtx.supervisor import AirWSJTXSupervisor
 
@@ -262,6 +272,76 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             self.assertEqual([row["icao24"] for row in emit.call_args.args[0]["data"]["aircraft"]], [ac.icao24])
             track.assert_called_once()
             unlock.assert_not_called()
+
+    def test_position_filter_checks_both_ends_in_either_station_order(self) -> None:
+        for lat, lon, expected in [(0.1, 0.5, True), (0.3, 0.1, False), (0.3, 0.9, False)]:
+            ac = Aircraft(
+                icao24="position", callsign="POSITION", lat=lat, lon=lon, altitude_m=11000,
+                velocity_ms=200, heading_deg=90, vertical_rate_ms=0, on_ground=False,
+            )
+            with self.subTest(lat=lat, lon=lon), \
+                    patch.dict(airwsjtx_bridge._aircraft_filters,
+                               airwsjtx_bridge._DEFAULT_FILTERS, clear=True):
+                for stations in [(0, 0, 0, 1), (0, 1, 0, 0)]:
+                    self.assertEqual(airwsjtx_bridge._aircraft_matches_filters(ac, *stations), expected)
+
+    def test_heading_filter_is_reciprocal_on_curved_path(self) -> None:
+        for heading, expected in [(90, True), (270, True), (59, False), (239, False)]:
+            ac = Aircraft(
+                icao24="heading", callsign="HEADING", lat=60, lon=0, altitude_m=11000,
+                velocity_ms=200, heading_deg=heading, vertical_rate_ms=0, on_ground=False,
+            )
+            with self.subTest(heading=heading), \
+                    patch.dict(airwsjtx_bridge._aircraft_filters,
+                               airwsjtx_bridge._DEFAULT_FILTERS, clear=True):
+                for stations in [(60, -2, 60, 2), (60, 2, 60, -2)]:
+                    self.assertEqual(airwsjtx_bridge._aircraft_matches_filters(ac, *stations), expected)
+
+    def test_zero_heading_tolerance_is_not_replaced_by_default(self) -> None:
+        ac = Aircraft(
+            icao24="heading", callsign="HEADING", lat=0, lon=0.5, altitude_m=11000,
+            velocity_ms=200, heading_deg=91, vertical_rate_ms=0, on_ground=False,
+        )
+        with patch.dict(airwsjtx_bridge._aircraft_filters,
+                        {**airwsjtx_bridge._DEFAULT_FILTERS, "heading_tolerance_deg": 0}, clear=True):
+            self.assertFalse(airwsjtx_bridge._aircraft_matches_filters(ac, 0, 0, 0, 1))
+
+    def test_station_swap_preserves_candidates_ranking_auto_lock_and_opensky_box(self) -> None:
+        planes = [
+            Aircraft(icao24=icao, callsign=icao, lat=lat, lon=lon, altitude_m=11000,
+                     velocity_ms=200, heading_deg=heading, vertical_rate_ms=0, on_ground=False)
+            for icao, lat, lon, heading in [
+                ("near-my", 47.6, -122.7, 90),
+                ("near-dx", 47.6, -121.95, 270),
+                ("middle", 47.5, -122, 90),
+                ("outside", 48, -122.4, 90),
+                ("crossing", 47.5, -122, 0),
+            ]
+        ]
+        results = []
+        with patch.dict(airwsjtx_bridge._aircraft_filters,
+                        airwsjtx_bridge._DEFAULT_FILTERS, clear=True):
+            for a, b, alt_a, alt_b in [
+                ("CN87ML", "CN97BL", 150, 500),
+                ("CN97BL", "CN87ML", 500, 150),
+            ]:
+                with patch.multiple(airwsjtx_bridge, _station_a_locator=a, _station_b_locator=b,
+                                    _station_a_alt_m=alt_a, _station_b_alt_m=alt_b,
+                                    _aircraft_cache=planes,
+                                    _aircraft_last_update_monotonic=time.monotonic()):
+                    candidates = airwsjtx_bridge._get_scatter_aircraft()
+                    rows, total = airwsjtx_bridge._get_scatter_aircraft_with_total()
+                    self.assertEqual(rows, candidates)
+                    self.assertEqual(total, len(planes))
+                    best = airwsjtx_bridge._select_auto_lock_candidate(planes)
+                    self.assertIsNotNone(best)
+                    results.append((
+                        [(row["icao24"], row["scatter_score"], row["off_path_deg"]) for row in rows],
+                        best.icao24 if best else None,
+                        airwsjtx_bridge._bbox_for_locators(),
+                    ))
+        self.assertTrue(results[0][0])
+        self.assertEqual(results[0], results[1])
 
     def test_priority_flight_bypasses_filters_and_can_be_exclusive(self) -> None:
         priority = Aircraft(

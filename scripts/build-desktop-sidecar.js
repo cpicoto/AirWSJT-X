@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +9,12 @@ const target = execFileSync("rustc", ["-vV"], { encoding: "utf8" })
   .match(/^host: (.+)$/m)?.[1].trim();
 if (!target) throw new Error("Cannot determine the Rust host target");
 
-execFileSync("python", [
+const venvPython = process.platform === "win32"
+  ? path.join(root, ".venv", "Scripts", "python.exe")
+  : path.join(root, ".venv", "bin", "python");
+const python = existsSync(venvPython) ? venvPython : "python";
+
+execFileSync(python, [
   "-m", "PyInstaller", "--noconfirm", "--clean",
   "--distpath", binaries,
   path.join(root, "sidecar", "airwsjtx_bridge.spec"),
