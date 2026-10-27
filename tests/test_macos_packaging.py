@@ -73,6 +73,20 @@ class MacOSTestFlightPackagingTests(unittest.TestCase):
         self.assertTrue(entitlements["com.apple.security.network.client"])
         self.assertTrue(entitlements["com.apple.security.network.server"])
 
+    def test_app_review_notes_explain_the_inbound_udp_listener(self) -> None:
+        notes = (ROOT / "appstore-assets/review-notes.txt").read_text(encoding="utf-8")
+        self.assertIn("com.apple.security.network.server", notes)
+        self.assertIn("binds UDP port 2237", notes)
+        self.assertIn("heartbeat, status, decode, and QSO Logged datagrams", notes)
+        self.assertIn("It is not a general-purpose web, FTP, or file server", notes)
+
+    def test_metadata_uploader_publishes_review_notes_for_macos(self) -> None:
+        uploader = (ROOT / "appstore-assets/upload_to_asc.py").read_text(encoding="utf-8")
+        self.assertIn('REVIEW_NOTES_PATH = Path(__file__).parent / "review-notes.txt"', uploader)
+        self.assertIn('/appStoreVersions/{version_id}/appStoreReviewDetail', uploader)
+        self.assertIn('/appStoreReviewDetails/{detail_id}', uploader)
+        self.assertIn('if platform is PLATFORMS["mac"]:', uploader)
+
 
 if __name__ == "__main__":
     unittest.main()

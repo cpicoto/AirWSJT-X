@@ -1,13 +1,19 @@
-AirWSJT-X is a ham (amateur) radio application for aircraft scatter communication on microwave frequencies (1296 MHz and above).
+AirWSJT-X is a ham (amateur) radio application for aircraft-scatter communication on microwave frequencies (1296 MHz and above). No login or account is required.
 
-To test the app:
-1. Launch AirWSJT-X — the app will show a dark-themed UI with three columns: Stations, Aircraft, and Decodes.
-2. Without WSJT-X running, the app will show "Disconnected" status in the top bar — this is expected.
-3. The Aircraft panel will populate with nearby aircraft data when an OpenSky Network or ADS-B Exchange account is configured.
-4. Full functionality requires WSJT-X (a separate amateur radio application) running on the same machine, and a Hamlib-compatible antenna rotator — this is specialized equipment not available for general testing.
+WHY THE NETWORK SERVER ENTITLEMENT IS REQUIRED
 
-The app requires no sign-in. Aircraft data source credentials are optional and enhance functionality but are not required to launch and explore the interface.
+The macOS app intentionally uses com.apple.security.network.server for its core WSJT-X integration. AirWSJT-X acts as a UDP protocol listener: its bundled helper binds UDP port 2237 and receives heartbeat, status, decode, and QSO Logged datagrams sent by the separate WSJT-X application. Those inbound datagrams drive the app's WSJT-X connection indicator, decoded-message list, frequency/mode state, and QSO workflow.
 
-This app is intended for licensed amateur radio operators (ham radio) and uses only standard network protocols (HTTP/HTTPS for aircraft data, UDP for WSJT-X communication on localhost).
+The default setup uses the WSJT-X multicast group 224.0.0.1 on UDP port 2237 so compatible logging applications may share the feed. Loopback or a local-network address can also be configured. AirWSJT-X accepts only WSJT-X/JTDX protocol messages and ignores unrelated application identifiers. It is not a general-purpose web, FTP, or file server. Removing com.apple.security.network.server prevents the sandboxed app from binding the UDP listener and breaks this advertised functionality.
 
-Demo video available at: https://ad7np.us/AirWSJT-X
+HOW TO VERIFY THE INBOUND LISTENER
+
+1. Install and launch WSJT-X 2.6 or later on the same Mac.
+2. In WSJT-X, open Settings > Reporting.
+3. Set UDP Server to 224.0.0.1 and UDP Server port to 2237, then apply the settings.
+4. Launch AirWSJT-X. The WSJT-X status at the top changes from Disconnected to Connected after heartbeat/status datagrams arrive.
+5. Start monitoring in WSJT-X. Decoded messages received over UDP appear in AirWSJT-X's Decodes panel.
+
+Without WSJT-X running, Disconnected is expected and the entitlement cannot be exercised. The rest of the interface remains available. Aircraft data can be shown after configuring an optional OpenSky Network or ADS-B Exchange account. A Hamlib-compatible rotator is optional specialized hardware.
+
+Product/demo information: https://ad7np.us/AirWSJT-X
