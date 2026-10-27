@@ -14,6 +14,7 @@ import requests
 CONFIG_PATH = os.path.expanduser("~/.openclaw/workspace/private/appstore-connect/config.json")
 BUNDLE_ID = "us.ad7np.airwsjt-x"
 METADATA_PATH = Path(__file__).parent / "metadata.json"
+REVIEW_NOTES_PATH = Path(__file__).parent / "review-notes.txt"
 SCREENSHOTS_ROOT = Path(__file__).parent / "screenshots"
 SCREENSHOTS_DIR = SCREENSHOTS_ROOT / "mac"
 
@@ -185,6 +186,25 @@ def update_app_info(app_id, metadata):
         except Exception:
             pass
 
+
+def update_review_notes(version_id):
+    """Publish the checked-in App Review notes for the macOS version."""
+    notes = REVIEW_NOTES_PATH.read_text(encoding="utf-8").strip()
+    if not notes:
+        raise ValueError(f"App Review notes are empty: {REVIEW_NOTES_PATH}")
+
+    detail = get(f"/appStoreVersions/{version_id}/appStoreReviewDetail")["data"]
+    detail_id = detail["id"]
+    patch(f"/appStoreReviewDetails/{detail_id}", {
+        "data": {
+            "type": "appStoreReviewDetails",
+            "id": detail_id,
+            "attributes": {"notes": notes},
+        }
+    })
+    print("Updated App Review notes")
+
+
 def upload_screenshot(loc_id, filepath, display_type, position):
     filepath = Path(filepath)
     file_size = filepath.stat().st_size
@@ -275,6 +295,10 @@ def main():
         return
 
     version_id = version["id"]
+
+    if platform is PLATFORMS["mac"]:
+        print("\n=== Updating App Review notes ===")
+        update_review_notes(version_id)
 
     print("\n=== Updating localization metadata ===")
     loc_id = get_or_create_localization(version_id, "en-US")
