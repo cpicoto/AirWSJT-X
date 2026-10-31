@@ -509,6 +509,7 @@ class NativeDDETests(unittest.TestCase):
         api, callback_type = _api()
         instance = wintypes.DWORD()
         advisories = []
+        advisories_by_conversation = {}
         raw_advisories = []
         callback_errors = []
 
@@ -523,7 +524,9 @@ class NativeDDETests(unittest.TestCase):
                 if copied != size:
                     callback_errors.append(f"DdeGetData copy: 0x{api.DdeGetLastError(instance):04x}")
                 raw_advisories.append(buffer.raw)
-                advisories.append(buffer.value.decode("ascii"))
+                text = buffer.value.decode("ascii")
+                advisories.append(text)
+                advisories_by_conversation.setdefault(conversation, []).append(text)
                 return 0x8000  # DDE_FACK
             return 0
 
@@ -531,10 +534,17 @@ class NativeDDETests(unittest.TestCase):
         self.assertEqual(api.DdeInitializeW(ctypes.byref(instance), cb, 0x10, 0), 0)
         handles = []
         conversation = None
+        listener_conversation = None
         try:
             handles = [api.DdeCreateStringHandleW(instance, s, 1200) for s in (service, TOPIC, ITEM)]
             conversation = api.DdeConnect(instance, handles[0], handles[1], None)
             self.assertTrue(conversation)
+            listener_conversation = api.DdeConnect(instance, handles[0], handles[1], None)
+            self.assertTrue(listener_conversation)
+            result = wintypes.DWORD()
+            for subscription in (conversation, listener_conversation):
+                self.assertTrue(api.DdeClientTransaction(None, 0, subscription, handles[2], 1,
+                                                        0x1038, 2000, ctypes.byref(result)))
 
             def request():
                 result = wintypes.DWORD()
@@ -560,19 +570,36 @@ class NativeDDETests(unittest.TestCase):
             self.assertEqual(request(), "SNACA314 AZ348.4 EL0.5" + SUFFIX)
             message = wintypes.MSG()
 
-            def wait_for_advice(text):
-                deadline = time.monotonic() + 3
-                while time.monotonic() < deadline and text not in advisories:
+            def wait_for_advice(text, timeout=3):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline and text not in advisories_by_conversation.get(listener_conversation, []):
                     while api.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
                         api.TranslateMessage(ctypes.byref(message))
                         api.DispatchMessageW(ctypes.byref(message))
                     time.sleep(0.01)
-                self.assertIn(text, advisories)
+                self.assertIn(text, advisories_by_conversation.get(listener_conversation, []))
                 self.assertIn(text.encode("ascii") + b"\0", raw_advisories)
                 self.assertEqual(callback_errors, [])
 
             wait_for_advice("SNACA314 AZ348.4 EL0.5" + SUFFIX)
+            # Keep polling one subscribed conversation faster than the quiet
+            # interval; an unrelated advise-only client must still get updates.
+            server.update("QXE2033", 349.1, 0.5, valid_for_s=30)
+            expected = "SNQXE2033 AZ349.1 EL0.5" + SUFFIX
+            deadline = time.monotonic() + 0.7
+            while time.monotonic() < deadline and expected not in advisories_by_conversation.get(listener_conversation, []):
+                self.assertEqual(request(), expected)
+                while api.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+                    api.TranslateMessage(ctypes.byref(message))
+                    api.DispatchMessageW(ctypes.byref(message))
+                time.sleep(0.05)
+            self.assertIn(expected, advisories_by_conversation.get(listener_conversation, []))
             advisories.clear()
+            advisories_by_conversation[listener_conversation].clear()
+            server.update("ACA314", 348.4, 0.5, valid_for_s=30)
+            wait_for_advice("SNACA314 AZ348.4 EL0.5" + SUFFIX)
+            advisories.clear()
+            advisories_by_conversation[listener_conversation].clear()
             # A late/reset hot-link client must receive a periodic current value
             # even if rounded angles have not changed.
             wait_for_advice("SNACA314 AZ348.4 EL0.5" + SUFFIX)
@@ -590,13 +617,18 @@ class NativeDDETests(unittest.TestCase):
             wait_for_advice("SNQXE2033 AZ350.2 EL13.1" + SUFFIX)
 
             advisories.clear()
+            advisories_by_conversation[listener_conversation].clear()
             wait_for_advice(NO_TARGET)
             self.assertEqual(request(), NO_TARGET)
             api.DdeDisconnect(conversation)
             conversation = None
+            api.DdeDisconnect(listener_conversation)
+            listener_conversation = None
         finally:
             if conversation:
                 api.DdeDisconnect(conversation)
+            if listener_conversation:
+                api.DdeDisconnect(listener_conversation)
             for handle in handles:
                 api.DdeFreeStringHandle(instance, handle)
             api.DdeUninitialize(instance)

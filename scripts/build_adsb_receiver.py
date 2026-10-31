@@ -10,6 +10,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _current_compiler_targets_x64() -> bool:
+    target_arch = os.environ.get("VSCMD_ARG_TGT_ARCH", os.environ.get("Platform", "")).lower()
+    return bool(shutil.which("cl")) and target_arch in ("x64", "amd64")
+
+
 def build(destination: Path | None = None) -> Path:
     source = Path(__file__).with_name("adsb_receiver.c")
     destination = destination or (ROOT / "sidecar" / "rtl-sdr" if (ROOT / "LICENSE").is_file()
@@ -21,7 +26,7 @@ def build(destination: Path | None = None) -> Path:
         command = ["cl", "/nologo", "/O2", "/W4", "/MT", str(source),
                    str(upstream / "demod_2400.c"), str(upstream / "icao_filter.c"),
                    f"/Fe:{target}", f"/Fo:{directory}\\"]
-        if shutil.which("cl"):
+        if _current_compiler_targets_x64():
             subprocess.run(command, cwd=directory, check=True)
         else:
             installer = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))

@@ -8,6 +8,7 @@ interface ReceiverDevice {
   serial: string;
   available: boolean;
   message: string | null;
+  supported_gains_db?: number[];
 }
 
 interface ReceiverStatus {
@@ -108,11 +109,6 @@ export default function LocalReceiver({ request, onChanged, onLog }: {
     if (!gainDirty) setGain(status?.gain_db == null ? "auto" : String(status.gain_db));
   }, [status?.gain_db, gainDirty]);
 
-  const loadGains = async (index: number) => {
-    const result = await request("rtlsdr_get_gains", { device_index: index }) as { supported_gains_db: number[] };
-    setGains(result.supported_gains_db);
-  };
-
   const discover = async () => {
     setBusy(true);
     setError("");
@@ -123,7 +119,8 @@ export default function LocalReceiver({ request, onChanged, onLog }: {
       const index = result.devices.some(device => device.index === selected)
         ? selected : result.devices[0]?.index ?? 0;
       setSelected(index);
-      if (result.devices.some(device => device.index === index && device.available)) await loadGains(index);
+      const device = result.devices.find(candidate => candidate.index === index);
+      setGains(device?.available ? device.supported_gains_db ?? [] : []);
     } catch (reason) {
       const message = errorText(reason);
       setError(message);
@@ -188,10 +185,10 @@ export default function LocalReceiver({ request, onChanged, onLog }: {
             onChange={event => {
               const index = Number(event.target.value);
               setSelected(index);
-              setGains([]);
+              const device = devices.find(candidate => candidate.index === index);
+              setGains(device?.available ? device.supported_gains_db ?? [] : []);
               setGain("auto");
               setGainDirty(false);
-              void loadGains(index).catch(reason => setError(`Cannot read tuner gains: ${errorText(reason)}`));
             }}>
             {devices.map(device => (
               <option key={device.index} value={device.index}>

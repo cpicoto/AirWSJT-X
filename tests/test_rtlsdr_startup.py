@@ -1,4 +1,3 @@
-import queue
 import unittest
 from unittest.mock import Mock, patch
 
@@ -9,7 +8,8 @@ class ReceiverStartupTests(unittest.TestCase):
     def setUp(self):
         self.state = patch.multiple(
             bridge, _rtlsdr_startup_attempted=False, _rtlsdr_startup_network_priority=None,
-            _rtlsdr_feed=None, _rtlsdr_device_index=None, _active_source="opensky",
+            _rtlsdr_feed=None, _rtlsdr_device_index=None, _rtlsdr_device_info=None,
+            _active_source="opensky",
             _source_priority=["opensky", "dump1090"], _rtlsdr_gain_db=None,
         )
         self.state.start()
@@ -20,7 +20,8 @@ class ReceiverStartupTests(unittest.TestCase):
 
     def test_present_starts_once_preserves_network_configuration_and_stop(self):
         with patch.object(bridge, "discover_devices", return_value=[
-            {"index": 0, "available": False}, {"index": 1, "available": True}
+            {"index": 0, "available": False, "supported_gains_db": []},
+            {"index": 1, "available": True, "supported_gains_db": [32.8]},
         ]), patch.object(bridge, "_start_rtlsdr_feed", return_value=True) as start, \
                 patch.object(bridge, "_stop_source") as stop, \
                 patch.object(bridge, "_write_source_priority") as write, \
@@ -54,20 +55,18 @@ class ReceiverStartupTests(unittest.TestCase):
                 self.assertEqual(bridge._source_priority, ["opensky", "dump1090"])
 
     def test_discovery_timeout_never_late_starts(self):
-        with patch.object(bridge.threading, "Thread") as thread, \
-                patch.object(bridge.queue, "Queue") as result, \
+        with patch.object(bridge, "discover_devices", side_effect=RuntimeError("USB discovery timed out")), \
                 patch.object(bridge, "_start_rtlsdr_feed") as start, \
                 patch.object(bridge, "_set_source_status"), \
                 patch.object(bridge, "_start_configured_airscout_feed"):
-            result.return_value.get.side_effect = queue.Empty
             bridge._auto_start_rtlsdr()
-            result.return_value.get.assert_called_once_with(timeout=3)
-            thread.return_value.start.assert_called_once()
             start.assert_not_called()
 
     def test_start_error_restores_network_and_snapshot(self):
         aircraft = [Mock()]
-        with patch.object(bridge, "discover_devices", return_value=[{"index": 0, "available": True}]), \
+        with patch.object(bridge, "discover_devices", return_value=[
+            {"index": 0, "available": True, "supported_gains_db": [32.8]}
+        ]), \
                 patch.object(bridge, "_start_rtlsdr_feed", return_value=False), \
                 patch.object(bridge, "_current_aircraft_snapshot", return_value=aircraft), \
                 patch.object(bridge, "_replace_aircraft_cache") as replace, \
@@ -105,7 +104,9 @@ class ReceiverStartupTests(unittest.TestCase):
     def test_startup_uses_existing_gain_without_enabling_dde_or_rotator(self):
         bridge._rtlsdr_gain_db = 32.8
         feed = Mock()
-        with patch.object(bridge, "discover_devices", return_value=[{"index": 0, "available": True}]), \
+        with patch.object(bridge, "discover_devices", return_value=[
+            {"index": 0, "available": True, "supported_gains_db": [32.8]}
+        ]), \
                 patch.object(bridge, "LocalRTLSDRFeed", return_value=feed) as constructor, \
                 patch.object(bridge, "_stop_source"), \
                 patch.object(bridge, "_emit_source_status"), \
@@ -114,6 +115,7 @@ class ReceiverStartupTests(unittest.TestCase):
                 patch.object(bridge, "_rotator") as rotor:
             bridge._auto_start_rtlsdr()
             self.assertEqual(constructor.call_args.kwargs["gain_db"], 32.8)
+            self.assertEqual(constructor.call_args.kwargs["device_info"]["index"], 0)
             feed.start.assert_called_once()
             dde.start.assert_not_called()
             rotor.set_position.assert_not_called()

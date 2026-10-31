@@ -58,7 +58,10 @@ class NativeDemodulatorTests(unittest.TestCase):
 
     def test_real_windows_job_and_stop(self):
         with patch("airwsjtx.rtlsdr.tools_directory", return_value=self.target):
-            feed = LocalRTLSDRFeed(0, lambda aircraft: None, lambda state, message: None)
+            feed = LocalRTLSDRFeed(
+                0, lambda aircraft: None, lambda state, message: None,
+                device_info={"index": 0, "available": True, "supported_gains_db": []},
+            )
             feed.start()
             process = feed._process
             try:
@@ -88,7 +91,8 @@ class NativeDemodulatorTests(unittest.TestCase):
         script = (
             "import sys,time; from pathlib import Path; import airwsjtx.rtlsdr as r; "
             "r.tools_directory=lambda:Path(sys.argv[1]); "
-            "feed=r.LocalRTLSDRFeed(0,lambda aircraft:None,lambda state,msg:None); "
+            "feed=r.LocalRTLSDRFeed(0,lambda aircraft:None,lambda state,msg:None, "
+            "device_info={'index':0,'available':True,'supported_gains_db':[]}); "
             "feed.start(); print(feed._process.pid,flush=True); time.sleep(30)"
         )
         parent = subprocess.Popen(

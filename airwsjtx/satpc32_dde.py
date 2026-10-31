@@ -125,15 +125,15 @@ class SatPC32DDE:
         handles = []
         registered = False
         initialized = False
-        last_request_at = float("-inf")
+        requested_at: dict[int, float] = {}
         conversations = set()
 
         def callback(kind, fmt, conversation, topic, item, data, arg1, arg2):
-            nonlocal last_request_at
             if kind == 0x8072:  # XTYP_CONNECT_CONFIRM
                 conversations.add(conversation)
             elif kind == 0x80C2:  # XTYP_DISCONNECT
                 conversations.discard(conversation)
+                requested_at.pop(conversation, None)
             topic_ok = len(handles) == 3 and api.DdeCmpStringHandles(topic, handles[1]) == 0
             item_ok = len(handles) == 3 and api.DdeCmpStringHandles(item, handles[2]) == 0
             if kind == 0x1062:  # XTYP_CONNECT: hsz1 topic, hsz2 service
@@ -142,7 +142,9 @@ class SatPC32DDE:
                 return int(topic_ok and item_ok and fmt == 1)
             if kind in (0x20B0, 0x2022) and topic_ok and item_ok and fmt == 1:
                 if kind == 0x20B0:
-                    last_request_at = time.monotonic()
+                    requested_at[conversation] = time.monotonic()
+                elif time.monotonic() - requested_at.get(conversation, float("-inf")) < 0.2:
+                    return 0
                 # XTYP_REQUEST / XTYP_ADVREQ, CF_TEXT, NUL terminated.
                 value = self.status()["target"].encode("ascii") + b"\0"
                 buffer = ctypes.create_string_buffer(value)
@@ -180,13 +182,8 @@ class SatPC32DDE:
                 text = self.status()["target"]
                 # Refresh existing and newly subscribed clients even when rounded
                 # angles are unchanged; requests always read the current value.
-                # Do not interleave unsolicited DATA with a just-serviced
-                # synchronous request. Some 32-bit DDEML clients invalidate the
-                # request handle when request and advise DATA arrive together.
-                # Polling already gets current data; advise-only clients still
-                # receive changes and the heartbeat after this short quiet gap.
                 now = time.monotonic()
-                if now - last_request_at >= 0.2 and (text != previous or now - advised_at >= 1.0):
+                if text != previous or now - advised_at >= 1.0:
                     if not api.DdePostAdvise(instance, handles[1], handles[2]):
                         raise RuntimeError(f"DDE advise failed: 0x{api.DdeGetLastError(instance):04x}")
                     previous = text

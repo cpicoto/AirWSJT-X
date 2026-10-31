@@ -27,7 +27,7 @@ jobs:
           python -m pip install pyinstaller certifi
           python scripts/install_rtlsdr.py
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          & $env:ComSpec /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && python -m unittest tests.test_rtlsdr_demodulator tests.test_adsb_native -v"
+          & $env:ComSpec /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && python -m unittest tests.test_rtlsdr_demodulator tests.test_adsb_native tests.test_satpc32_dde -v"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm --clean --distpath src-tauri/binaries sidecar/airwsjtx_bridge.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

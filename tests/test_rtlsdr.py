@@ -1,21 +1,20 @@
+import ctypes
 import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from airwsjtx.rtlsdr import LocalRTLSDRFeed, discover_devices, reception_message, support_error, tools_directory, validate_gain
+from airwsjtx.rtlsdr import LocalRTLSDRFeed, _list_devices, discover_devices, reception_message, support_error, tools_directory, validate_gain
 from sidecar import airwsjtx_bridge as bridge
 from tests.test_adsb import EVEN, ODD, avr
 
+DEVICE_INFO = {"index": 0, "available": True, "supported_gains_db": [0.0, 20.7, 32.8, 49.6]}
+
 
 class ReceiverTests(unittest.TestCase):
-    def setUp(self):
-        gains = patch("airwsjtx.rtlsdr.tuner_gains", return_value=[0.0, 20.7, 32.8, 49.6])
-        gains.start()
-        self.addCleanup(gains.stop)
-
     def test_gain_validation_and_stale_reception_status(self):
         self.assertIsNone(validate_gain(None, [0.0, 20.7]))
         self.assertEqual(validate_gain(20.7, [0.0, 20.7]), 20.7)
@@ -28,8 +27,9 @@ class ReceiverTests(unittest.TestCase):
 
     def test_gain_list_available_before_start_without_changing_sources(self):
         with patch.object(bridge, "_rtlsdr_feed", None), \
-                patch.object(bridge, "discover_devices", return_value=[{"index": 0}]), \
-                patch.object(bridge, "tuner_gains", return_value=[0.0, 32.8]), \
+                patch.object(bridge, "discover_devices", return_value=[
+                    {**DEVICE_INFO, "supported_gains_db": [0.0, 32.8]}
+                ]), \
                 patch.object(bridge, "_ok") as reply, \
                 patch.object(bridge, "_set_aircraft_sources") as sources:
             bridge.handle({"id": "gains", "method": "rtlsdr_get_gains", "params": {"device_index": 0}})
@@ -39,8 +39,9 @@ class ReceiverTests(unittest.TestCase):
     def test_start_manual_gain_validates_before_reconfiguring(self):
         with patch.multiple(bridge, _source_priority=["opensky"], _rtlsdr_device_index=None,
                             _rtlsdr_gain_db=None, _rtlsdr_feed=None), \
-                patch.object(bridge, "discover_devices", return_value=[{"index": 0}]), \
-                patch.object(bridge, "tuner_gains", return_value=[32.8]), \
+                patch.object(bridge, "discover_devices", return_value=[
+                    {**DEVICE_INFO, "supported_gains_db": [32.8]}
+                ]), \
                 patch.object(bridge, "_set_aircraft_sources") as sources, \
                 patch.object(bridge, "_emit"):
             bridge.handle({"id": "invalid", "method": "rtlsdr_start", "params": {"device_index": 0, "gain_db": 33}})
@@ -53,11 +54,10 @@ class ReceiverTests(unittest.TestCase):
         process = Mock(stdout=io.StringIO(), stderr=io.StringIO())
         process.poll.return_value = None
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
-                patch("airwsjtx.rtlsdr.discover_devices", return_value=[{"index": 0}]), \
                 patch("airwsjtx.rtlsdr.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process) as popen, \
                 patch("airwsjtx.rtlsdr._ReceiverJob"):
-            feed = LocalRTLSDRFeed(0, Mock(), Mock(), gain_db=32.8)
+            feed = LocalRTLSDRFeed(0, Mock(), Mock(), gain_db=32.8, device_info=DEVICE_INFO)
             feed.start()
             try:
                 self.assertEqual(popen.call_args.args[0][-2:], ["-g", "32.8"])
@@ -104,12 +104,69 @@ class ReceiverTests(unittest.TestCase):
         with patch("airwsjtx.rtlsdr.sys._MEIPASS", "installed-runtime", create=True):
             self.assertEqual(tools_directory(), Path("installed-runtime") / "rtl-sdr")
 
+    def test_discovery_timeout_does_not_wait_for_a_blocked_usb_probe(self):
+        started = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+
+        def blocked_probe():
+            started.set()
+            try:
+                release.wait()
+                return []
+            finally:
+                completed.set()
+
+        try:
+            with patch("airwsjtx.rtlsdr._discover_devices", side_effect=blocked_probe):
+                with self.assertRaisesRegex(RuntimeError, "timed out after 0.01 seconds"):
+                    discover_devices(timeout_s=0.01)
+                self.assertTrue(started.wait(1))
+        finally:
+            release.set()
+            self.assertTrue(completed.wait(1))
+
+    def test_device_availability_requires_open_probe_and_closes_successful_probe(self):
+        library = Mock()
+        library.rtlsdr_get_device_count.return_value = 2
+        library.rtlsdr_get_device_name.side_effect = [b"Busy", b"Available"]
+
+        def usb_strings(index, manufacturer, product, serial):
+            manufacturer.value = b"RTL"
+            product.value = b"RTL2838"
+            serial.value = str(index).encode("ascii")
+            return 0
+
+        library.rtlsdr_get_device_usb_strings.side_effect = usb_strings
+
+        def open_device(pointer, index):
+            if index == 0:
+                return -3
+            ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.c_void_p(index + 1)
+            return 0
+
+        def gains(_device, values):
+            if values is None:
+                return 2
+            values[0], values[1] = 0, 328
+            return 2
+
+        library.rtlsdr_open.side_effect = open_device
+        library.rtlsdr_get_tuner_gains.side_effect = gains
+        devices = _list_devices(library)
+        self.assertFalse(devices[0]["available"])
+        self.assertIn("Cannot open", devices[0]["message"])
+        self.assertTrue(devices[1]["available"])
+        self.assertEqual(devices[1]["supported_gains_db"], [0.0, 32.8])
+        library.rtlsdr_close.assert_called_once()
+
     def test_no_device_does_not_spawn(self):
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
-                patch("airwsjtx.rtlsdr.discover_devices", return_value=[]), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen") as popen:
-            with self.assertRaisesRegex(RuntimeError, "not found"):
-                LocalRTLSDRFeed(0, Mock(), Mock()).start()
+            with self.assertRaisesRegex(RuntimeError, "discovered and available"):
+                LocalRTLSDRFeed(0, Mock(), Mock(), device_info={
+                    "index": 0, "available": False, "supported_gains_db": [],
+                }).start()
             popen.assert_not_called()
 
     def test_owned_process_native_frames_job_and_stop(self):
@@ -121,10 +178,10 @@ class ReceiverTests(unittest.TestCase):
         status = Mock()
         feed = LocalRTLSDRFeed(0, Mock(), status)
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
-                patch("airwsjtx.rtlsdr.discover_devices", return_value=[{"index": 0}]), \
                 patch("airwsjtx.rtlsdr.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process) as popen, \
                 patch("airwsjtx.rtlsdr._ReceiverJob") as job:
+            feed = LocalRTLSDRFeed(0, Mock(), status, device_info=DEVICE_INFO)
             feed.start()
             try:
                 feed._threads[0].join(timeout=2)
@@ -190,10 +247,10 @@ class ReceiverTests(unittest.TestCase):
         process = Mock(stdout=io.StringIO(), stderr=io.StringIO())
         process.poll.return_value = None
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
-                patch("airwsjtx.rtlsdr.discover_devices", return_value=[{"index": 0}]), \
                 patch("airwsjtx.rtlsdr.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process), \
                 patch("airwsjtx.rtlsdr._ReceiverJob", side_effect=OSError("job failed")):
+            feed = LocalRTLSDRFeed(0, Mock(), Mock(), device_info=DEVICE_INFO)
             with self.assertRaisesRegex(OSError, "job failed"):
                 feed.start()
             process.terminate.assert_called_once()
@@ -202,7 +259,9 @@ class ReceiverTests(unittest.TestCase):
     def test_bridge_validates_device_and_preserves_network_priority(self):
         with patch.multiple(bridge, _source_priority=["dump1090", "opensky"],
                             _rtlsdr_feed=None, _rtlsdr_device_index=0), \
-                patch.object(bridge, "discover_devices", return_value=[{"index": 2}]), \
+                patch.object(bridge, "discover_devices", return_value=[{
+                    **DEVICE_INFO, "index": 2,
+                }]), \
                 patch.object(bridge, "_set_aircraft_sources") as sources, \
                 patch.object(bridge, "_emit") as emit:
             for index in (-1, True, "2", 0):

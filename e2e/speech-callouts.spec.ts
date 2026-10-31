@@ -268,6 +268,7 @@ test.describe("Speech callouts — Linux native fallback", () => {
   test("uses native pacing and reports cancellation errors in the app log", async ({ page }) => {
     await page.addInitScript(() => Object.assign(window, { __mockSpeechStopError: "Cannot stop espeak-ng: access denied" }));
     await page.goto("/");
+    await page.getByLabel("Rotator output", { exact: true }).selectOption("hamlib");
     await page.getByRole("button", { name: "Manual", exact: true }).click();
     await page.evaluate(() => {
       const emit = (window as unknown as Record<string, (e: string, p: string) => void>).__tauriMockEmit;

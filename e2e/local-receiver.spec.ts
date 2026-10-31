@@ -175,8 +175,10 @@ test("missing receiver is explicit and never starts a fake feed", async ({ page 
 test("discover selection start counters stop and network return", async ({ page }) => {
   await page.evaluate(() => {
     Object.assign(window, { __mockReceiverDevices: { devices: [
-      { index: 0, name: "RTL2838", product: "NESDR", serial: "one", available: true, message: null },
-      { index: 1, name: "RTL2838", product: "NESDR", serial: "two", available: true, message: null },
+      { index: 0, name: "RTL2838", product: "NESDR", serial: "one", available: true, message: null,
+        supported_gains_db: [0, 20.7, 32.8, 49.6] },
+      { index: 1, name: "RTL2838", product: "NESDR", serial: "two", available: true, message: null,
+        supported_gains_db: [0, 20.7, 32.8, 49.6] },
     ] } });
   });
   await page.getByRole("button", { name: "Discover USB receivers", exact: true }).click();
@@ -219,7 +221,8 @@ test("discover selection start counters stop and network return", async ({ page 
 
 test("manual gain can be selected before receiver start", async ({ page }) => {
   await page.evaluate(() => Object.assign(window, { __mockReceiverDevices: { devices: [
-    { index: 0, name: "RTL2838", product: "NESDR", serial: "one", available: true, message: null },
+    { index: 0, name: "RTL2838", product: "NESDR", serial: "one", available: true, message: null,
+      supported_gains_db: [0, 20.7, 32.8, 49.6] },
   ] } }));
   await page.getByRole("button", { name: "Discover USB receivers", exact: true }).click();
   await page.getByLabel("Tuner gain", { exact: true }).selectOption("32.8");

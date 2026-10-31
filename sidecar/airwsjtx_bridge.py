@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from airwsjtx.airscout import ADSBExchangeFeed, Aircraft, Dump1090Feed, OpenSkyFeed, SourceRateLimit
-from airwsjtx.rtlsdr import LocalRTLSDRFeed, discover_devices, tuner_gains, validate_gain, support_error as rtlsdr_support_error
+from airwsjtx.rtlsdr import LocalRTLSDRFeed, discover_devices, validate_gain, support_error as rtlsdr_support_error
 from airwsjtx.callsign import (
     DEFAULT_DB_MANIFEST_URL,
     check_db_update as callsign_check_db_update,
@@ -58,6 +58,7 @@ _dump1090_port: int = 30003
 _rtlsdr_feed: LocalRTLSDRFeed | None = None
 _rtlsdr_last_snapshot: dict[str, object] = {}
 _rtlsdr_device_index: int | None = None
+_rtlsdr_device_info: dict[str, object] | None = None
 _rtlsdr_gain_db: float | None = None
 _rtlsdr_startup_attempted = False
 _rtlsdr_startup_network_priority: list[str] | None = None
@@ -368,7 +369,7 @@ def _parse_tracks(raw: list[dict]) -> list[AircraftTrack]:
 
 
 def handle(msg: dict) -> None:
-    global _rtlsdr_device_index, _rtlsdr_gain_db, _rtlsdr_startup_attempted
+    global _rtlsdr_device_index, _rtlsdr_device_info, _rtlsdr_gain_db, _rtlsdr_startup_attempted
     method = msg.get("method", "")
     params = msg.get("params", {})
     id_ = msg.get("id")
@@ -526,9 +527,10 @@ def handle(msg: dict) -> None:
                 gains = _rtlsdr_feed.supported_gains_db
             else:
                 devices = discover_devices()
-                if not any(device["index"] == index for device in devices):
+                device = next((device for device in devices if device["index"] == index), None)
+                if device is None or device["available"] is not True:
                     raise ValueError("Selected RTL-SDR receiver is no longer attached")
-                gains = tuner_gains(index)
+                gains = device["supported_gains_db"]
             _ok(id_, {"supported_gains_db": gains})
 
         elif method == "rtlsdr_auto_start":
@@ -540,11 +542,13 @@ def handle(msg: dict) -> None:
             if isinstance(index, bool) or not isinstance(index, int) or index < 0:
                 raise ValueError("device_index must be a non-negative integer")
             devices = discover_devices()
-            if not any(device["index"] == index for device in devices):
+            device = next((device for device in devices if device["index"] == index), None)
+            if device is None or device["available"] is not True:
                 raise ValueError("No accessible RTL-SDR receiver found. Check USB connection and the WinUSB driver for Bulk-In Interface 0; close other SDR apps.")
             requested_gain = params.get("gain_db")
-            gain = validate_gain(requested_gain, tuner_gains(index)) if requested_gain is not None else None
+            gain = validate_gain(requested_gain, device["supported_gains_db"])
             _rtlsdr_device_index = index
+            _rtlsdr_device_info = device
             _rtlsdr_gain_db = gain
             with _source_priority_lock:
                 next_priority = ["rtlsdr"] + [source for source in _source_priority if source != "rtlsdr"]
@@ -943,7 +947,10 @@ def _start_rtlsdr_feed() -> bool:
         _emit_aircraft_update()
         _emit({"event": "rtlsdr_update", "data": feed.snapshot()})
 
-    feed = LocalRTLSDRFeed(_rtlsdr_device_index, on_update, on_status, gain_db=_rtlsdr_gain_db)
+    feed = LocalRTLSDRFeed(
+        _rtlsdr_device_index, on_update, on_status,
+        gain_db=_rtlsdr_gain_db, device_info=_rtlsdr_device_info,
+    )
     _rtlsdr_feed = feed
     with _source_status_lock:
         _active_source = "rtlsdr"
@@ -961,30 +968,23 @@ def _start_rtlsdr_feed() -> bool:
 
 
 def _auto_start_rtlsdr() -> None:
-    global _rtlsdr_startup_attempted, _rtlsdr_device_index
+    global _rtlsdr_startup_attempted, _rtlsdr_device_index, _rtlsdr_device_info
     global _rtlsdr_startup_network_priority, _source_priority, _active_source
     if _rtlsdr_startup_attempted:
         return
     _rtlsdr_startup_attempted = True
     if rtlsdr_support_error() or _rtlsdr_feed is not None:
         return
-    result: queue.Queue = queue.Queue(maxsize=1)
-
-    def discover() -> None:
-        try:
-            result.put((discover_devices(), None))
-        except (OSError, RuntimeError) as error:
-            result.put((None, str(error)))
-
-    threading.Thread(target=discover, daemon=True, name="rtl-startup-discovery").start()
     try:
-        devices, error = result.get(timeout=3)
-    except queue.Empty:
-        devices, error = None, "USB discovery timed out after 3 seconds; use Discover to retry."
-    available = next((device for device in devices or [] if device["available"]), None)
-    if error or available is None:
-        _set_source_status("rtlsdr", "error" if error else "stopped",
-                           error or "No accessible RTL-SDR attached; configured network sources remain available.")
+        devices = discover_devices()
+    except (OSError, RuntimeError) as error:
+        _set_source_status("rtlsdr", "error", str(error))
+        _start_configured_airscout_feed()
+        return
+    available = next((device for device in devices if device["available"]), None)
+    if available is None:
+        _set_source_status("rtlsdr", "stopped",
+                           "No accessible RTL-SDR attached; configured network sources remain available.")
         _start_configured_airscout_feed()
         return
     with _source_priority_lock:
@@ -993,6 +993,7 @@ def _auto_start_rtlsdr() -> None:
     previous_source = _active_source
     previous_aircraft = _current_aircraft_snapshot()
     _rtlsdr_device_index = int(available["index"])
+    _rtlsdr_device_info = available
     if _start_rtlsdr_feed():
         if previous_source and previous_source != "rtlsdr":
             _stop_source(previous_source)

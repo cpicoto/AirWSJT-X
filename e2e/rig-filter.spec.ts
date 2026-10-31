@@ -117,16 +117,20 @@ test("poll rates can be saved independently of secrets and enforce provider mini
   await expect(adsb).toHaveValue("30");
   await openSky.fill("9");
   await page.getByRole("button", { name: "Set OpenSky poll rate", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("at least 10");
+  await expect(page.getByText("Enter a whole-number poll interval of at least 10 seconds.", { exact: true })).toBeVisible();
   await openSky.fill("10");
   await page.getByRole("button", { name: "Set OpenSky poll rate", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("10 seconds");
+  await expect(page.getByText(
+    "OpenSky poll interval saved: 10 seconds. Rate-limit backoff still applies.", { exact: true },
+  )).toBeVisible();
   await adsb.fill("4");
   await page.getByRole("button", { name: "Set ADS-B Exchange poll rate", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("at least 5");
+  await expect(page.getByText("Enter a whole-number poll interval of at least 5 seconds.", { exact: true })).toBeVisible();
   await adsb.fill("5");
   await page.getByRole("button", { name: "Set ADS-B Exchange poll rate", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("5 seconds");
+  await expect(page.getByText(
+    "ADS-B Exchange poll interval saved: 5 seconds. Rate-limit backoff still applies.", { exact: true },
+  )).toBeVisible();
   await expect(page.getByLabel("OpenSky Client Secret", { exact: true })).toHaveValue("");
   await page.getByText("Aircraft accounts", { exact: true }).click();
   await page.getByText("Aircraft accounts", { exact: true }).click();
@@ -180,7 +184,7 @@ test("reports account save errors without claiming success", async ({ page }) =>
   await page.getByLabel("OpenSky Client ID", { exact: true }).fill("test-client");
   await page.getByLabel("OpenSky Client Secret", { exact: true }).fill("fake-test-secret");
   await page.getByRole("button", { name: "Save OpenSky", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("Aircraft backend is not ready");
+  await expect(page.getByText("Aircraft backend is not ready", { exact: true })).toBeVisible();
   await expect(page.getByText("OpenSky (account saved)", { exact: true })).not.toBeVisible();
 });
 

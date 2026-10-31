@@ -77,6 +77,8 @@ test("last WSJT-X DX is restored until fresh WSJT-X data arrives", async ({ page
   await ready(page);
   await wsjtx(page, { dx_call: "K7DX", dx_grid: "CN90AA" });
   await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN90AA");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("airwsjtx.lastDx")))
+    .toContain('"call":"K7DX"');
   await page.reload();
   await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7DX");
   await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN90AA");

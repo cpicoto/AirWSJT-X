@@ -7,6 +7,7 @@ from collections import deque
 import os
 import math
 import json
+import queue
 from pathlib import Path
 import platform
 import subprocess
@@ -32,7 +33,27 @@ def support_error() -> str | None:
     return None
 
 
-def discover_devices() -> list[dict[str, object]]:
+def discover_devices(timeout_s: float = 3.0) -> list[dict[str, object]]:
+    result: queue.Queue[tuple[list[dict[str, object]] | None, Exception | None]] = queue.Queue(maxsize=1)
+
+    def probe() -> None:
+        try:
+            result.put((_discover_devices(), None))
+        except Exception as error:
+            result.put((None, error))
+
+    threading.Thread(target=probe, daemon=True, name="rtl-usb-discovery").start()
+    try:
+        devices, error = result.get(timeout=timeout_s)
+    except queue.Empty as error:
+        raise RuntimeError(f"RTL-SDR USB discovery timed out after {timeout_s:g} seconds.") from error
+    if error:
+        raise error
+    assert devices is not None
+    return devices
+
+
+def _discover_devices() -> list[dict[str, object]]:
     error = support_error()
     if error:
         raise RuntimeError(error)
@@ -57,57 +78,47 @@ def _list_devices(library: ctypes.CDLL) -> list[dict[str, object]]:
     library.rtlsdr_get_device_usb_strings.argtypes = [
         ctypes.c_uint32, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
     ]
+    library.rtlsdr_open.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint32]
+    library.rtlsdr_close.argtypes = [ctypes.c_void_p]
+    library.rtlsdr_get_tuner_gains.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
     devices = []
     for index in range(library.rtlsdr_get_device_count()):
         manufacturer, product, serial = (ctypes.create_string_buffer(256) for _ in range(3))
-        code = library.rtlsdr_get_device_usb_strings(index, manufacturer, product, serial)
+        descriptor_code = library.rtlsdr_get_device_usb_strings(index, manufacturer, product, serial)
+        device = ctypes.c_void_p()
+        gains: list[float] = []
+        open_code = library.rtlsdr_open(ctypes.byref(device), index) if descriptor_code == 0 else -1
+        message = None
+        if descriptor_code != 0:
+            message = (
+                "Cannot access USB descriptors. The receiver may be busy or its WinUSB driver missing. "
+                "Close the app using this dongle; do not replace drivers without checking the device."
+            )
+        elif open_code < 0:
+            message = (
+                f"Cannot open RTL-SDR receiver ({open_code}). Close other SDR apps and check USB/WinUSB."
+            )
+        else:
+            try:
+                count = library.rtlsdr_get_tuner_gains(device, None)
+                if 0 < count <= 256:
+                    values = (ctypes.c_int * count)()
+                    actual = library.rtlsdr_get_tuner_gains(device, values)
+                    if actual == count:
+                        gains = sorted(set(value / 10 for value in values))
+            finally:
+                library.rtlsdr_close(device)
         devices.append({
             "index": index,
             "name": library.rtlsdr_get_device_name(index).decode("utf-8", errors="replace"),
             "manufacturer": manufacturer.value.decode("utf-8", errors="replace"),
             "product": product.value.decode("utf-8", errors="replace"),
             "serial": serial.value.decode("utf-8", errors="replace"),
-            "available": code == 0,
-            "message": None if code == 0 else (
-                "Cannot access USB descriptors. The receiver may be busy or its WinUSB driver missing. "
-                "Close the app using this dongle; do not replace drivers without checking the device."
-            ),
+            "available": descriptor_code == 0 and open_code == 0,
+            "supported_gains_db": gains,
+            "message": message,
         })
     return devices
-
-
-def tuner_gains(device_index: int) -> list[float]:
-    """Query actual tuner steps while the receiver is stopped; always close USB."""
-    error = support_error()
-    if error:
-        raise RuntimeError(error)
-    directory = tools_directory()
-    with os.add_dll_directory(str(directory)):
-        library = ctypes.CDLL(str(directory / "rtlsdr.dll"))
-    device = ctypes.c_void_p()
-    library.rtlsdr_open.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint32]
-    library.rtlsdr_close.argtypes = [ctypes.c_void_p]
-    library.rtlsdr_get_tuner_gains.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
-    try:
-        code = library.rtlsdr_open(ctypes.byref(device), device_index)
-        if code < 0:
-            raise RuntimeError(f"Cannot open RTL-SDR to query gain ({code}). Close other SDR apps and check USB/WinUSB.")
-        count = library.rtlsdr_get_tuner_gains(device, None)
-        if not 0 < count <= 256:
-            raise RuntimeError(f"RTL-SDR returned an invalid tuner gain count: {count}")
-        values = (ctypes.c_int * count)()
-        actual = library.rtlsdr_get_tuner_gains(device, values)
-        if actual != count:
-            raise RuntimeError("RTL-SDR tuner gain list changed during discovery")
-        return sorted(set(value / 10 for value in values))
-    finally:
-        if device.value:
-            library.rtlsdr_close(device)
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.FreeLibrary.argtypes = [wintypes.HMODULE]
-        kernel.FreeLibrary.restype = wintypes.BOOL
-        if not kernel.FreeLibrary(library._handle):
-            raise ctypes.WinError(ctypes.get_last_error())
 
 
 def validate_gain(value: object, supported: list[float]) -> float | None:
@@ -173,12 +184,15 @@ class _ReceiverJob:
 
 class LocalRTLSDRFeed:
     def __init__(self, device_index: int, on_update: Callable[[list[Aircraft]], None],
-                 on_status: Callable[[str, str | None], None], gain_db: float | None = None) -> None:
+                 on_status: Callable[[str, str | None], None], gain_db: float | None = None,
+                 device_info: dict[str, object] | None = None) -> None:
         self.device_index = device_index
         self.on_update = on_update
         self.on_status = on_status
         self.gain_db = gain_db
-        self.supported_gains_db: list[float] = []
+        self.device_info = device_info
+        gains = device_info.get("supported_gains_db", []) if device_info else []
+        self.supported_gains_db = list(gains) if isinstance(gains, list) else []
         self.decoder = ADSBDecoder()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -221,10 +235,9 @@ class LocalRTLSDRFeed:
             raise RuntimeError(error)
         if self._process is not None:
             raise RuntimeError("Local receiver is already started")
-        devices = discover_devices()
-        if not any(d["index"] == self.device_index for d in devices):
-            raise RuntimeError("RTL-SDR receiver not found. Attach it and discover again.")
-        self.supported_gains_db = tuner_gains(self.device_index)
+        if (self.device_info is None or self.device_info.get("index") != self.device_index
+                or self.device_info.get("available") is not True):
+            raise RuntimeError("RTL-SDR receiver must be discovered and available before starting.")
         self.gain_db = validate_gain(self.gain_db, self.supported_gains_db)
         self._status("connecting", "Opening RTL-SDR at 1090 MHz (receive only, bias tee off).")
         try:
