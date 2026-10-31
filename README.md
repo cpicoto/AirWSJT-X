@@ -212,6 +212,12 @@ from **true north at MY station (A)**, not aircraft heading or the DX bearing.
 vacuum/astronomical satellite elevation calculation. Values have one decimal
 place with an ASCII decimal point; north is `AZ0.0`, never a wrapped `AZ360.0`.
 The DDE panel shows the exact item text and station reference. A retained
+published target aligns both dial hands in DDE mode and suppresses Hamlib
+feedback deltas. These hands visualize the published command, not measured
+PST/antenna position or confirmation of movement. No valid published target
+shows an invalid readout rather than invented feedback; Hamlib retains measured
+feedback and target deltas.
+A retained
 stale lock can show old coordinates while the transmitted item is
 `** NO SATELLITE **`; it does not transmit those frozen display values.
 Enabling DDE publishes an already-selected, valid position immediately, without

@@ -9,6 +9,7 @@ interface RotatorPanelProps {
   targetInvalid?: boolean;
   connected: boolean;
   hamlibEnabled?: boolean;
+  publishedTargetOnly?: boolean;
   dxAz?: number | null;
   dxLabel?: string | null;
   myLabel?: string | null;
@@ -355,6 +356,7 @@ export default function RotatorPanel({
   mode = "rotator",
   onSetPosition, onStop, onPark, onConnect, onSync, syncDisabled = false, clicksBlocked = false, onBlockedClick,
   hamlibEnabled = true,
+  publishedTargetOnly = false,
 }: RotatorPanelProps) {
   const [manualAz, setManualAz] = useState(currentAz.toFixed(1));
   const [manualEl, setManualEl] = useState(currentEl.toFixed(1));
@@ -413,7 +415,9 @@ export default function RotatorPanel({
   const speechSupported = isSpeechSupported();
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div data-testid="rotator-dials" data-current-az={currentAz} data-current-el={currentEl}
+      data-target-az={targetAz ?? ""} data-target-el={targetEl ?? ""}
+      style={{ display: "flex", flexDirection: "column", gap: 6 }}>
 
       {/* Connection bar */}
       {hamlibEnabled && !connected && (
@@ -497,7 +501,10 @@ export default function RotatorPanel({
             </div>
           </div>
 
-          {!targetInvalid && (azErr !== null || elErr !== null) && (
+          {publishedTargetOnly && <div role="status" aria-label="DDE dial reference" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+            {targetInvalid ? "No valid published DDE target." : "Hands show published DDE target; no measured PST position."}
+          </div>}
+          {!publishedTargetOnly && !targetInvalid && (azErr !== null || elErr !== null) && (
             <div style={{
               display: "flex",
               gap: 10,

@@ -13,7 +13,7 @@ export interface FloatState {
   selectedAircraftId: string | null;
   stationLocator: string | null;
   stationAltitudeM: number;
-  rotatorAz: number;
+  rotatorAz: number | null;
   rotatorEl: number;
   targetAz: number | null;
   targetEl: number | null;

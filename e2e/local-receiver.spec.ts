@@ -56,6 +56,43 @@ test("failed output switch shows error and keeps backend mode", async ({ page })
   await expect(page.getByLabel("Rotator output", { exact: true })).toHaveValue("off");
 });
 
+test("DDE hands use published target without pretending to measure PST feedback", async ({ page }) => {
+  await page.evaluate(() => Object.assign(window, {
+    __mockOutputMode: "dde",
+    __mockDDEStatus: { supported: true, enabled: true, service: "SatPC32",
+      topic: "SatPcDdeConv", item: "SatPcDdeItem",
+      target: "SNN4368V AZ294.9 EL1.7 UP0 UMUSB DN0 DMUSB MA0.0", error: null },
+  }));
+  const dials = page.getByTestId("rotator-dials");
+  await expect(dials).toHaveAttribute("data-current-az", "294.9");
+  await expect(dials).toHaveAttribute("data-target-az", "294.9");
+  await expect(dials).toHaveAttribute("data-current-el", "1.7");
+  await expect(dials).toHaveAttribute("data-target-el", "1.7");
+  await expect(page.getByLabel("DDE dial reference")).toContainText("no measured PST position");
+  await expect(page.getByText(/ΔAZ/)).toHaveCount(0);
+  await expect(page.getByText(/ΔEL/)).toHaveCount(0);
+  await page.evaluate(() => {
+    const mock = window as unknown as { __mockDDEStatus: { target: string } };
+    mock.__mockDDEStatus.target = "** NO SATELLITE **";
+  });
+  await expect(dials).toHaveAttribute("data-target-az", "");
+  await expect(dials).toHaveAttribute("data-target-el", "");
+  await expect(page.getByLabel("DDE dial reference")).toContainText("No valid published DDE target");
+  await page.getByLabel("Rotator output", { exact: true }).selectOption("hamlib");
+  await page.evaluate(() => {
+    const emit = (window as unknown as { __tauriMockEmit: (event: string, payload: string) => void }).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({ event: "rotator_position", data: { azimuth: 280, elevation: 3 } }));
+    emit("sidecar-message", JSON.stringify({ event: "plane_locked", data: {
+      icao24: "abc123", callsign: "TEST", altitude_ft: 10000, az_a: 294.9, el_a: 1.7,
+      az_b: 0, el_b: 0, scatter_score: 0.8, off_path_deg: 0, state: "tracking",
+    } }));
+  });
+  await expect(dials).toHaveAttribute("data-current-az", "280");
+  await expect(dials).toHaveAttribute("data-target-az", "294.9");
+  await expect(page.getByText(/ΔAZ -14.9/)).toBeVisible();
+  await expect(page.getByText(/ΔEL \+1.3/)).toBeVisible();
+});
+
 test("local locked position becomes stale at 120s using position provenance", async ({ page }) => {
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   await page.reload({ waitUntil: "domcontentloaded" });

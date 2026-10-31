@@ -14,51 +14,63 @@ interface DDEStatus {
 }
 
 export type OutputMode = "off" | "hamlib" | "dde";
+export interface PublishedTarget { az: number; el: number }
 interface OutputStatus {
   mode: OutputMode;
   hamlib_connected: boolean;
   dde: DDEStatus;
 }
 
-export default function SatPC32DDE({ onModeChange }: { onModeChange: (mode: OutputMode) => void }) {
+export default function SatPC32DDE({ onModeChange, onTargetChange }: {
+  onModeChange: (mode: OutputMode) => void;
+  onTargetChange: (target: PublishedTarget | null) => void;
+}) {
   const [output, setOutput] = useState<OutputStatus | null>(null);
   const status = output?.dde;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const accept = (next: OutputStatus) => {
+    setOutput(next);
+    onModeChange(next.mode);
+    const match = next.mode === "dde" && next.dde.enabled
+      ? /^SN\S+ AZ(\d+(?:\.\d+)?) EL(\d+(?:\.\d+)?) /.exec(next.dde.target) : null;
+    const az = match ? Number(match[1]) : NaN;
+    const el = match ? Number(match[2]) : NaN;
+    onTargetChange(Number.isFinite(az) && az >= 0 && az < 360
+      && Number.isFinite(el) && el >= 0 && el <= 90 ? { az, el } : null);
+  };
   useEffect(() => {
     let active = true;
     const refresh = () => {
       rpc("rotator_output_status", {}).then(result => {
         if (active) {
           const next = result as OutputStatus;
-          setOutput(next);
-          onModeChange(next.mode);
+          accept(next);
           localStorage.removeItem("airwsjtx.rotatorControlEnabled");
         }
-      }).catch(reason => { if (active) setError(String(reason)); });
+      }).catch(reason => { if (active) { setError(String(reason)); onTargetChange(null); } });
     };
     refresh();
     const timer = window.setInterval(refresh, 2000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [onModeChange]);
+  }, [onModeChange, onTargetChange]); // eslint-disable-line react-hooks/exhaustive-deps
   return <div style={{ marginBottom: 8 }}>
     <label>Rotator output{" "}
       <select aria-label="Rotator output" value={output?.mode ?? "off"} disabled={!output || busy}
         onChange={async event => {
           const mode = event.target.value as OutputMode;
+          onTargetChange(null);
           setBusy(true);
           try {
             const next = await rpc("rotator_output_set", { mode }) as OutputStatus;
-            setOutput(next);
-            onModeChange(next.mode);
+            accept(next);
             localStorage.setItem("airwsjtx.rotatorOutputPreference", next.mode);
             setError(null);
           } catch (reason) {
             setError(String(reason));
             try {
               const next = await rpc("rotator_output_status", {}) as OutputStatus;
-              setOutput(next);
-              onModeChange(next.mode);
+              accept(next);
             } catch (refreshError) { setError(`${String(reason)}; status: ${String(refreshError)}`); }
           } finally { setBusy(false); }
         }}>

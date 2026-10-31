@@ -3,7 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
-import SatPC32DDE, { type OutputMode } from "./SatPC32DDE";
+import SatPC32DDE, { type OutputMode, type PublishedTarget } from "./SatPC32DDE";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
 import AzElReadout from "./AzElReadout";
@@ -419,6 +419,7 @@ export default function App() {
   const dump1090BusyLogRef = useRef<{ signature: string; at: number } | null>(null);
   const [rotatorConnected, setRotatorConnected] = useState(false);
   const [outputMode, setOutputMode] = useState<OutputMode>("off");
+  const [publishedDdeTarget, setPublishedDdeTarget] = useState<PublishedTarget | null>(null);
   const rotatorControlEnabled = outputMode === "hamlib";
   const [rotatorAz, setRotatorAz] = useState(0);
   const [rotatorEl, setRotatorEl] = useState(0);
@@ -801,7 +802,7 @@ export default function App() {
   const lastPlaneTargetRef = useRef<{ az: number; el: number } | null>(null);
   const planeTargetValid = !!lockedPlane && Number.isFinite(lockedPlane.az_a) && Number.isFinite(lockedPlane.el_a);
   if (lockedPlane && planeTargetValid) lastPlaneTargetRef.current = { az: lockedPlane.az_a, el: lockedPlane.el_a };
-  const autoTargetInvalid = uiMode !== "manual" && !planeTargetValid;
+  const autoTargetInvalid = outputMode === "dde" ? !publishedDdeTarget : uiMode !== "manual" && !planeTargetValid;
   const lastPlaneTarget = lastPlaneTargetRef.current;
 
   const manualSpeechTarget = uiMode !== "manual" && lockedPlane
@@ -1349,9 +1350,9 @@ export default function App() {
       addLog(`Stored DX ${call}`);
     }
   }
-  const currentAz = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az
+  const currentAz = outputMode === "dde" ? publishedDdeTarget?.az ?? 0 : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az
     : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.az_a) ? lockedPlane.az_a : rotatorAz) : rotatorAz;
-  const currentEl = autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el
+  const currentEl = outputMode === "dde" ? publishedDdeTarget?.el ?? 0 : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el
     : lockedPlane && uiMode !== "manual" ? (Number.isFinite(lockedPlane.el_a) ? lockedPlane.el_a : rotatorEl) : rotatorEl;
   const rotorOn = rotatorControlEnabled && rotatorConnected;
   const lastSpeechPreviewAt = useRef(0);
@@ -1392,10 +1393,10 @@ export default function App() {
     selectedAircraftId: lockedPlane?.icao24 ?? null,
     stationLocator: airscout?.station_a ?? myGrid,
     stationAltitudeM: myAltitudeM,
-    rotatorAz,
-    rotatorEl,
-    targetAz: lockedPlane ? lockedPlane.az_a : rotatorTargetAz,
-    targetEl: lockedPlane ? lockedPlane.el_a : rotatorTargetEl,
+    rotatorAz: outputMode === "dde" ? publishedDdeTarget?.az ?? null : rotatorAz,
+    rotatorEl: outputMode === "dde" ? publishedDdeTarget?.el ?? 0 : rotatorEl,
+    targetAz: outputMode === "dde" ? publishedDdeTarget?.az ?? null : lockedPlane ? lockedPlane.az_a : rotatorTargetAz,
+    targetEl: outputMode === "dde" ? publishedDdeTarget?.el ?? null : lockedPlane ? lockedPlane.el_a : rotatorTargetEl,
     pathBearing: dxBearing,
     dxLabel: dxCall,
     myLabel: myCallsign,
@@ -1650,10 +1651,10 @@ export default function App() {
             selectedAircraftId={lockedPlane?.icao24 ?? null}
             stationLocator={airscout?.station_a ?? myGrid}
             stationAltitudeM={myAltitudeM}
-            rotatorAz={rotatorAz}
-            rotatorEl={rotatorEl}
-            targetAz={lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
-            targetEl={lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
+            rotatorAz={outputMode === "dde" ? publishedDdeTarget?.az ?? null : rotatorAz}
+            rotatorEl={outputMode === "dde" ? publishedDdeTarget?.el ?? 0 : rotatorEl}
+            targetAz={outputMode === "dde" ? publishedDdeTarget?.az ?? null : lockedPlane ? lockedPlane.az_a : rotatorTargetAz}
+            targetEl={outputMode === "dde" ? publishedDdeTarget?.el ?? null : lockedPlane ? lockedPlane.el_a : rotatorTargetEl}
             pathBearing={dxBearing}
             dxLabel={dxCall}
             myLabel={myCallsign}
@@ -1911,7 +1912,7 @@ export default function App() {
         {/* CENTRE: Rotator */}
         <div className="col" style={{ alignItems: "center", justifyContent: "flex-start", overflowY: "auto" }}>
           <div className="card" style={{ width: "100%", alignSelf: "stretch", flexShrink: 0 }}>
-            <SatPC32DDE onModeChange={setOutputMode} />
+            <SatPC32DDE onModeChange={setOutputMode} onTargetChange={setPublishedDdeTarget} />
             <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, flexWrap: "nowrap", marginBottom: 8 }}>
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
               <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", gap: 4 }}>
@@ -1962,9 +1963,11 @@ export default function App() {
               </div>
             </div>
             <RotatorPanel
-              currentAz={rotatorAz} currentEl={rotatorEl}
-              targetAz={lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az : rotatorTargetAz}
-              targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el : rotatorTargetEl}
+              currentAz={outputMode === "dde" ? publishedDdeTarget?.az ?? 0 : rotatorAz}
+              currentEl={outputMode === "dde" ? publishedDdeTarget?.el ?? 0 : rotatorEl}
+              targetAz={outputMode === "dde" ? publishedDdeTarget?.az ?? null : lockedPlane && uiMode !== "manual" ? lockedPlane.az_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.az : rotatorTargetAz}
+              targetEl={outputMode === "dde" ? publishedDdeTarget?.el ?? null : lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el : rotatorTargetEl}
+              publishedTargetOnly={outputMode === "dde"}
               targetInvalid={autoTargetInvalid}
               connected={rotatorConnected}
               hamlibEnabled={outputMode === "hamlib"}

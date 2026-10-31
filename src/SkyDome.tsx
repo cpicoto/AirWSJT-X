@@ -17,7 +17,7 @@ interface SkyDomeProps {
   selectedAircraftId: string | null;
   stationLocator: string | null;
   stationAltitudeM: number;
-  rotatorAz: number;
+  rotatorAz: number | null;
   rotatorEl: number;
   targetAz: number | null;
   targetEl: number | null;
@@ -435,7 +435,7 @@ export default function SkyDome({
         })}
 
         {/* Rotator current position (red crosshair) */}
-        {(() => {
+        {rotatorAz !== null && (() => {
           const rp = project(rotatorAz, rotatorEl);
           return (
             <g>
