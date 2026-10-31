@@ -3,7 +3,7 @@ import os
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from airwsjtx.airscout import Aircraft
 from sidecar import airwsjtx_bridge
@@ -73,7 +73,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                 patch.object(airwsjtx_bridge, "_try_auto_lock") as auto_lock, \
                 patch.object(airwsjtx_bridge, "_emit"):
             airwsjtx_bridge._emit_aircraft_update()
-            auto_lock.assert_called_once_with([])
+            auto_lock.assert_called_once_with([], filters=airwsjtx_bridge._aircraft_filters)
 
     def test_station_filter_and_source_changes_emit_aircraft_update(self) -> None:
         with patch.multiple(airwsjtx_bridge, _station_a_locator="CN87", _station_b_locator="CN89",
@@ -221,6 +221,96 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             ranked, _ = airwsjtx_bridge._get_scatter_aircraft_with_total()
             self.assertEqual(ranked[0]["heading_deg"], 0)
             self.assertEqual(airwsjtx_bridge._get_scatter_aircraft()[0]["heading_deg"], 0)
+
+    def test_local_lock_survives_cpr_gap_without_stale_pointing_then_expires(self) -> None:
+        from airwsjtx.adsb import ADSBDecoder
+        from tests.test_adsb import EVEN, ODD
+
+        decoder = ADSBDecoder()
+        decoder.consume(f"*{EVEN};", now=0)
+        decoder.consume(f"*{ODD};", now=1)
+        for source in ("rtlsdr", "opensky"):
+            for now, retained in ((122, source == "rtlsdr"), (181, source == "rtlsdr"), (181.1, False)):
+                with self.subTest(source=source, now=now), patch.multiple(
+                    airwsjtx_bridge, _active_source=source, _locked_aircraft_id="40621d",
+                    _station_a_locator="CN87", _station_b_locator="CN89",
+                    _aircraft_cache=decoder.snapshot(now=now), _aircraft_last_update_monotonic=None,
+                    _local_lock_waiting_for_window=False,
+                ), patch.object(airwsjtx_bridge, "_emit"), \
+                        patch.object(airwsjtx_bridge, "_do_unlock") as unlock, \
+                        patch.object(airwsjtx_bridge, "_update_rotator_for_locked") as track:
+                    airwsjtx_bridge._emit_aircraft_update()
+                    self.assertEqual(unlock.call_count, int(not retained))
+                    track.assert_not_called()
+
+    def test_local_pre_window_selection_releases_only_after_entering_window(self) -> None:
+        ac = Aircraft("abc123", "TEST1", 47.5, -122.4, 10000, 200, 0, 0, False)
+        geo = {"az_a": 1, "el_a": 5, "az_b": 2, "el_b": 6,
+               "scatter_score": 0.0, "off_path_deg": 90, "range_a_km": 10}
+        with patch.multiple(
+            airwsjtx_bridge, _active_source="rtlsdr", _locked_aircraft_id=ac.icao24,
+            _local_lock_waiting_for_window=True, _station_a_locator="CN87",
+            _station_b_locator="CN89", _rotator=None,
+        ), patch.object(airwsjtx_bridge, "scatter_geometry", return_value=geo), \
+                patch.object(airwsjtx_bridge, "_emit") as emit, \
+                patch.object(airwsjtx_bridge, "_do_unlock") as unlock:
+            airwsjtx_bridge._update_rotator_for_locked([ac])
+            unlock.assert_not_called()
+            self.assertEqual(emit.call_args.args[0]["event"], "plane_tracking")
+            geo["scatter_score"] = 0.5
+            airwsjtx_bridge._update_rotator_for_locked([ac])
+            self.assertFalse(airwsjtx_bridge._local_lock_waiting_for_window)
+            geo["scatter_score"] = 0.0
+            airwsjtx_bridge._update_rotator_for_locked([ac])
+            unlock.assert_called_once()
+            self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
+
+    def test_selecting_low_score_local_aircraft_arms_pre_window_hold_only_locally(self) -> None:
+        from airwsjtx.state_machine import SessionState
+
+        ac = Aircraft("abc123", "TEST1", 47.5, -122.4, 10000, 200, 0, 0, False)
+        geo = {"az_a": 1, "el_a": 5, "az_b": 2, "el_b": 6,
+               "scatter_score": 0.0, "off_path_deg": 90, "range_a_km": 10}
+        for source in ("rtlsdr", "opensky"):
+            supervisor = Mock()
+            supervisor.session.state = SessionState.IDLE
+            with self.subTest(source=source), patch.multiple(
+                airwsjtx_bridge, _active_source=source, _locked_aircraft_id=None,
+                _local_lock_waiting_for_window=False, _lock_score=0, _aircraft_cache=[ac],
+                _station_a_locator="CN87", _station_b_locator="CN89", _rotator=None,
+                supervisor=supervisor,
+            ), patch.object(airwsjtx_bridge, "scatter_geometry", return_value=geo), \
+                    patch.object(airwsjtx_bridge, "build_track"), \
+                    patch("airwsjtx.supervisor.AirWSJTXSupervisor", return_value=supervisor), \
+                    patch.object(airwsjtx_bridge, "_locked_aircraft_info", return_value={}), \
+                    patch.object(airwsjtx_bridge, "_emit"):
+                self.assertIsNotNone(airwsjtx_bridge._do_lock(ac.icao24))
+                self.assertEqual(airwsjtx_bridge._local_lock_waiting_for_window, source == "rtlsdr")
+                airwsjtx_bridge._do_unlock()
+                self.assertFalse(airwsjtx_bridge._local_lock_waiting_for_window)
+
+    def test_local_position_recovery_tracks_again_but_ground_and_source_switch_release(self) -> None:
+        ac = Aircraft("abc123", "TEST1", 47.5, -122.4, 10000, 200, 0, 0, False)
+        for source, ground, positioned, retained in (
+            ("rtlsdr", False, False, True),
+            ("rtlsdr", False, True, True),
+            ("rtlsdr", True, False, False),
+            ("opensky", False, False, False),
+        ):
+            with self.subTest(source=source, ground=ground, positioned=positioned), patch.multiple(
+                airwsjtx_bridge, _active_source=source, _locked_aircraft_id=ac.icao24,
+                _aircraft_cache=[ac], _aircraft_last_update_monotonic=None,
+                _station_a_locator="CN87", _station_b_locator="CN89",
+                _local_lock_waiting_for_window=False,
+            ), patch.object(ac, "lat", 47.5 if positioned else None), \
+                    patch.object(ac, "on_ground", ground), \
+                    patch.object(airwsjtx_bridge, "_aircraft_matches_filters", return_value=True), \
+                    patch.object(airwsjtx_bridge, "_emit"), \
+                    patch.object(airwsjtx_bridge, "_do_unlock") as unlock, \
+                    patch.object(airwsjtx_bridge, "_update_rotator_for_locked") as track:
+                airwsjtx_bridge._emit_aircraft_update()
+                self.assertEqual(unlock.call_count, int(not retained))
+                self.assertEqual(track.call_count, int(positioned))
 
     def test_locked_distance_uses_full_eight_character_my_grid(self) -> None:
         lat = 47 + 15 / 24 + 0.5 / 240
@@ -492,11 +582,13 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             with patch.object(airwsjtx_bridge, "_emit") as emit:
                 airwsjtx_bridge._emit_source_status()
                 self.assertEqual(emit.call_args.args[0]["data"]["poll_intervals_s"],
-                                 {"opensky": 60, "adsbexchange": 10, "dump1090": 5})
+                                 {"opensky": 60, "adsbexchange": 10, "dump1090": 5,
+                                  **({"rtlsdr": 1} if "rtlsdr" in airwsjtx_bridge._supported_sources else {})})
             with patch.object(airwsjtx_bridge, "_ok") as reply:
                 airwsjtx_bridge.handle({"id": "sources", "method": "airscout_get_sources"})
                 self.assertEqual(reply.call_args.args[1]["poll_intervals_s"],
-                                 {"opensky": 60, "adsbexchange": 10, "dump1090": 5})
+                                 {"opensky": 60, "adsbexchange": 10, "dump1090": 5,
+                                  **({"rtlsdr": 1} if "rtlsdr" in airwsjtx_bridge._supported_sources else {})})
 
     def test_dump1090_host_is_validated_persisted_and_restarts_running_feed(self) -> None:
         with patch.multiple(airwsjtx_bridge, _dump1090_host="127.0.0.1", _dump1090_feed=object()):
@@ -555,6 +647,31 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
         self.assertEqual(event["data"]["aircraft"], 2)
         self.assertEqual(event["data"]["with_position"], 1)
         self.assertGreaterEqual(event["data"]["last_message_age_s"], 2)
+
+    def test_rtlsdr_report_pushes_native_measurements(self) -> None:
+        captured: dict = {}
+        snapshot = {"state": "connected", "iq": {"samples": 2400000}}
+
+        class FakeFeed:
+            def __init__(self, index, on_update, on_status, **kwargs) -> None:
+                captured["on_update"] = on_update
+
+            def start(self) -> None:
+                pass
+
+            def snapshot(self) -> dict:
+                return snapshot
+
+        with patch.object(airwsjtx_bridge, "LocalRTLSDRFeed", FakeFeed), \
+                patch.object(airwsjtx_bridge, "_rtlsdr_device_index", 0), \
+                patch.object(airwsjtx_bridge, "_rtlsdr_feed", None), \
+                patch.object(airwsjtx_bridge, "_active_source", None), \
+                patch.object(airwsjtx_bridge, "_emit") as emit, \
+                patch.object(airwsjtx_bridge, "_emit_aircraft_update"), \
+                patch.object(airwsjtx_bridge, "_replace_aircraft_cache"):
+            self.assertTrue(airwsjtx_bridge._start_rtlsdr_feed())
+            captured["on_update"]([])
+        emit.assert_called_once_with({"event": "rtlsdr_update", "data": snapshot})
 
     def test_dump1090_busy_sets_busy_state_and_emits_event(self) -> None:
         captured: dict = {}
@@ -640,6 +757,10 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                         self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
 
     def setUp(self) -> None:
+        manual = patch.multiple(airwsjtx_bridge, _manual_aircraft_lock=False,
+                                _manual_lock_source=None, _manual_lock_last_seen=0)
+        manual.start()
+        self.addCleanup(manual.stop)
         filters = patch.object(airwsjtx_bridge, "_aircraft_filters", dict(airwsjtx_bridge._DEFAULT_FILTERS))
         filters.start()
         self.addCleanup(filters.stop)

@@ -14,6 +14,16 @@ const venvPython = process.platform === "win32"
   : path.join(root, ".venv", "bin", "python");
 const python = existsSync(venvPython) ? venvPython : "python";
 
+if (process.platform === "win32" && process.arch === "x64"
+    && !existsSync(path.join(root, "sidecar", "rtl-sdr", "rtl_adsb.exe"))) {
+  execFileSync(python, [path.join(root, "scripts", "install_rtlsdr.py")],
+    { cwd: root, stdio: "inherit" });
+}
+if (process.platform === "win32" && process.arch === "x64") {
+  execFileSync(python, [path.join(root, "scripts", "build_adsb_receiver.py")],
+    { cwd: root, stdio: "inherit" });
+}
+
 execFileSync(python, [
   "-m", "PyInstaller", "--noconfirm", "--clean",
   "--distpath", binaries,

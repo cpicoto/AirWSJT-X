@@ -214,7 +214,7 @@ class ADSBExchangeBridgeTests(unittest.TestCase):
                             feed.start.assert_called_once()
                             self.assertGreater(constructor.call_args.args[3], 400 / 1.852)
                             constructor.call_args.args[4]([])
-                            cache.assert_called_with([])
+                            cache.assert_called_with([], source="adsbexchange")
                             update.assert_called()
                             feed.fetch_once.return_value = []
                             with patch.object(bridge, "_ok") as reply:

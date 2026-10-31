@@ -46,6 +46,7 @@ class Aircraft:
     on_ground: bool
     last_seen: float = field(default_factory=time.monotonic)
     position_updated_epoch_s: float | None = None
+    position_source: str | None = None
 
     @property
     def has_position(self) -> bool:

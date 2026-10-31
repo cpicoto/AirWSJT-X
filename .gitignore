@@ -13,6 +13,7 @@ src-tauri/target/
 *.spec
 !sidecar/airwsjtx_bridge.spec
 build/
+sidecar/rtl-sdr/
 
 # Compiled sidecar binaries
 src-tauri/binaries/airwsjtx_bridge/

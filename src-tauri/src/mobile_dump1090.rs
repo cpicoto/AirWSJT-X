@@ -30,6 +30,7 @@ struct Track {
     vertical_rate_ms: Option<f64>,
     on_ground: bool,
     last_seen: Option<Instant>,
+    last_position: Option<Instant>,
 }
 
 struct Shared {
@@ -89,8 +90,11 @@ fn apply_sbs_line(aircraft: &mut HashMap<String, Track>, line: &str, now: Instan
     match parts[1] {
         "3" => {
             if let Some(feet) = coerce_float(parts.get(11)) { track.altitude_m = Some(feet * 0.3048); }
-            if let Some(lat) = coerce_float(parts.get(14)) { track.lat = Some(lat); }
-            if let Some(lon) = coerce_float(parts.get(15)) { track.lon = Some(lon); }
+            if let (Some(lat), Some(lon)) = (coerce_float(parts.get(14)), coerce_float(parts.get(15))) {
+                track.lat = Some(lat);
+                track.lon = Some(lon);
+                track.last_position = Some(now);
+            }
             if let Some(flag) = parts.get(21) { track.on_ground = flag.trim() == "1"; }
         }
         "4" => {
@@ -181,6 +185,7 @@ fn snapshot(shared: &Shared, now: Instant) -> serde_json::Value {
         "altitude_m": track.altitude_m, "velocity_ms": track.velocity_ms,
         "heading_deg": track.heading_deg, "vertical_rate_ms": track.vertical_rate_ms,
         "on_ground": track.on_ground,
+        "position_age_s": track.last_position.map(|seen| now.saturating_duration_since(seen).as_secs_f64()),
     })).collect();
     serde_json::json!({ "aircraft": list })
 }
@@ -249,6 +254,20 @@ mod tests {
         assert_eq!(track.heading_deg, Some(90.0));
         assert!((track.vertical_rate_ms.unwrap() - 0.32512).abs() < 0.0001);
         assert!(!track.on_ground);
+        assert_eq!(track.last_position, Some(now));
+    }
+
+    #[test]
+    fn velocity_and_partial_positions_do_not_refresh_position_age() {
+        let mut aircraft = HashMap::new();
+        let now = Instant::now();
+        apply_sbs_line(&mut aircraft, "MSG,3,1,1,ABC123,1,d,t,d,t,,10000,,,47.5,-122.25,,,0,0,0,0", now);
+        apply_sbs_line(&mut aircraft, "MSG,4,1,1,ABC123,1,d,t,d,t,,,400,90,,,64,,0,0,0,0", now + Duration::from_secs(50));
+        apply_sbs_line(&mut aircraft, "MSG,3,1,1,ABC123,1,d,t,d,t,,10000,,,48,,,,0,0,0,0", now + Duration::from_secs(50));
+        let shared = Shared { aircraft: StdMutex::new(aircraft), status: StdMutex::new(Status::Connected) };
+        let data = snapshot(&shared, now + Duration::from_secs(50));
+        assert_eq!(data["aircraft"][0]["position_age_s"], 50.0);
+        assert_eq!(data["aircraft"][0]["lat"], 47.5);
     }
 
     #[test]

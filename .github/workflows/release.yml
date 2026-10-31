@@ -82,6 +82,7 @@ jobs:
       - name: Bundle Python sidecar with PyInstaller
         run: |
           pip install pyinstaller certifi
+          python -c "import runpy, sys; runpy.run_path('scripts/install_rtlsdr.py', run_name='__main__') if sys.platform == 'win32' else None"
           python -m PyInstaller --noconfirm --clean --distpath src-tauri/binaries sidecar/airwsjtx_bridge.spec
 
       - name: Stage installed Windows sidecar runtime

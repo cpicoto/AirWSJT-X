@@ -663,7 +663,7 @@ test(`locked tile becomes stale only beyond ${source} ${interval}s poll plus 5s`
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
-  await page.clock.pauseAt(new Date("2026-01-01T00:01:00Z"));
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 60000)));
   await expect(page.getByText("opensky", { exact: true })).toBeVisible();
   await page.evaluate(({ source, interval }) => {
     const emit = (window as unknown as Record<string, (event: string, payload: string) => void>).__tauriMockEmit;

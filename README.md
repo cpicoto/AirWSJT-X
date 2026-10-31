@@ -57,7 +57,7 @@ When multiple WSJT-X instances are on the network, the **Rig** dropdown selects 
 
 **Start QSO** marks the app's session as active; it does not enable transmission. Press **Enable Tx** in WSJT-X to transmit. By default, **Abort** and **Finish QSO** only update the app's session. The optional **Halt WSJT-X Tx on Abort/Finish** checkbox also sends Halt Tx to the selected WSJT-X instance; enable **Accept UDP requests** in WSJT-X's **Settings > Reporting** to use it. If delivery fails, use **Halt Tx** in WSJT-X itself. A QSO Logged message from the selected instance automatically completes an active app session.
 
-The compass outer ring marks the DX station's bearing and callsign. Candidate aircraft are ranked by a geometry score; see [Plane scoring](docs/plane-scoring.md) for the criteria. The [User guide](docs/user-guide.md) covers the Stations panel and DX favorites list. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
+The compass outer ring marks the DX station's bearing and callsign. Candidate aircraft use the legacy geometry ranking by default; **Best-path ranking** also offers range-product and window-weighted alternatives. See [Plane scoring](docs/plane-scoring.md) for the criteria and limitations. The [User guide](docs/user-guide.md) covers the Stations panel and DX favorites list. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
 
 The **WSJT-X Decodes (UTC)** panel shows each decode's original WSJT-X time as six-digit `HHMMSS`, including delayed or replayed packets. Missing or invalid source times display an em dash instead of a browser-local arrival time.
 
@@ -117,9 +117,203 @@ Expand **Aircraft accounts** in the desktop aircraft panel (or mobile **Settings
 
 - **OpenSky Network** — Create an account at [opensky-network.org](https://opensky-network.org/), create an API client, and paste the `clientId` and `clientSecret` values. The app handles OAuth2 token management automatically.
 - **ADS-B Exchange** — Obtain an API key from [ADS-B Exchange](https://gateway.adsbexchange.com/api/aircraft/v2/docs/index.html) for the direct v2 geographic radius endpoint. Note: RapidAPI keys use a different gateway and are not interchangeable.
+- **Local RTL-SDR (Windows x64)** — Plug in a compatible RTL-SDR with a 1090 MHz antenna before launching; the app automatically discovers and starts the first accessible receiver. To retry or choose another dongle, expand **Local RTL-SDR receiver (USB, Windows x64)** in Flight Data, click **Discover USB receivers**, select it, then **Start local ADS-B**. No external dump1090 service, account, hostname, or TCP port is required. The bundled app-owned native demodulator receives at 1090 MHz / 2.4 MS/s with automatic tuner gain, digital AGC on and bias tee **off**. Close other SDR applications using the dongle first. The app does not install or replace drivers: if discovery is empty, check the physical connection and the WinUSB driver for **Bulk-In Interface 0** (not a different USB device). **Stop local receiver** releases the dongle and returns to configured network sources; closing the app also releases it. Native startup/USB errors and candidate-frame, rejected-CRC, valid-message, aircraft, and position counters appear in this panel. A running receiver with no valid messages is not proof of RF reception; antenna placement and local traffic determine coverage.
 - **dump1090 / readsb** — Connects via SBS TCP (port 30003). On desktop it defaults to a receiver on this computer (`127.0.0.1`); to use a receiver elsewhere on your network (for example a Raspberry Pi), expand **dump1090 source** below **Aircraft accounts**, enter its IP address or hostname, and click **Save dump1090 source**. The port stays 30003. The address is applied immediately and remembered across restarts. On mobile there may not be a local receiver, so the same **dump1090 source** section (in **Settings**) only takes a network address: saving it selects **dump1090 (network)** as the aircraft source, and **Disable dump1090** clears it and returns to OpenSky. The phone must be on the same network as the receiver (iOS asks for Local Network permission on first use).  If you have a tablet for example, with dump1090 and a USB RTL-SDR running, then 127.0.0.1 is valid entry.
 
 Credentials are stored in the OS credential manager (Keychain, Credential Manager, Secret Service, or Android Keystore). Poll intervals default to 30 seconds and are independently configurable per provider.
+
+Local reception accepts CRC-valid DF17 ADS-B only, without bit-error correction.
+The app-owned helper now uses FlightAware dump1090's pinned
+[`465e063` 2.4 MS/s demodulator](https://github.com/flightaware/dump1090/blob/465e06330372ab0586a6a5063c66b60a8750f2b6/demod_2400.c):
+its phase-specific preamble shapes, relative signal/quiet checks, five
+correlation slicers, format-score selection, packet skipping and overlap.
+The former fractional-window demodulator is no longer used. The adapter uses
+upstream no-correction score ordering: DF17/18 require zero CRC syndrome,
+DF11 checks interrogator parity, and address-parity formats require a recently
+validated ICAO. Only validated DF17 messages reach the aircraft decoder;
+other accepted Mode S formats are counted separately, not turned into aircraft.
+There is no bit correction, DF24, Mode A/C, or automatic gain adaptation.
+A bounded queue separates capture from demodulation; queue gaps reset overlap.
+The panel separates preamble candidates, failed DF17 phase trials, accepted other
+Mode S messages and bad/unknown-address rejections. Phase trials can overlap:
+these counters do not partition RF transmissions, and are not comparable with
+the old helper's unvalidated-candidate counts. Raw DF17 payloads, zero CRC
+syndromes and 12 MHz sample-clock timestamps (at the end of bit 56) are retained
+in a bounded last-32 list, visible in the panel even after Stop. This allows
+subsequent payload checks; it does not by itself prove a message's RF origin.
+Aircraft identification and ground velocity are decoded directly; positioned
+aircraft require an airborne even/odd global CPR pair within 10 seconds and
+supported Q=1 barometric altitude (converted from feet to metres, not geometric
+altitude). Local positions remain visible for less than 120 seconds; velocities expire after 15
+seconds, and aircraft records after 180
+seconds. Surface positioning, Q=0 Gillham altitude, DF18/TIS-B, and MLAT are not
+implemented. This local USB path is Windows x64 only; other platforms retain
+their existing network sources. Receiver indices are discovered for the current
+USB arrangement; rediscover and select again after changing multiple dongles.
+On Windows, app startup makes one bounded discovery attempt (three seconds)
+and starts receive-only ADS-B on the first accessible RTL-SDR. Configured network
+sources remain saved and are available on failure or Stop; automatic startup
+does not overwrite their priority on disk. Multiple receivers use discovery
+order; Stop, Discover and select another device if needed. Stop is respected
+for the rest of that app run: there is no automatic retry loop.
+There is no persisted auto-start opt-out setting. Disconnect the dongle before
+launch for network-only operation, or Stop after launch. Existing gain is used;
+gain is not saved across launches, so startup uses automatic gain, digital AGC
+on and bias tee off. Discovery does not install drivers or grant USB permissions.
+Windows security prompts may still depend on the unsigned preview executable
+and its changing path; auto-start is not a way to bypass them.
+Verbose sample/power/candidate counters are hidden under **Detailed IQ measurements**;
+normal receiver status, errors and validated-message/aircraft counts remain visible.
+Positions are checked against a recent established aircraft position with a
+generous motion margin (at least 1200 knots plus 500 metres and timing allowance;
+a fresh higher reported velocity increases the margin). Implausible jumps discard
+the CPR pair but do not erase the previous valid fix. Stale references do not
+block reacquisition. No DX-corridor filter or guessed receiver-range limit is used.
+For local reception, a selected aircraft remains locked across temporary CPR
+position gaps while its aircraft record is retained (up to 180 seconds without
+a valid message). Local coordinates are accepted for DDE or Hamlib pointing
+until 120 seconds after their actual position timestamp, then suppressed.
+This user-selected two-minute tolerance retains an old coordinate: it is not a
+live or predicted position, and no extrapolation is applied. Other aircraft's
+messages and receiver/cache freshness never refresh that coordinate's timestamp.
+Fresh position messages resume output.
+Manual selection on any feed is retained through candidate-filter and score
+changes; the manual selection policy is described below. Automatic selection
+still uses the scatter window.
+
+### Windows: PST Rotator via SatPC32 DDE
+
+The rotator card includes **SatPC32 DDE output (Windows / PST Rotator)**.
+Close SatPC32 (or another SatPC32-compatible publisher) first. In PST Rotator,
+select **SatPC32** as the tracker and enable its **Tracking** mode. In
+AirWSJT-X, explicitly select **SatPC32 DDE** in **Rotator output**, use
+aircraft/rotator mode (not manual pointing), and lock an aircraft with a fresh
+position. Enabling this can move a physical rotator controlled by PST Rotator.
+Do not configure Hamlib and PST Rotator to drive the same hardware concurrently.
+
+AirWSJT-X acts as the DDE **server**, using service `SatPC32`, topic
+`SatPcDdeConv`, item `SatPcDdeItem`, and NUL-terminated `CF_TEXT`, for example
+`SNACA314 AZ56.7 EL6.8 UP0 UMUSB DN0 DMUSB MA0.0`.
+It supports both requests and hot-link advise updates.
+Only the selected aircraft's station-A azimuth/elevation carries tracking data.
+The trailing fields preserve the complete conventional SatPC32 record shape:
+uplink/downlink are zero Hz, mode placeholders are USB, mean anomaly is zero.
+They are not aircraft radio data or CAT/PTT commands. Do not use this output
+for radio frequency tracking. There is no physical
+rotator feedback or alignment confirmation from DDE.
+`SN` follows the selected aircraft's flight identifier/callsign, not a fixed
+satellite name. Whitespace is removed and letters are uppercased; blank or invalid
+identifiers fall back to the ICAO address. Only ASCII letters, digits and hyphens
+are allowed in this token. The aircraft callsign remains unchanged in the normal
+UI. `AZ` is degrees clockwise
+from **true north at MY station (A)**, not aircraft heading or the DX bearing.
+`EL` is the same station-A radio-path elevation shown by the app, using its
+4/3-effective-Earth model and configured station altitude. This is not a
+vacuum/astronomical satellite elevation calculation. Values have one decimal
+place with an ASCII decimal point; north is `AZ0.0`, never a wrapped `AZ360.0`.
+The DDE panel shows the exact item text and station reference. A retained
+stale lock can show old coordinates while the transmitted item is
+`** NO SATELLITE **`; it does not transmit those frozen display values.
+Enabling DDE publishes an already-selected, valid position immediately, without
+waiting for another feed update or sending a Hamlib command. If no valid position
+is available yet, the next valid update for the selected aircraft supplies the
+first target. The lock card's poll-based "stale" label is not the pointing cutoff:
+a 7-second-old local fix is within the 120-second DDE limit, but selecting Off
+or Hamlib, manual mode, or a below-horizon elevation still suppresses it.
+Hot-link clients receive changed item text promptly (message pump checks every
+50 ms) and a refresh at least once per second while enabled, including when
+rounded angles remain unchanged. Request/poll clients read the current item
+directly. A refresh never extends a position's validity or predicts a new fix.
+After a synchronous request, unsolicited notifications wait for a 200 ms
+quiet gap. This avoids overlapping request/advise DATA responses that produced
+invalid data handles in independent 32-bit Windows DDEML client checks.
+Continuous polling still gets the current position; hot-link updates resume
+when polling pauses. Both 32-bit and 64-bit native test clients check exact
+`SNACA314 AZ348.4 EL0.5 UP0 UMUSB DN0 DMUSB MA0.0` bytes including the terminating NUL.
+
+The [PST Rotator manual](https://pstrotator.com/ANT/PstRotator%20User%20Manual.pdf)
+(page 44) documents SatPC32 tracker selection and Tracking mode.
+The [SatPC32 manual](https://www.dk1tb.de/manual_e.htm#DDEInterface) describes
+its WiSP32-compatible DDE stream; an independent
+[C# integration](https://github.com/M0LTE/satpc32-dde-utils/blob/master/satpc32-dde-utils/SatPC32Client.cs)
+uses this service/topic/item and a space-delimited full `SNFO-29 ... MA...` record.
+These sources do not establish which trailing fields PST requires, so the full
+record is retained rather than guessing a shorter format.
+
+Manual aircraft selection is separate from auto-lock ranking for all sources.
+A manually selected aircraft is not released just because it falls outside
+candidate filters or its scatter score drops. A temporary missing aircraft or
+position stops DDE/rotator updates, but retains selection for up to 180 seconds
+for local RTL-SDR (120 seconds for network sources)
+without another observed aircraft record. Fresh data for the same aircraft
+resumes output without selecting it again. Explicit unlock, changing active
+source, an on-ground report, or that timeout releases it. Auto-lock retains
+its candidate/window release behavior. A selected identity is not proof of
+a fresh coordinate or an antenna alignment.
+
+The single **Rotator output** selector chooses **Off**, **Hamlib (rotctld)**, or
+on Windows **SatPC32 DDE (PST Rotator)**. These outputs are mutually exclusive
+in the backend: DDE is cleared and stopped before enabling Hamlib; selecting
+DDE blocks all Hamlib coordinate/park commands. The rotctld connection may stay
+open for feedback, but is not required for DDE. Switching modes does not send a
+Hamlib move or resend cached UI coordinates. Auto Hamlib output waits for a
+current backend aircraft update and uses the same fresh, above-horizon safety
+gate; direct coordinate commands require Manual mode and Hamlib output.
+Output defaults to **Off on every launch**. The last explicit choice is recorded
+as a preference but never automatically activated; legacy saved Rotor-control
+settings are discarded without enabling either output.
+Unlock, output Off, manual
+mode, source stop, missing/expired positions, and below-horizon targets suppress
+coordinates (`** NO SATELLITE **`). Local pointing and displayed positions expire
+at 120 seconds; the selected-lock stale label uses that same limit.
+network positions use their poll interval plus 5 seconds. Expiry is enforced
+even if the feed stops updating. Stop selects Off; Park is available only with
+Hamlib output. Select Off or exit AirWSJT-X to release the DDE service.
+On a normal Windows exit, the app requests backend shutdown and waits up to
+eight seconds before the helper-termination fallback. The backend disables
+output, disconnects DDE conversations, unregisters the service, and releases
+its DDEML instance before exiting. Abrupt crashes or forced termination cannot
+guarantee that graceful sequence.
+After an app restart, output still starts Off. Selecting DDE registers a new
+service; a persistent client must reconnect and re-establish its advise link
+on the new registration. The heartbeat refreshes an existing link, not a lost
+conversation. Isolated native tests verify reconnecting clients recover across
+server restart, but PST's own reconnect behavior remains an external dependency.
+Clients decide whether to hold or park on loss of target: DDE does not provide
+an emergency physical stop. Run both programs in the same Windows interactive
+session and at the same privilege level. An existing SatPC32 service produces
+a visible conflict error rather than publishing a second competing target.
+
+Protocol references: [SatPC32 manual, general DDE interface](https://www.dk1tb.de/manual_e.htm),
+[field parsing example](https://github.com/M0LTE/satpc32-dde-utils/blob/master/satpc32-dde-utils/SatPC32Client.cs).
+Compatibility is checked with a native Windows DDEML test client on an isolated
+test service; physical PST Rotator operation requires user-controlled validation.
+The panel reports processed IQ samples, ADC-rail clipping, mean total input
+power, validated-message power when available, application queue drops and
+detected discontinuities. Mean input power includes noise/interference and is not
+an ADS-B signal/SNR measurement. Hardware/USB overruns cannot be measured through
+this API and are explicitly unavailable, not reported as zero. Queue drops count
+known application losses only. Diagnostic sample counts exclude dropped buffers.
+Native receiver updates push counters and measurements into the panel each second;
+status polling remains a fallback.
+The GPL-compatible upstream notices, license and adapted sources are bundled
+alongside the helper. Older 2 MS/s IQ must be deliberately resampled before
+replay; the rate-specific helper rejects it rather than silently misinterpreting it.
+After starting, **Tuner gain** offers **Automatic (default)** and the exact
+manual dB steps reported by the connected tuner. **Apply gain / restart**
+restarts only local reception and resets its counters. Gain is not persisted;
+The selector is visible before starting; discover a receiver to load its supported
+manual steps. Automatic is the default, or select a manual value before Start.
+Compare equal-length intervals and valid messages,
+not raw frame counts alone: higher gain may overload on nearby signals, while
+lower gain may lose weak aircraft. The native demodulator keeps digital AGC
+enabled in both modes; bias tee remains off. The status explicitly warns when
+no CRC-valid message has arrived for more than 15 seconds.
+Backend RPC failures are displayed after a 10-second reply timeout rather than
+leaving receiver controls stuck indefinitely. Discovery does not require MY/DX
+stations; scatter scoring/list placement still uses the station context and only
+positioned aircraft. A valid identification or velocity message alone does not
+provide a position: complementary airborne CPR even/odd messages are needed.
 
 > **Remote dump1090 not connecting?** The Debian/Raspberry Pi package of `dump1090-mutability` listens on localhost only by default. On the receiver, edit `/etc/default/dump1090-mutability`, set `NET_BIND_ADDRESS="0.0.0.0"` (and keep `NET_SBS_PORT=30003`), then run `sudo systemctl restart dump1090-mutability`. Verify with `ss -ltnp | grep 30003` on the receiver, and check that no firewall blocks port 30003.
 
@@ -172,6 +366,7 @@ configuration when packaging (for ARM64, use the dedicated commands below):
 ```powershell
 npm ci
 python -m pip install pyinstaller certifi
+python scripts\install_rtlsdr.py
 python -m PyInstaller --noconfirm --clean --distpath src-tauri\binaries sidecar\airwsjtx_bridge.spec
 Move-Item -Force src-tauri\binaries\airwsjtx_bridge\airwsjtx_bridge.exe src-tauri\binaries\airwsjtx_bridge-x86_64-pc-windows-msvc.exe
 if (Test-Path -LiteralPath src-tauri\binaries\airwsjtx_bridge-runtime) { Remove-Item -LiteralPath src-tauri\binaries\airwsjtx_bridge-runtime -Recurse -Force }

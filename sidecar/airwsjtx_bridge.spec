@@ -2,9 +2,23 @@ import sys
 from pathlib import Path, PureWindowsPath
 
 repo_root = Path(SPECPATH).parent
+rtl_sdr_datas = []
+if sys.platform == "win32" and __import__("platform").machine().lower() in ("amd64", "x86_64"):
+    rtl_sdr_dir = repo_root / "sidecar" / "rtl-sdr"
+    required = ("airwsjtx_adsb.exe", "adsb_receiver.c", "build_adsb_receiver.py",
+                "COPYING-AirWSJT-X", "rtl_adsb.exe", "rtlsdr.dll", "pthreadVC2.dll", "msvcr100.dll",
+                "COPYING", "SOURCE.txt", "rtl-sdr-blog-source.zip", "COPYING-libusb",
+                "libusb-1.0.29.tar.bz2", "pthreads-w32-2-9-1-release.tar.gz")
+    required += tuple(f"dump1090-fa/{name}" for name in
+                      ("demod_2400.c", "icao_filter.c", "dump1090.h", "COPYING", "UPSTREAM.txt"))
+    if any(not (rtl_sdr_dir / name).is_file() for name in required):
+        raise SystemExit("Run python scripts/install_rtlsdr.py before packaging Windows x64.")
+    rtl_sdr_datas = [(str(rtl_sdr_dir / name), str(Path("rtl-sdr") / Path(name).parent))
+                    for name in required]
 analysis = Analysis(
     [str(repo_root / "sidecar" / "airwsjtx_bridge.py")],
     pathex=[str(repo_root)],
+    datas=rtl_sdr_datas,
 )
 
 if sys.platform == "win32":

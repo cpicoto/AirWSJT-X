@@ -63,6 +63,8 @@ async fn stop_native_speech() -> Result<(), String> {
 }
 
 pub struct SidecarState {
+    pub shutting_down: bool,
+    pub shutdown_complete: bool,
     pub tx: Option<tauri_plugin_shell::process::CommandChild>,
     pub credential_updates: HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
     pub credential_error: Option<String>,
@@ -86,6 +88,8 @@ async fn send_to_sidecar(
         child
             .write(frame_rpc_message(&message).as_bytes())
             .map_err(|e| e.to_string())?;
+    } else {
+        return Err("Aircraft backend is not ready. Retry after startup.".into());
     }
     Ok(())
 }
@@ -102,6 +106,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let sidecar_state = Arc::new(Mutex::new(SidecarState {
+                shutting_down: false,
+                shutdown_complete: false,
                 tx: None,
                 credential_updates: HashMap::new(),
                 credential_error: None,
@@ -231,6 +237,50 @@ pub fn run() {
     builder.build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|_app, event| {
+            #[cfg(target_os = "windows")]
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                let state = _app.state::<Arc<Mutex<SidecarState>>>().inner().clone();
+                if let Ok(mut guard) = state.try_lock() {
+                    if !guard.shutting_down {
+                        guard.shutting_down = true;
+                        api.prevent_exit();
+                        let app = _app.clone();
+                        let shutdown_state = state.clone();
+                        tauri::async_runtime::spawn(async move {
+                            {
+                                let mut guard = shutdown_state.lock().await;
+                                if let Some(child) = &mut guard.tx {
+                                    if let Err(e) = child.write(frame_rpc_message(r#"{"method":"shutdown"}"#).as_bytes()) {
+                                        eprintln!("Cannot request graceful backend shutdown: {e}");
+                                    }
+                                }
+                            }
+                            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+                            loop {
+                                if shutdown_state.lock().await.tx.is_none() {
+                                    break;
+                                }
+                                if std::time::Instant::now() >= deadline {
+                                    eprintln!("Backend shutdown timed out; exiting with helper cleanup fallback");
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            }
+                            shutdown_state.lock().await.shutdown_complete = true;
+                            app.exit(0);
+                        });
+                    } else if !guard.shutdown_complete {
+                        api.prevent_exit();
+                    }
+                } else {
+                    api.prevent_exit();
+                    let app = _app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        app.exit(0);
+                    });
+                };
+            }
             #[cfg(target_os = "linux")]
             if let tauri::RunEvent::Exit = event {
                 if let Err(e) = NATIVE_SPEECH.stop() {

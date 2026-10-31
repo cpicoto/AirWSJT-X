@@ -1,0 +1,71 @@
+FlightAware dump1090
+Revision: 465e06330372ab0586a6a5063c66b60a8750f2b6
+Repository: https://github.com/flightaware/dump1090
+
+demod_2400.c:
+https://github.com/flightaware/dump1090/blob/465e06330372ab0586a6a5063c66b60a8750f2b6/demod_2400.c
+Original SHA256: 550d4b2dec55fb182af4572edd93ed9d6ebddc16db3ba131934e9fdeb2653303
+Copyright (c) 2014,2015 Oliver Jowett <oliver@mutability.co.uk>
+GPL-2.0-or-later; original notice retained.
+Local modification: exclude the unused Mode A/C implementation with #if 0.
+The Mode S preamble, phase-specific slicing, scoring selection, packet skip,
+overlap behavior and signal measurement code are unchanged.
+
+icao_filter.c:
+https://github.com/flightaware/dump1090/blob/465e06330372ab0586a6a5063c66b60a8750f2b6/icao_filter.c
+Original source and GPL notice retained unmodified.
+Original SHA256: 15914bbc0e9bbeee77a19921206720781664894b43615e8175c312c069e1a564
+
+dump1090.h is an AirWSJT-X compatibility adapter, NOT the upstream header.
+Its score ordering comes from mode_s.h at the same revision.
+The no-correction DF-specific scoring in adsb_receiver.c adapts mode_s.c:
+https://github.com/flightaware/dump1090/blob/465e06330372ab0586a6a5063c66b60a8750f2b6/mode_s.c
+mode_s.h:
+Copyright (c) 2017-2021 FlightAware, LLC
+Copyright (c) 2017 Oliver Jowett <oliver@mutability.co.uk>
+GPL-2.0-or-later.
+mode_s.c:
+Copyright (c) 2014-2016 Oliver Jowett <oliver@mutability.co.uk>
+Copyright (c) 2021 FlightAware LLC
+GPL-2.0-or-later.
+
+The upstream files are free software: you may copy, redistribute and/or modify
+them under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 2 of the License, or (at your option)
+any later version.
+They are distributed in the hope that they will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See COPYING for the GNU General Public License.
+
+mode_s.c incorporates work covered by this notice:
+Copyright (C) 2012 by Salvatore Sanfilippo <antirez@gmail.com>
+All rights reserved.
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Integration differences: fixed 2.4 MS/s unsigned interleaved I/Q, no bit
+correction, no DF24, no Mode A/C, no automatic gain adaptation. DF11 acquisition
+and uncorrected DF17/18 seed the upstream recent-ICAO filter. Address-parity
+messages require a recent address, as upstream does. Only validated DF17 feeds
+AirWSJT-X's existing aircraft decoder; other accepted Mode S formats are
+diagnostic counts, not ADS-B aircraft. Per-frame CRC/timestamp evidence is
+emitted as diagnostics. Windows capture, queue and lifecycle are app-owned.
+
+GPL-2.0-or-later upstream code is combined under GPL-3.0-or-later, consistent
+with AirWSJT-X. COPYING contains upstream GPLv2; COPYING-AirWSJT-X beside the
+executable contains GPLv3. All adapted source and build files are shipped.

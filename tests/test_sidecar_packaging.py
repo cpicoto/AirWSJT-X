@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import json
+import platform
 import runpy
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,7 +52,7 @@ class SidecarSpecTests(unittest.TestCase):
         analyze = Mock(return_value=analysis)
         build_exe = Mock()
         collect = Mock()
-        with patch("sys.platform", platform):
+        with patch("sys.platform", platform), patch("pathlib.Path.is_file", return_value=True):
             runpy.run_path(
                 str(_SPEC),
                 init_globals={
@@ -80,7 +83,7 @@ class SidecarSpecTests(unittest.TestCase):
     def test_other_platforms_keep_all_collected_binaries(self) -> None:
         for platform in ("darwin", "linux"):
             with self.subTest(platform=platform):
-                analysis, _, build_exe, collect = self.run_spec(platform)
+                analysis, analyze, build_exe, collect = self.run_spec(platform)
                 self.assertEqual(
                     analysis.binaries,
                     self.system_runtime + self.application_runtime,
@@ -88,6 +91,35 @@ class SidecarSpecTests(unittest.TestCase):
                 self.assertEqual(build_exe.call_args.args[2], analysis.binaries)
                 self.assertEqual(build_exe.call_args.args[3], analysis.datas)
                 collect.assert_not_called()
+                self.assertEqual(analyze.call_args.kwargs["datas"], [])
+
+    def test_receiver_runtime_and_corresponding_sources_are_windows_x64_only(self) -> None:
+        with patch("platform.machine", return_value="AMD64"):
+            _, analyze, _, _ = self.run_spec("win32")
+        files = {Path(source).name for source, destination in analyze.call_args.kwargs["datas"]
+                 if destination == "rtl-sdr"}
+        self.assertIn("rtl_adsb.exe", files)
+        self.assertIn("airwsjtx_adsb.exe", files)
+        self.assertIn("adsb_receiver.c", files)
+        self.assertIn("build_adsb_receiver.py", files)
+        self.assertIn("COPYING-AirWSJT-X", files)
+        self.assertIn("rtlsdr.dll", files)
+        self.assertIn("COPYING", files)
+        self.assertIn("rtl-sdr-blog-source.zip", files)
+        self.assertIn("libusb-1.0.29.tar.bz2", files)
+        self.assertIn("pthreads-w32-2-9-1-release.tar.gz", files)
+        upstream = {Path(source).name for source, destination in analyze.call_args.kwargs["datas"]
+                    if Path(destination) == Path("rtl-sdr") / "dump1090-fa"}
+        self.assertEqual(upstream, {"demod_2400.c", "icao_filter.c", "dump1090.h", "COPYING", "UPSTREAM.txt"})
+        with patch("platform.machine", return_value="ARM64"):
+            _, analyze, _, _ = self.run_spec("win32")
+        self.assertEqual(analyze.call_args.kwargs["datas"], [])
+
+    def test_missing_receiver_tools_fail_packaging_with_setup_instruction(self) -> None:
+        with patch("sys.platform", "win32"), patch("platform.machine", return_value="AMD64"), \
+                patch("pathlib.Path.is_file", return_value=False):
+            with self.assertRaisesRegex(SystemExit, "install_rtlsdr.py"):
+                runpy.run_path(str(_SPEC), init_globals={"SPECPATH": str(_SPEC.parent)})
 
     def test_spec_resolves_project_paths_and_preserves_console_protocol(self) -> None:
         _, analyze, build_exe, _ = self.run_spec("win32")
@@ -153,6 +185,35 @@ class FrozenSidecarTests(unittest.TestCase):
 
     def test_frozen_bridge_replies_from_outside_the_checkout(self) -> None:
         check_sidecar(self.binary)
+        self.check_receiver(self.binary)
+
+    def check_receiver(self, binary: Path) -> None:
+        if platform.machine().lower() not in ("amd64", "x86_64"):
+            return
+        runtime = binary.parent / "airwsjtx_bridge-runtime" / "rtl-sdr"
+        for name in ("airwsjtx_adsb.exe", "adsb_receiver.c", "COPYING-AirWSJT-X",
+                     "build_adsb_receiver.py", "rtl_adsb.exe", "rtlsdr.dll", "pthreadVC2.dll", "msvcr100.dll",
+                     "COPYING", "SOURCE.txt", "rtl-sdr-blog-source.zip", "COPYING-libusb",
+                     "libusb-1.0.29.tar.bz2", "pthreads-w32-2-9-1-release.tar.gz"):
+            self.assertTrue((runtime / name).is_file(), name)
+        for name in ("demod_2400.c", "icao_filter.c", "dump1090.h", "COPYING", "UPSTREAM.txt"):
+            self.assertTrue((runtime / "dump1090-fa" / name).is_file(), name)
+        request = (json.dumps({"id": "usb", "method": "rtlsdr_discover"}) + "\n"
+                   + json.dumps({"id": "dde", "method": "satpc32_dde_status"}) + "\n")
+        with tempfile.TemporaryDirectory() as working_directory:
+            result = subprocess.run([str(binary)], input=request, capture_output=True,
+                                    text=True, cwd=working_directory, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reply = next(json.loads(line) for line in result.stdout.splitlines()
+                     if json.loads(line).get("id") == "usb")
+        self.assertTrue(reply["ok"], reply)
+        self.assertIsInstance(reply["result"]["devices"], list)
+        dde = next(json.loads(line) for line in result.stdout.splitlines()
+                   if json.loads(line).get("id") == "dde")
+        self.assertTrue(dde["ok"], dde)
+        self.assertTrue(dde["result"]["supported"])
+        self.assertFalse(dde["result"]["enabled"])
+        self.assertEqual(dde["result"]["target"], "** NO SATELLITE **")
 
     def test_relocated_installation_with_spaces_keeps_runtime_and_protocol(self) -> None:
         with tempfile.TemporaryDirectory(prefix="AirWSJT-X installed ") as directory:
@@ -164,6 +225,7 @@ class FrozenSidecarTests(unittest.TestCase):
                 installation / "airwsjtx_bridge-runtime",
             )
             check_sidecar(binary)
+            self.check_receiver(binary)
 
 
 if __name__ == "__main__":

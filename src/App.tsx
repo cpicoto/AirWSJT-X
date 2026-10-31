@@ -3,10 +3,13 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
+import SatPC32DDE, { type OutputMode } from "./SatPC32DDE";
 import PlaneLockPanel from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
 import AzElReadout from "./AzElReadout";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
+import LocalReceiver from "./LocalReceiver";
+import { rpc } from "./lib/sidecarRpc";
 import {
   FLOAT_ACTION_EVENT, FLOAT_CLOSED_EVENT, FLOAT_READY_EVENT, FLOAT_STATE_EVENT,
   nativeFloatSupported, syncFloatWindow,
@@ -16,6 +19,7 @@ import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/
 import SkyDome from "./SkyDome";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
 import { formatUsableTime, predictUsableTime } from "./lib/usableTime";
+import { RANKING_OPTIONS, isRankingMethod, formatRanking, type AircraftRanking, type RankingMethod } from "./lib/aircraftRanking";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,7 +71,7 @@ function isWsjtxRig(value: unknown): value is WsjtxRig {
     && "config_name" in value
     && (value.config_name === null || typeof value.config_name === "string");
 }
-interface AircraftEntry {
+interface AircraftEntry extends Partial<AircraftRanking> {
   icao24: string;
   callsign: string;
   lat: number;
@@ -85,6 +89,7 @@ interface AircraftEntry {
   scatter_score: number;
 }
 interface AirscoutUpdate {
+  ranking_method?: RankingMethod;
   aircraft: AircraftEntry[];
   flight_data?: AircraftEntry[];
   total: number;
@@ -124,6 +129,7 @@ interface CallsignDbStatus {
 }
 
 interface AircraftFilterSettings {
+  ranking_method: RankingMethod;
   lat_min: number | null;
   lat_max: number | null;
   lon_min: number | null;
@@ -145,6 +151,7 @@ type NumericAircraftFilterKey =
   | "position_tolerance_deg";
 
 const DEFAULT_AIRCRAFT_FILTERS: AircraftFilterSettings = {
+  ranking_method: "legacy",
   lat_min: null,
   lat_max: null,
   lon_min: null,
@@ -174,6 +181,7 @@ function loadAircraftFilters(stationA: string | null | undefined, stationB: stri
     if (!raw) return DEFAULT_AIRCRAFT_FILTERS;
     const parsed = JSON.parse(raw) as Partial<AircraftFilterSettings>;
     return {
+      ranking_method: isRankingMethod(parsed.ranking_method) ? parsed.ranking_method : "legacy",
       lat_min: parsed.lat_min ?? null,
       lat_max: parsed.lat_max ?? null,
       lon_min: parsed.lon_min ?? null,
@@ -190,18 +198,6 @@ function loadAircraftFilters(stationA: string | null | undefined, stationB: stri
 }
 
 // ─── Sidecar RPC ──────────────────────────────────────────────────────────────
-
-let _rpcId = 0;
-const _pending = new Map<string, (r: { ok: boolean; result?: unknown; error?: string }) => void>();
-
-async function rpc(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-  const id = String(++_rpcId);
-  const msg = JSON.stringify({ id, method, params });
-  return new Promise((resolve, reject) => {
-    _pending.set(id, (r) => r.ok ? resolve(r.result) : reject(new Error(r.error)));
-    invoke("send_to_sidecar", { message: msg }).catch(reject);
-  });
-}
 
 const loadDump1090Host = () => rpc("airscout_get_dump1090_host") as Promise<Dump1090Host>;
 const saveDump1090Host = (host: string) =>
@@ -300,7 +296,6 @@ const AZEL_PANEL_ENABLED = false;
 const ROTATOR_SPEECH_ENABLED_KEY = "airwsjtx.rotatorSpeech.enabled";
 const ROTATOR_SPEECH_THRESHOLD_KEY = "airwsjtx.rotatorSpeech.thresholdDeg";
 const ROTATOR_SPEECH_INTERVAL_KEY = "airwsjtx.rotatorSpeech.intervalSec";
-const ROTATOR_CONTROL_KEY = "airwsjtx.rotatorControlEnabled";
 const ROTATOR_SPEECH_MIGRATED_KEY = "airwsjtx.rotatorSpeech.threshold1degMigrated";
 const SKYDOME_RECT_KEY = "airwsjtx.skyDomeRect";
 const SKYDOME_MIN_W = 280;
@@ -423,9 +418,8 @@ export default function App() {
   const dump1090LogRef = useRef<{ signature: string; at: number } | null>(null);
   const dump1090BusyLogRef = useRef<{ signature: string; at: number } | null>(null);
   const [rotatorConnected, setRotatorConnected] = useState(false);
-  const [rotatorControlEnabled, setRotatorControlEnabled] = useState(
-    () => localStorage.getItem(ROTATOR_CONTROL_KEY) !== "false",
-  );
+  const [outputMode, setOutputMode] = useState<OutputMode>("off");
+  const rotatorControlEnabled = outputMode === "hamlib";
   const [rotatorAz, setRotatorAz] = useState(0);
   const [rotatorEl, setRotatorEl] = useState(0);
   const [rotatorTargetAz, setRotatorTargetAz] = useState<number | null>(null);
@@ -527,6 +521,8 @@ export default function App() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const overlayDragRef = useRef<{ dx: number; dy: number } | null>(null);
   const [aircraftFilters, setAircraftFilters] = useState<AircraftFilterSettings>(() => loadAircraftFilters(null, null));
+  const confirmedAircraftFiltersRef = useRef(aircraftFilters);
+  const aircraftFilterRequestRef = useRef(0);
   const [aircraftFilterDraft, setAircraftFilterDraft] = useState<{ key: NumericAircraftFilterKey; value: string } | null>(null);
   const activeFlightRef = useRef({ priority_flight: "", priority_flight_exclusive: false });
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
@@ -537,6 +533,8 @@ export default function App() {
     scatter_score: number; off_path_deg: number; state: string;
     rotator_az?: number | null; rotator_el?: number | null;
     position_updated_epoch_s?: number | null;
+    position_source?: string | null;
+    position_max_age_s?: number;
     range_a_km?: number | null;
     range_b_km?: number | null;
   } | null>(null);
@@ -706,6 +704,9 @@ export default function App() {
               off_path_deg: typeof evtData.off_path_deg === "number" ? evtData.off_path_deg : prev.off_path_deg,
               position_updated_epoch_s: typeof evtData.position_updated_epoch_s === "number"
                 ? evtData.position_updated_epoch_s : null,
+              position_source: typeof evtData.position_source === "string" ? evtData.position_source : null,
+              position_max_age_s: typeof evtData.position_max_age_s === "number"
+                ? evtData.position_max_age_s : undefined,
               scatter_score: evtData.scatter_score as number,
               state: evtData.state as string,
               rotator_az: evtData.rotator_az as number | null,
@@ -719,12 +720,6 @@ export default function App() {
           return;
         }
 
-        // RPC response
-        if (data.id && _pending.has(data.id as string)) {
-          const resolver = _pending.get(data.id as string)!;
-          _pending.delete(data.id as string);
-          resolver(data as { ok: boolean; result?: unknown; error?: string });
-        }
       } catch { /* ignore */ }
     });
     return () => { unlisten.then((f) => f()); };
@@ -765,10 +760,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (sourceStatus !== null) return;
     rpc("airscout_get_sources")
       .then((s) => setSourceStatus(s as AirscoutSourceState))
-      .catch(() => {});
-  }, []);
+      .catch(error => addLog(`Cannot read aircraft sources: ${String(error)}`));
+  }, [status !== null, addLog]);
+
+  useEffect(() => {
+    if (status === null) return;
+    rpc("rtlsdr_auto_start").catch(error => addLog(`Automatic USB receiver startup: ${String(error)}`));
+  }, [status !== null, addLog]);
 
   useEffect(() => {
     const id = setInterval(() => setNowEpochS(Math.floor(Date.now() / 1000)), 1000);
@@ -942,8 +943,11 @@ export default function App() {
   })();
   const stateColor = STATE_COLOR[displayState] ?? "#8b949e";
   const aircraft = airscout?.aircraft ?? [];
-  const flightData = useMemo(() => [...(airscout?.flight_data ?? [])]
-    .sort((a, b) => b.scatter_score - a.scatter_score), [airscout?.flight_data]);
+  const flightData = useMemo(() => {
+    const rows = [...(airscout?.flight_data ?? [])];
+    return !airscout?.ranking_method || airscout.ranking_method === "legacy"
+      ? rows.sort((a, b) => b.scatter_score - a.scatter_score) : rows;
+  }, [airscout?.flight_data, airscout?.ranking_method]);
   const usableTimes = useMemo(() => {
     const station = (grid: string | null | undefined, altitudeM: number | undefined) => {
       if (!isValidLocator(grid) || altitudeM === undefined) return null;
@@ -980,7 +984,7 @@ export default function App() {
   const internetSourceState = activeSource === "adsbexchange"
     ? activeSourceState : sourceStatus?.sources?.opensky?.state ?? "stopped";
   const dump1090Busy = activeSource === "dump1090" && activeSourceState === "busy";
-  const connectivityState = activeSource === "dump1090" && activeSourceState === "connected"
+  const connectivityState = (activeSource === "dump1090" || activeSource === "rtlsdr") && activeSourceState === "connected"
     ? "local"
     : dump1090Busy
       ? "busy"
@@ -1032,15 +1036,33 @@ export default function App() {
       heading_tolerance_deg: Number.isFinite(nextFilters.heading_tolerance_deg) ? nextFilters.heading_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.heading_tolerance_deg,
       position_tolerance_deg: Number.isFinite(nextFilters.position_tolerance_deg) ? nextFilters.position_tolerance_deg : DEFAULT_AIRCRAFT_FILTERS.position_tolerance_deg,
     };
+    const storageKey = getAircraftFilterStorageKey(airscout?.station_a, airscout?.station_b);
+    const request = ++aircraftFilterRequestRef.current;
     activeFlightRef.current = {
       priority_flight: normalized.priority_flight,
       priority_flight_exclusive: normalized.priority_flight_exclusive,
     };
-    const storageKey = getAircraftFilterStorageKey(airscout?.station_a, airscout?.station_b);
-    localStorage.setItem(storageKey, JSON.stringify(normalized));
     setAircraftFilters(normalized);
     rpc("airscout_apply_filters", { filters: normalized })
-      .catch((e) => addLog(`Aircraft filter update: ${e}`));
+      .then(() => {
+        confirmedAircraftFiltersRef.current = normalized;
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(normalized));
+        } catch (e) {
+          addLog(`Aircraft filter storage: ${e}`);
+        }
+      })
+      .catch((e) => {
+        if (request === aircraftFilterRequestRef.current) {
+          const confirmed = confirmedAircraftFiltersRef.current;
+          setAircraftFilters(confirmed);
+          activeFlightRef.current = {
+            priority_flight: confirmed.priority_flight,
+            priority_flight_exclusive: confirmed.priority_flight_exclusive,
+          };
+        }
+        addLog(`Aircraft filter update: ${e}`);
+      });
   }, [airscout?.station_a, airscout?.station_b, addLog]);
 
   const storeFlight = () => {
@@ -1094,14 +1116,8 @@ export default function App() {
   }, [status === null, myCallsign, myGrid, myCallOverride, myGridOverride, dxCall, selectedDxGrid, dxLocal, addLog]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    localStorage.setItem(ROTATOR_CONTROL_KEY, String(rotatorControlEnabled));
     if (!status) return;
-    rpc("set_rotator_control", { enabled: rotatorControlEnabled }).catch(() => {});
-  }, [status === null, rotatorControlEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!status) return;
-    rpc("set_pointing_mode", { mode: uiMode }).catch(() => {});
+    rpc("set_pointing_mode", { mode: uiMode }).catch(e => addLog(`Pointing mode: ${e}`));
   }, [status === null, uiMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1207,9 +1223,8 @@ export default function App() {
       ...loadAircraftFilters(airscout?.station_a, airscout?.station_b),
       ...activeFlightRef.current,
     };
-    setAircraftFilters(stored);
-    rpc("airscout_apply_filters", { filters: stored }).catch(e => addLog(`Aircraft filter restore: ${e}`));
-  }, [airscout?.station_a, airscout?.station_b]);
+    persistAircraftFilters(stored);
+  }, [airscout?.station_a, airscout?.station_b, persistAircraftFilters]);
 
   function savePortableGrid(callsign: string | null, grid: string | null) {
     if (!callsign) return;
@@ -1551,7 +1566,11 @@ export default function App() {
           <span style={{ fontSize: 10, color: sourceDotColor }}>
             {activeSource ? "●" : "○"} {activeSource ?? "no source"} · {freshnessLabel}
           </span>
-          {rotatorConnected
+          {outputMode !== "hamlib"
+            ? <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                {outputMode === "dde" ? "SatPC32 DDE" : "Rotator output off"}
+              </span>
+            : rotatorConnected
             ? <span style={{ fontSize: 10, color: "var(--green)" }}>● rotctld</span>
             : <span style={{ fontSize: 10, color: "var(--red)" }}>○ rotctld</span>}
           {airscout && (
@@ -1883,11 +1902,8 @@ export default function App() {
               onLockAircraft={(icao24) => rpc("lock_aircraft", { icao24 }).catch(e => addLog(`Lock: ${e}`))}
               sourceStatusText={activeSource ? `${activeSource} ${activeSourceState}` : undefined}
               priorityFlight={aircraftFilters.priority_flight}
-              aircraft={aircraft.slice(0, 5).map(ac => ({
-                icao24: ac.icao24, callsign: ac.callsign, altitude_ft: ac.altitude_ft,
-                scatter_score: ac.scatter_score, az_a: ac.az_a, el_a: ac.el_a,
-                az_b: ac.az_b, el_b: ac.el_b, off_path_deg: ac.off_path_deg,
-              }))}
+              rankingMethod={airscout?.ranking_method}
+              aircraft={aircraft.slice(0, 5)}
             />
           </div>
         </div>
@@ -1895,41 +1911,8 @@ export default function App() {
         {/* CENTRE: Rotator */}
         <div className="col" style={{ alignItems: "center", justifyContent: "flex-start", overflowY: "auto" }}>
           <div className="card" style={{ width: "100%", alignSelf: "stretch", flexShrink: 0 }}>
+            <SatPC32DDE onModeChange={setOutputMode} />
             <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, flexWrap: "nowrap", marginBottom: 8 }}>
-              <button
-                type="button"
-                className="btn-secondary"
-                title={rotatorControlEnabled
-                  ? (rotatorConnected
-                    ? "Rotor control is on. Click to block all rotator movement commands."
-                    : "Rotor control is on but rotctld is not connected. Click to block all rotator movement commands.")
-                  : "Rotor control is off: no movement commands are sent. Click to re-enable."}
-                aria-pressed={!rotatorControlEnabled}
-                style={{
-                  fontSize: 10,
-                  padding: "4px 10px",
-                  whiteSpace: "nowrap",
-                  border: rotorOn ? "1px solid var(--green)" : "1px solid var(--red)",
-                  background: rotorOn ? "rgba(63,185,80,0.25)" : "rgba(248,81,73,0.25)",
-                  color: rotorOn ? "var(--green)" : "var(--red)",
-                }}
-                onClick={() => {
-                  const next = !rotatorControlEnabled;
-                  setRotatorControlEnabled(next);
-                  if (!next) return;
-                  // Re-sending the displayed pointing once control resumes
-                  const useLocked = uiMode !== "manual" && lockedPlane
-                    && Number.isFinite(lockedPlane.az_a) && Number.isFinite(lockedPlane.el_a);
-                  const az = useLocked ? lockedPlane!.az_a : rotatorTargetAz;
-                  const el = useLocked ? lockedPlane!.el_a : rotatorTargetEl;
-                  if (az === null || el === null || !rotatorConnected) return;
-                  rpc("set_rotator_control", { enabled: true })
-                    .then(() => rpc("rotator_set", { azimuth: az, elevation: el }))
-                    .catch(e => addLog(`Rotator: ${e}`));
-                }}
-              >
-                {rotorOn ? "Rotor: ON" : "Rotor: OFF"}
-              </button>
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
               <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", gap: 4 }}>
                 {(["rotator", "manual"] as const).map((mode) => (
@@ -1984,6 +1967,7 @@ export default function App() {
               targetEl={lockedPlane && uiMode !== "manual" ? lockedPlane.el_a : autoTargetInvalid && lastPlaneTarget ? lastPlaneTarget.el : rotatorTargetEl}
               targetInvalid={autoTargetInvalid}
               connected={rotatorConnected}
+              hamlibEnabled={outputMode === "hamlib"}
               dxAz={dxBearing}
               dxLabel={dxCall}
               myLabel={myCallsign}
@@ -2055,6 +2039,21 @@ export default function App() {
               </span>}
             </h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+                <span>Best-path ranking</span>
+                <DarkSelect ariaLabel="Best-path ranking" value={aircraftFilters.ranking_method}
+                  width={230} popupWidth={280} options={[...RANKING_OPTIONS]}
+                  onChange={value => {
+                    if (isRankingMethod(value)) {
+                      persistAircraftFilters({ ...aircraftFilters, ranking_method: value });
+                    }
+                  }} />
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                Score remains legacy geometry, not SNR. Ranking changes selection order, not active locks.
+                {aircraftFilters.ranking_method === "window-product"
+                  && " Known fresh windows rank first; unavailable windows use range fallback. Constant motion, 30-minute cap."}
+              </div>
               <details className="aircraft-filters">
                 <summary>Filters</summary>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
@@ -2236,7 +2235,7 @@ export default function App() {
                           }
                         }}
                       >
-                        {enabled ? "✓" : "+"} {source === "adsbexchange" ? "ADS-B Exchange" : source}
+                        {enabled ? "✓" : "+"} {source === "adsbexchange" ? "ADS-B Exchange" : source === "rtlsdr" ? "Local RTL-SDR" : source}
                       </button>
                       {enabled && (
                         <>
@@ -2272,6 +2271,13 @@ export default function App() {
               </div>
               <AircraftAccounts onLog={addLog} />
               <Dump1090Source load={loadDump1090Host} save={saveDump1090Host} onLog={addLog} />
+              {availableSources.includes("rtlsdr") && (
+                <LocalReceiver request={rpc} onLog={addLog} onChanged={() => {
+                  rpc("airscout_get_sources")
+                    .then(result => setSourceStatus(result as AirscoutSourceState))
+                    .catch(reason => addLog(`Cannot refresh aircraft sources: ${String(reason)}`));
+                }} />
+              )}
               {sourceStatus?.sources?.adsbexchange?.message && (
                 <div style={{ fontSize: 10, color: "var(--yellow)" }}>
                   ADS-B Exchange: {sourceStatus.sources.adsbexchange.message}
@@ -2317,6 +2323,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Call</th><th>FL</th><th>Score</th>
+                    {airscout?.ranking_method && airscout.ranking_method !== "legacy" && <th>Rank</th>}
                     <th title="Feed-reported aircraft ground-track direction, degrees clockwise from true north">HDG°</th>
                     <th>AZ-A</th><th>EL-A</th><th>Off°</th><th>km</th>
                     <th title="Estimated usable time remaining from the latest aircraft report (m:ss). Above both radio horizons and inside both 90° path boundaries; ignores optional filters and score. Constant altitude, ground speed and great-circle track; 30-minute limit. Not a signal-quality guarantee.">Use</th>
@@ -2339,6 +2346,17 @@ export default function App() {
                         </td>
                         <td>{Math.round(ac.altitude_ft / 100)}</td>
                         <td style={{ color: scColor, fontWeight: 600 }}>{(sc * 100).toFixed(0)}%</td>
+                        {airscout?.ranking_method && airscout.ranking_method !== "legacy" && (
+                          <td title={ac.ranking_reason}>
+                            {formatRanking({
+                              ranking_value: ac.ranking_value ?? null,
+                              range_gain_db: ac.range_gain_db ?? null,
+                              ranking_reason: ac.ranking_reason ?? "Ranking unavailable",
+                              ranking_window_s: ac.ranking_window_s ?? null,
+                              ranking_window_capped: ac.ranking_window_capped ?? false,
+                            }, airscout.ranking_method)}
+                          </td>
+                        )}
                         <td title={ac.heading_deg == null ? "Aircraft heading not reported" : "Feed-reported ground-track direction"}>
                           {ac.heading_deg == null ? "—" : `${Math.round(ac.heading_deg) % 360}°`}
                         </td>

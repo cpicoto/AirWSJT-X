@@ -9,6 +9,7 @@ export interface Aircraft {
   vertical_rate_ms: number | null;
   on_ground: boolean;
   last_seen: number;
+  position_updated_epoch_s?: number | null;
 }
 
 const OPENSKY_URL = "https://opensky-network.org/api/states/all";
@@ -25,6 +26,7 @@ function parseOpenSky(states: unknown[][]): Aircraft[] {
       altitude_m: geoAlt ?? baroAlt, velocity_ms: s[9] as number | null,
       heading_deg: s[10] as number | null, vertical_rate_ms: s[11] as number | null,
       on_ground: Boolean(s[8]), last_seen: now,
+      position_updated_epoch_s: typeof s[3] === "number" ? s[3] : null,
     };
   });
 }
@@ -54,7 +56,7 @@ export async function fetchNativeAircraft(
   provider: "opensky" | "adsbexchange",
   latMin: number, lonMin: number, latMax: number, lonMax: number,
 ): Promise<Aircraft[]> {
-  const data = await invoke<{ states?: unknown[][] | null; ac?: Record<string, unknown>[] }>("fetch_mobile_aircraft", {
+  const data = await invoke<{ states?: unknown[][] | null; ac?: Record<string, unknown>[]; now?: number }>("fetch_mobile_aircraft", {
     provider, latMin, lonMin, latMax, lonMax,
   });
   if (provider === "opensky") return parseOpenSky(data.states ?? []);
@@ -78,15 +80,22 @@ export async function fetchNativeAircraft(
       heading_deg: number(ac.track),
       vertical_rate_ms: rate === null ? null : rate * 0.00508,
       on_ground: ac.alt_baro === "ground", last_seen: Date.now(),
+      position_updated_epoch_s: typeof data.now === "number" && Number.isFinite(data.now)
+        && typeof ac.seen_pos === "number" && Number.isFinite(ac.seen_pos) && ac.seen_pos >= 0
+        ? data.now / 1000 - ac.seen_pos : null,
     };
   });
 }
 
 export async function fetchDump1090Aircraft(host: string): Promise<Aircraft[]> {
-  const data = await invoke<{ aircraft?: Omit<Aircraft, "last_seen">[] }>("fetch_mobile_dump1090", { host });
+  const data = await invoke<{ aircraft?: (Omit<Aircraft, "last_seen"> & { position_age_s?: number | null })[] }>("fetch_mobile_dump1090", { host });
   if (!Array.isArray(data.aircraft)) throw new Error("Invalid dump1090 aircraft data");
   const now = Date.now();
-  return data.aircraft.map(ac => ({ ...ac, last_seen: now }));
+  return data.aircraft.map(ac => ({
+    ...ac, last_seen: now,
+    position_updated_epoch_s: typeof ac.position_age_s === "number" && Number.isFinite(ac.position_age_s) && ac.position_age_s >= 0
+      ? now / 1000 - ac.position_age_s : null,
+  }));
 }
 
 export interface OpenSkyPollerOptions {

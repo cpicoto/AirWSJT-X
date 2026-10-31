@@ -37,6 +37,40 @@ Tauri's final release directory before uploading the installer. Validate the
 installed package on the affected Windows device too; a CI runner may not have
 the same Application Control policies.
 
+Windows x64 also bundles pinned RTL-SDR Blog receive-only tools
+inside the Python runtime. Run `python scripts/install_rtlsdr.py` before building
+the sidecar. The installer verifies upstream archive SHA256 hashes, stages only
+the required runtime files, and includes the GPL license and corresponding
+RTL-SDR source archive. It does not install USB drivers. Keep these files together
+in the `rtl-sdr` runtime subdirectory; never resolve executables from PATH or an
+external dump1090 installation. This integration is currently Windows x64 only;
+ARM64, macOS (including TestFlight), Linux, and mobile keep the network feeds.
+The production helper is `airwsjtx_adsb.exe`, built by
+`python scripts/build_adsb_receiver.py` using installed Visual Studio x64 C++
+build tools (no new compiler download). The sidecar builder recompiles it on
+every build. Its GPLv3 source, build script and license are packaged
+beside the executable; `scripts/dump1090-fa/` vendors pinned GPL-2.0-or-later
+demodulation and ICAO-filter code compatible with the project's GPLv3 license.
+Keep upstream copyright notices, `COPYING` and `UPSTREAM.txt` with those sources.
+Only the unused Mode A/C portion is compiled out; do not casually change the
+Mode S algorithm or replace its rate-specific correlation weights.
+The adapter disables error correction, DF24 and automatic gain adaptation.
+Upstream RTL-SDR sources/licenses remain included for
+the dynamically loaded library. The legacy `rtl_adsb.exe` is retained for
+offline comparison, not selected as a silent fallback. The new helper captures
+at 2.4 MS/s; offline unsigned interleaved I/Q replay requires the same rate:
+`airwsjtx_adsb.exe --input capture.bin --rate 2400000`.
+Older 2 MS/s recordings must be explicitly resampled to 2.4 MS/s for comparison;
+never relabel them. Native diagnostics retain accepted DF17 payload bytes,
+zero CRC syndrome and 12 MHz sample timestamps for independent audit; no
+CRC-failing/unknown-address parity candidate is emitted as a validated aircraft frame.
+Run `python -m unittest tests.test_adsb_native tests.test_rtlsdr_demodulator -v`
+with staged tools and the MSVC environment. Keep noisy fractional-phase,
+cross-buffer, corrupt-CRC, queue-loss and process-lifecycle tests enforced.
+Compare helpers on identical IQ before claiming decode-yield improvement; raw
+candidate counts, different traffic windows and a clean synthetic pair are not
+equivalent to a live before/after RF comparison.
+
 ### macOS TestFlight packaging
 
 Import the Apple Distribution certificate before running PyInstaller, and pass

@@ -1,3 +1,5 @@
+import { formatRanking, type RankingMethod } from "./lib/aircraftRanking";
+
 interface LockState {
   icao24: string;
   callsign: string;
@@ -14,6 +16,8 @@ interface LockState {
   rotator_az?: number | null;
   rotator_el?: number | null;
   position_updated_epoch_s?: number | null;
+  position_source?: string | null;
+  position_max_age_s?: number;
 }
 
 interface PlaneLockPanelProps {
@@ -27,7 +31,10 @@ interface PlaneLockPanelProps {
     icao24: string; callsign: string; altitude_ft: number;
     scatter_score: number; az_a: number; el_a: number;
     az_b: number; el_b: number; off_path_deg: number;
+    ranking_value?: number | null; ranking_reason?: string; range_gain_db?: number | null;
+    ranking_window_s?: number | null; ranking_window_capped?: boolean;
   }[];
+  rankingMethod?: RankingMethod;
   sourceStatusText?: string;
   priorityFlight?: string;
   nowEpochS: number;
@@ -99,14 +106,18 @@ export default function PlaneLockPanel({
   locked, autoLock, sessionState, onAutoLockToggle, onUnlock, onLockAircraft, aircraft,
   sourceStatusText,
   priorityFlight = "",
+  rankingMethod = "legacy",
   nowEpochS,
   pollIntervalS,
 }: PlaneLockPanelProps) {
   const stateInfo = STATE_LABELS[sessionState] ?? STATE_LABELS.idle;
   const updateAge = locked?.position_updated_epoch_s != null
     ? Math.max(0, Math.floor(nowEpochS - locked.position_updated_epoch_s)) : null;
-  const positionStale = locked?.position_updated_epoch_s != null
-    && nowEpochS - locked.position_updated_epoch_s > pollIntervalS + 5;
+  const positionAge = locked?.position_updated_epoch_s != null
+    ? Math.max(0, nowEpochS - locked.position_updated_epoch_s) : null;
+  const positionMaxAge = locked?.position_max_age_s ?? pollIntervalS + 5;
+  const positionStale = positionAge !== null && (locked?.position_source === "rtlsdr"
+    ? positionAge >= positionMaxAge : positionAge > positionMaxAge);
 
   // State machine progression steps
   const steps = ["idle", "plane_locked", "tracking", "ready", "active_qso"];
@@ -278,6 +289,16 @@ export default function PlaneLockPanel({
                     textAlign: "center" }}>
                     {(ac.scatter_score * 100).toFixed(0)}%
                   </span>
+                  {rankingMethod !== "legacy" && (
+                    <span title={ac.ranking_reason} style={{ gridColumn: "2 / 5", fontSize: 11, color: "#8b949e" }}>
+                      Rank {formatRanking({
+                        ranking_value: ac.ranking_value ?? null, range_gain_db: ac.range_gain_db ?? null,
+                        ranking_reason: ac.ranking_reason ?? "Unavailable",
+                        ranking_window_s: ac.ranking_window_s ?? null,
+                        ranking_window_capped: ac.ranking_window_capped ?? false,
+                      }, rankingMethod)}
+                    </span>
+                  )}
                   <span style={{ color: "#8b949e", fontFamily: "monospace", gridColumn: "2 / 4" }}>
                     AZ/EL {ac.az_a.toFixed(0)}°/{ac.el_a.toFixed(0)}°
                   </span>
