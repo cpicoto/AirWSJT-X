@@ -276,8 +276,6 @@ export default function LocalReceiver({ request, onChanged, onLog }: {
           </pre>
         </details>
       )}
-      <p>Stop releases the USB device and returns to configured network sources.
-        Only CRC-valid DF17 airborne ADS-B with paired CPR positions is used; local coverage is not a global feed.</p>
     </details>
   );
 }
