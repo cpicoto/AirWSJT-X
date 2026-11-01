@@ -301,7 +301,11 @@ class LocalRTLSDRFeed:
                 # Windows closes this process's USB handles on termination; on POSIX SIGTERM lets
                 # the helper cancel and close the device itself. No other PID is touched.
                 process.terminate()
-            process.wait(timeout=10)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
         for thread in self._threads:
             if thread is not threading.current_thread():
                 thread.join(timeout=10)
