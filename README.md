@@ -117,11 +117,39 @@ Expand **Aircraft accounts** in the desktop aircraft panel (or mobile **Settings
 
 - **OpenSky Network** — Create an account at [opensky-network.org](https://opensky-network.org/), create an API client, and paste the `clientId` and `clientSecret` values. The app handles OAuth2 token management automatically.
 - **ADS-B Exchange** — Obtain an API key from [ADS-B Exchange](https://gateway.adsbexchange.com/api/aircraft/v2/docs/index.html) for the direct v2 geographic radius endpoint. Note: RapidAPI keys use a different gateway and are not interchangeable.
-- **Local RTL-SDR (Windows x64, macOS, Linux)** — Plug in a compatible RTL-SDR with a 1090 MHz antenna before launching; the app automatically discovers and starts the first accessible receiver. To retry or choose another dongle, expand **Local RTL-SDR receiver (USB, Windows x64 / macOS / Linux)** in Flight Data, click **Discover USB receivers**, select it, then **Start local ADS-B**. No external dump1090 service, account, hostname, or TCP port is required. The bundled app-owned native demodulator receives at 1090 MHz / 2.4 MS/s with automatic tuner gain, digital AGC on and bias tee **off**. Close other SDR applications using the dongle first. The app does not install or replace drivers: if discovery is empty, check the physical connection and, on Windows, the WinUSB driver for **Bulk-In Interface 0** (not a different USB device). macOS needs no driver. On Linux (x64/arm64) the app bundles librtlsdr, but your user needs USB access to the dongle: install a udev rule such as `SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", MODE="0666"` (also `2832` for some dongles) in `/etc/udev/rules.d/`, reload with `sudo udevadm control --reload && sudo udevadm trigger`, and replug. If the kernel DVB driver claims the dongle, blacklist `dvb_usb_rtl28xxu` in `/etc/modprobe.d/`. The sandboxed Mac App Store/TestFlight build cannot access USB receivers, so use the direct-download app. **Stop local receiver** releases the dongle and returns to configured network sources; closing the app also releases it. Native startup/USB errors and candidate-frame, rejected-CRC, valid-message, aircraft, and position counters appear in this panel. A running receiver with no valid messages is not proof of RF reception; antenna placement and local traffic determine coverage.
+- **Local RTL-SDR (Windows x64, macOS, Linux)** — Plug in a compatible RTL-SDR with a 1090 MHz antenna before launching; the app automatically discovers and starts the first accessible receiver. To retry or choose another dongle, expand **Local RTL-SDR receiver (USB, Windows x64 / macOS / Linux)** in Flight Data, click **Discover USB receivers**, select it, then **Start local ADS-B**. No external dump1090 service, account, hostname, or TCP port is required. The bundled app-owned native demodulator receives at 1090 MHz / 2.4 MS/s with automatic tuner gain, digital AGC on and bias tee **off**. Close other SDR applications using the dongle first. The app does not install or replace drivers: if discovery is empty, check the physical connection and, on Windows, the WinUSB driver for **Bulk-In Interface 0** (not a different USB device). macOS needs no driver. On Linux (x64/arm64) the app bundles librtlsdr, but your user needs USB access to the dongle; see [Linux RTL-SDR USB setup](#linux-rtl-sdr-usb-setup) below. The sandboxed Mac App Store/TestFlight build cannot access USB receivers, so use the direct-download app. **Stop local receiver** releases the dongle and returns to configured network sources; closing the app also releases it. Native startup/USB errors and candidate-frame, rejected-CRC, valid-message, aircraft, and position counters appear in this panel. A running receiver with no valid messages is not proof of RF reception; antenna placement and local traffic determine coverage.
 - **Local RTL-SDR (Android, USB OTG)** — Connect the receiver with a USB OTG adapter, then in **Settings** set **Aircraft source** to **Local RTL-SDR (USB OTG)** and tap **Done**. Android asks once per connection to allow AirWSJT-X to access the USB device. The app then receives at 1090 MHz / 2.4 MS/s with automatic tuner gain using the same bundled demodulator as desktop, and the status line shows aircraft, positioned aircraft and valid-message counts. Choosing another source releases the dongle. If a DVB-T app (for example Aerial TV) opens when the dongle is plugged in, close it, or clear its **Open by default** setting, so it does not hold the device. The phone powers the dongle; a powered OTG hub helps if the device keeps disconnecting.
 - **dump1090 / readsb** — Connects via SBS TCP (port 30003). On desktop it defaults to a receiver on this computer (`127.0.0.1`); to use a receiver elsewhere on your network (for example a Raspberry Pi), expand **dump1090 source** below **Aircraft accounts**, enter its IP address or hostname, and click **Save dump1090 source**. The port stays 30003. The address is applied immediately and remembered across restarts. On mobile there may not be a local receiver, so the same **dump1090 source** section (in **Settings**) only takes a network address: saving it selects **dump1090 (network)** as the aircraft source, and **Disable dump1090** clears it and returns to OpenSky. The phone must be on the same network as the receiver (iOS asks for Local Network permission on first use).  If you have a tablet for example, with dump1090 and a USB RTL-SDR running, then 127.0.0.1 is valid entry.
 
 Credentials are stored in the OS credential manager (Keychain, Credential Manager, Secret Service, or Android Keystore). Poll intervals default to 30 seconds and are independently configurable per provider.
+
+#### Linux RTL-SDR USB setup
+
+Grant access only to the operator's group, not every local user. On distributions
+with a `plugdev` group, add your account with `sudo usermod -aG plugdev "$USER"`
+if needed, then log out and back in for new group membership to apply. On other
+distributions, use an existing suitable device-access group or ask your
+administrator to create one and substitute its name below.
+
+Create `/etc/udev/rules.d/99-rtlsdr-airwsjtx.rules` with:
+
+```udev
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", GROUP="plugdev", MODE="0660"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", GROUP="plugdev", MODE="0660"
+```
+
+Run `sudo udevadm control --reload-rules`, unplug/replug the receiver, then retry
+discovery. Check that its `/dev/bus/usb/BBB/DDD` node is writable by your group.
+
+If `dvb_usb_rtl28xxu` has claimed the dongle, a permission rule alone will not
+release it. Close any DVB-TV/SDR application first. An administrator can
+temporarily unbind just the dongle's interface from that driver; do not unbind
+unrelated USB interfaces. For a dedicated ADS-B dongle, an alternative is to add
+`blacklist dvb_usb_rtl28xxu` to a file in `/etc/modprobe.d/` and **reboot before
+retrying**. Blacklisting alone does not unload an already-loaded driver.
+Blacklisting affects other receivers using that driver and prevents normal DVB-TV
+use; only do it if that tradeoff is intended. AirWSJT-X makes none of these host
+permission or driver changes itself.
 
 #### Validated RTL-SDR receivers
 
