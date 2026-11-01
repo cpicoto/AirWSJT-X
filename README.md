@@ -122,6 +122,22 @@ Expand **Aircraft accounts** in the desktop aircraft panel (or mobile **Settings
 
 Credentials are stored in the OS credential manager (Keychain, Credential Manager, Secret Service, or Android Keystore). Poll intervals default to 30 seconds and are independently configurable per provider.
 
+#### Validated RTL-SDR receivers
+
+Live receive-only ADS-B (CRC-valid DF17 frames and decoded aircraft positions)
+has been confirmed with the following hardware. Other RTL2832U-based dongles
+supported by librtlsdr are expected to work but have not been tested.
+
+| Receiver | USB ID | Tuner | Operating system | Driver | Result |
+|---|---|---|---|---|---|
+| Nooelec NESDR SMArt v5 | `0BDA:2838` | R820T | macOS 26.5.1 (Apple Silicon, arm64), direct-download build | None needed | 176 valid messages, 0 CRC errors, 54 positions, 5 aircraft in about 40 s |
+| Nooelec NESDR SMArt v5 | `0BDA:2838` | R820T | Windows x64 | WinUSB (Zadig) on Bulk-In Interface 0 | Discovered, CRC-valid frames received |
+| Generic RTL2832U dongle | `0BDA:2832` | R820T | Windows x64 | WinUSB (Zadig) on Bulk-In Interface 0 | 148 valid messages, 16 aircraft (10 positioned), 37 position fixes in one session |
+
+The sandboxed Mac App Store/TestFlight build has no USB access, so local RTL-SDR
+reception is unavailable there; Intel macOS (x86_64) is supported but not yet
+validated with hardware.
+
 Local reception accepts CRC-valid DF17 ADS-B only, without bit-error correction.
 The app-owned helper now uses FlightAware dump1090's pinned
 [`465e063` 2.4 MS/s demodulator](https://github.com/flightaware/dump1090/blob/465e06330372ab0586a6a5063c66b60a8750f2b6/demod_2400.c):
