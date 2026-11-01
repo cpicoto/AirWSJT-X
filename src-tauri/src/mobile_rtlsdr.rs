@@ -6,15 +6,16 @@
 //! feeds DF17 frames into the shared Rust ADS-B decoder.
 
 use crate::adsb::Decoder;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 #[derive(Default)]
 struct Shared {
-    decoder: Mutex<Decoder>,
-    report: Mutex<Option<serde_json::Value>>,
-    log: Mutex<Vec<String>>,
-    finished: Mutex<Option<i32>>,
+    decoder: StdMutex<Decoder>,
+    report: StdMutex<Option<serde_json::Value>>,
+    log: StdMutex<Vec<String>>,
+    finished: StdMutex<Option<i32>>,
 }
 
 struct Receiver {
@@ -75,6 +76,7 @@ mod native {
             fd: isize, manual: i32, gain_db: f64,
             on_frame: FrameFn, on_report: TextFn, on_log: TextFn, ctx: *mut c_void,
         ) -> i32;
+        fn airwsjtx_adsb_prepare() -> i32;
         fn airwsjtx_adsb_stop();
         fn __android_log_write(priority: i32, tag: *const c_char, text: *const c_char) -> i32;
     }
@@ -135,25 +137,66 @@ mod native {
     pub fn stop() {
         unsafe { airwsjtx_adsb_stop() }
     }
+
+    pub fn prepare() -> bool {
+        unsafe { airwsjtx_adsb_prepare() != 0 }
+    }
 }
 
-fn stop_receiver(receiver: &mut Receiver) {
-    #[cfg(target_os = "android")]
-    native::stop();
+fn stop_receiver(receiver: &mut Receiver) -> Option<i32> {
     if let Some(thread) = receiver.thread.take() {
+        #[cfg(target_os = "android")]
+        native::stop();
         let _ = thread.join();
     }
+    *receiver.shared.finished.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Drop for Receiver {
     fn drop(&mut self) {
-        stop_receiver(self);
+        let _ = stop_receiver(self);
     }
+}
+
+async fn stop_existing(slot: &mut Option<Receiver>) -> Result<(), String> {
+    if let Some(mut receiver) = slot.take() {
+        let (receiver, finished) = tauri::async_runtime::spawn_blocking(move || {
+            let finished = stop_receiver(&mut receiver);
+            (receiver, finished)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if finished == Some(2) {
+            // The detached libusb reader still owns the wrapped Android file
+            // descriptor. Retain the receiver marker so no later start can
+            // close/reuse that descriptor while native code is still using it.
+            *slot = Some(receiver);
+            return Err("The RTL-SDR USB reader is stuck; restart the app before reconnecting the device.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Stops any prior worker and proves native USB state is safe before the
+/// WebView opens (or replaces) Android's UsbDeviceConnection.
+#[tauri::command]
+pub async fn prepare_mobile_rtlsdr(state: tauri::State<'_, MobileRtlSdrState>) -> Result<(), String> {
+    let mut guard = state.0.lock().await;
+    stop_existing(&mut guard).await?;
+    #[cfg(target_os = "android")]
+    {
+        if !native::prepare() {
+            return Err("The previous RTL-SDR reader did not shut down; restart the app before reconnecting the device.".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Local RTL-SDR over USB is only available on Android.".into())
 }
 
 /// Starts receiving from an already-opened Android USB file descriptor.
 #[tauri::command]
-pub fn start_mobile_rtlsdr(
+pub async fn start_mobile_rtlsdr(
     state: tauri::State<'_, MobileRtlSdrState>,
     fd: i32,
     gain_db: Option<f64>,
@@ -166,14 +209,21 @@ pub fn start_mobile_rtlsdr(
             return Err("RTL-SDR gain must be between 0 and 60 dB.".into());
         }
     }
-    let mut guard = state.0.lock().map_err(|_| "RTL-SDR state is unavailable.")?;
-    if let Some(mut previous) = guard.take() {
-        stop_receiver(&mut previous);
-    }
+    // The async mutex is deliberately held until the previous native worker has
+    // joined and the replacement is published. This serializes every start/stop
+    // transition without blocking an async-runtime worker on the native join.
+    let mut guard = state.0.lock().await;
+    stop_existing(&mut guard).await?;
     let shared = Arc::new(Shared::default());
     let started = Instant::now();
     #[cfg(target_os = "android")]
     let thread = {
+        // Clear stale cancellation before spawning. A stop cannot pass the state
+        // mutex until the new Receiver is stored, so cancellation after this call
+        // cannot be lost by the C worker during startup.
+        if !native::prepare() {
+            return Err("The previous RTL-SDR reader did not shut down; reconnect the device.".into());
+        }
         let context = Box::new(native::Context { shared: shared.clone(), started });
         let thread_shared = shared.clone();
         std::thread::Builder::new()
@@ -200,20 +250,18 @@ pub fn start_mobile_rtlsdr(
 }
 
 #[tauri::command]
-pub fn fetch_mobile_rtlsdr(state: tauri::State<'_, MobileRtlSdrState>) -> Result<serde_json::Value, String> {
-    let guard = state.0.lock().map_err(|_| "RTL-SDR state is unavailable.")?;
+pub async fn fetch_mobile_rtlsdr(state: tauri::State<'_, MobileRtlSdrState>) -> Result<serde_json::Value, String> {
+    let guard = state.0.lock().await;
     guard.as_ref().map(snapshot).ok_or_else(|| "The RTL-SDR receiver is not running.".into())
 }
 
 #[tauri::command]
 pub async fn stop_mobile_rtlsdr(state: tauri::State<'_, MobileRtlSdrState>) -> Result<(), String> {
-    let receiver = state.0.lock().map_err(|_| "RTL-SDR state is unavailable.")?.take();
-    if let Some(mut receiver) = receiver {
-        tauri::async_runtime::spawn_blocking(move || stop_receiver(&mut receiver))
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    // Keep the lifecycle mutex until join completes. A new start therefore
+    // cannot observe an empty slot while the old receiver still owns native/USB
+    // state, and an old Drop cannot race a replacement.
+    let mut guard = state.0.lock().await;
+    stop_existing(&mut guard).await
 }
 
 #[cfg(test)]

@@ -490,6 +490,34 @@ class AndroidRtlSdrTests(unittest.TestCase):
         self.assertIn('define("AIRWSJTX_LIBRARY"', build)
         self.assertIn("install_rtlsdr.py --android", build)
 
+    def test_receiver_lifecycle_is_serialized_across_native_and_webview_layers(self) -> None:
+        rust = (self.root / "src-tauri" / "src" / "mobile_rtlsdr.rs").read_text()
+        native = (self.root / "scripts" / "adsb_receiver.c").read_text()
+        frontend = (self.root / "src" / "lib" / "androidRtlSdr.ts").read_text()
+
+        self.assertIn("use tokio::sync::Mutex", rust)
+        self.assertGreaterEqual(rust.count("state.0.lock().await"), 3)
+        self.assertIn("if let Some(thread) = receiver.thread.take()", rust)
+        stop_block = rust[rust.index("fn stop_receiver"):rust.index("impl Drop for Receiver")]
+        self.assertLess(stop_block.index("if let Some(thread)"), stop_block.index("native::stop()"))
+
+        self.assertIn("int airwsjtx_adsb_prepare(void)", native)
+        prepare_block = native[native.index("int airwsjtx_adsb_prepare(void)"):native.index("/* Requests a running")]
+        self.assertLess(prepare_block.index("FLAG_GET(running)"), prepare_block.index("__atomic_store_n(&exiting, 0"))
+        run_block = native[native.index("int airwsjtx_adsb_run("):native.index("#else\nint main")]
+        self.assertNotIn("__atomic_store_n(&exiting, 0", run_block)
+        self.assertLess(rust.index("native::prepare()"), rust.index('.name("rtlsdr-adsb"'))
+
+        self.assertIn("rtlSdrLifecycleTail", frontend)
+        self.assertIn("withRtlSdrLifecycle(() => this.startExclusive())", frontend)
+        self.assertIn("withRtlSdrLifecycle(async () =>", frontend)
+        self.assertIn('await invoke("prepare_mobile_rtlsdr")', frontend)
+        self.assertIn('try {\n      await invoke("stop_mobile_rtlsdr");\n    } catch {\n      return;', frontend)
+        stop_method = frontend[frontend.index("async stop():"):]
+        self.assertIn("await this.releaseExclusive();", stop_method)
+        self.assertIn("pub async fn prepare_mobile_rtlsdr", rust)
+        self.assertIn("if finished == Some(2)", rust)
+
 
 if __name__ == "__main__":
     unittest.main()

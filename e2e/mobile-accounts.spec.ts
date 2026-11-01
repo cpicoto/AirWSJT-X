@@ -91,6 +91,93 @@ test("android local RTL-SDR asks for USB access, starts with the device fd, and 
   expect(await page.evaluate(() => (window as unknown as { __mockRtlSdrStops: number }).__mockRtlSdrStops)).toBe(1);
 });
 
+test("a stale RTL-SDR fetch cannot stop the replacement source", async ({ page }) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, {
+      __rtlCalls: calls,
+      __mockRtlSdrFetchPlan: [{
+        delayMs: 1200,
+        response: { running: false, exit_code: 1, valid_messages: 0, crc_errors: 0,
+          positions: 0, log: ["old receiver stopped"], aircraft: [] },
+      }],
+      AndroidRtlSdr: {
+        listDevices: () => JSON.stringify([{
+          name: "/dev/bus/usb/001/002", vendorId: 0x0bda, productId: 0x2838,
+          product: "RTL2838UHIDIR", manufacturer: "Realtek",
+        }]),
+        hasPermission: () => true,
+        requestPermission: () => true,
+        open: (name: string) => { calls.push(`open ${name}`); return 77; },
+        close: () => { calls.push("close"); },
+      },
+    });
+  });
+  await page.goto("/");
+  const selectSource = async (source: "rtlsdr" | "opensky") => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByLabel("Aircraft source", { exact: true }).selectOption(source);
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+  };
+
+  await selectSource("rtlsdr");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __mockRtlSdrStarts?: unknown[] }).__mockRtlSdrStarts?.length ?? 0,
+  )).toBe(1);
+  await selectSource("opensky");
+  await selectSource("rtlsdr");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __mockRtlSdrStarts?: unknown[] }).__mockRtlSdrStarts?.length ?? 0,
+  )).toBe(2);
+  await page.waitForTimeout(1500);
+
+  expect(await page.evaluate(() => (window as unknown as { __mockRtlSdrStops?: number }).__mockRtlSdrStops)).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { __rtlCalls: string[] }).__rtlCalls))
+    .toEqual(["open /dev/bus/usb/001/002", "close", "open /dev/bus/usb/001/002"]);
+});
+
+test("a stuck native reader keeps its Android USB descriptor open and blocks replacement", async ({ page }) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, {
+      __rtlCalls: calls,
+      __mockRtlSdrStopError: true,
+      AndroidRtlSdr: {
+        listDevices: () => JSON.stringify([{
+          name: "/dev/bus/usb/001/002", vendorId: 0x0bda, productId: 0x2838,
+          product: "RTL2838UHIDIR", manufacturer: "Realtek",
+        }]),
+        hasPermission: () => true,
+        requestPermission: () => true,
+        open: (name: string) => { calls.push(`open ${name}`); return 77; },
+        close: () => { calls.push("close"); },
+      },
+    });
+  });
+  await page.goto("/");
+  const selectSource = async (source: "rtlsdr" | "opensky") => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByLabel("Aircraft source", { exact: true }).selectOption(source);
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+  };
+
+  await selectSource("rtlsdr");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __mockRtlSdrStarts?: unknown[] }).__mockRtlSdrStarts?.length ?? 0,
+  )).toBe(1);
+  await selectSource("opensky");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __mockRtlSdrStops?: number }).__mockRtlSdrStops ?? 0,
+  )).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { __rtlCalls: string[] }).__rtlCalls))
+    .toEqual(["open /dev/bus/usb/001/002"]);
+
+  await selectSource("rtlsdr");
+  await expect(page.getByText("Error: RTL-SDR reader is stuck", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __rtlCalls: string[] }).__rtlCalls))
+    .toEqual(["open /dev/bus/usb/001/002"]);
+});
+
 test("local RTL-SDR source is hidden without the Android USB bridge", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings", exact: true }).click();

@@ -492,6 +492,18 @@ static int stream_device(int manual, int gain, double duration, unsigned char *r
 #ifdef AIRWSJTX_LIBRARY
 static flag_t running;
 
+/* Reset cancellation before the caller publishes a new worker. Keeping this
+ * separate from run() prevents a concurrent stop from being cleared while the
+ * newly-created worker is entering airwsjtx_adsb_run(). */
+int airwsjtx_adsb_prepare(void)
+{
+    /* STREAM_STUCK deliberately leaves running set while its detached reader
+     * still owns these globals. Do not revive that reader by clearing exiting. */
+    if (FLAG_GET(running)) return 0;
+    __atomic_store_n(&exiting, 0, __ATOMIC_SEQ_CST);
+    return 1;
+}
+
 /* Requests a running airwsjtx_adsb_run() to stop; safe from any thread. */
 void airwsjtx_adsb_stop(void) { FLAG_SET(exiting); }
 
@@ -504,7 +516,6 @@ int airwsjtx_adsb_run(intptr_t fd, int manual, double gain_db,
     if (__atomic_exchange_n(&running, 1, __ATOMIC_SEQ_CST)) return -1;
     frame_cb = on_frame; report_cb = on_report; log_cb = on_log; cb_ctx = ctx;
     device = NULL;
-    __atomic_store_n(&exiting, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&reader_done, 0, __ATOMIC_SEQ_CST);
     reader_code = 0; head = count = 0; sequence = captured_samples = dropped = 0;
     samples = clipped = valid = accepted_other = failed_df17_trials = gaps = 0;

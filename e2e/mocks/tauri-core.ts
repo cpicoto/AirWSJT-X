@@ -187,7 +187,17 @@ export async function invoke(cmd: string, args?: Record<string, unknown>): Promi
     mock.__mockRtlSdrStarts = [...(mock.__mockRtlSdrStarts as unknown[] ?? []), args];
     return;
   }
+  if (cmd === "prepare_mobile_rtlsdr") {
+    const mock = window as unknown as Record<string, unknown>;
+    if (mock.__mockRtlSdrBlocked) throw new Error("RTL-SDR reader is stuck");
+    return;
+  }
   if (cmd === "fetch_mobile_rtlsdr") {
+    const mock = window as unknown as Record<string, unknown>;
+    const plan = mock.__mockRtlSdrFetchPlan as { delayMs?: number; response?: unknown }[] | undefined;
+    const step = plan?.shift();
+    if (step?.delayMs) await new Promise(resolve => setTimeout(resolve, step.delayMs));
+    if (step?.response) return step.response;
     return {
       running: true, exit_code: null, valid_messages: 42, crc_errors: 0, positions: 3, log: [],
       aircraft: [{
@@ -199,6 +209,10 @@ export async function invoke(cmd: string, args?: Record<string, unknown>): Promi
   if (cmd === "stop_mobile_rtlsdr") {
     const mock = window as unknown as Record<string, unknown>;
     mock.__mockRtlSdrStops = Number(mock.__mockRtlSdrStops ?? 0) + 1;
+    if (mock.__mockRtlSdrStopError) {
+      mock.__mockRtlSdrBlocked = true;
+      throw new Error("RTL-SDR reader is stuck");
+    }
     return;
   }
   if (cmd === "stop_mobile_dump1090") {

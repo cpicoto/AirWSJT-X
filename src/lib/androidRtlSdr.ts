@@ -37,6 +37,17 @@ interface FetchResponse {
 
 const PERMISSION_TIMEOUT_MS = 60000;
 
+// The Kotlin bridge and native demodulator are process-global. Queue complete
+// open/start and stop/close transitions so React effect replacement cannot let
+// an old source close or stop the receiver owned by its replacement.
+let rtlSdrLifecycleTail: Promise<void> = Promise.resolve();
+
+function withRtlSdrLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+  const run = rtlSdrLifecycleTail.then(operation, operation);
+  rtlSdrLifecycleTail = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 function bridge(): AndroidRtlSdrBridge | null {
   if (typeof window === "undefined") return null;
   const value = (window as unknown as { AndroidRtlSdr?: AndroidRtlSdrBridge }).AndroidRtlSdr;
@@ -63,9 +74,17 @@ export class AndroidRtlSdrSource {
 
   constructor(private readonly onStatus: (message: string) => void) {}
 
-  private async start(): Promise<void> {
+  private start(): Promise<void> {
+    return withRtlSdrLifecycle(() => this.startExclusive());
+  }
+
+  private async startExclusive(): Promise<void> {
     const usb = bridge();
     if (!usb) throw new Error("Local RTL-SDR requires the Android app");
+    if (this.disposed) throw new Error("RTL-SDR stopped");
+    // Prove the previous native reader released its wrapped descriptor before
+    // Kotlin open() closes/replaces the UsbDeviceConnection.
+    await invoke("prepare_mobile_rtlsdr");
     const devices = JSON.parse(usb.listDevices()) as UsbReceiver[];
     const receiver = devices[0];
     if (!receiver) throw new Error("No RTL-SDR found — connect it with a USB OTG adapter");
@@ -93,8 +112,9 @@ export class AndroidRtlSdrSource {
 
   async fetchAircraft(): Promise<Aircraft[]> {
     if (!this.starting) {
-      this.starting = this.start();
-      this.starting.catch(() => { this.starting = null; });
+      const starting = this.start();
+      this.starting = starting;
+      starting.catch(() => { if (this.starting === starting) this.starting = null; });
     }
     await this.starting;
     const data = await invoke<FetchResponse>("fetch_mobile_rtlsdr");
@@ -116,16 +136,36 @@ export class AndroidRtlSdrSource {
     }));
   }
 
-  private async release(): Promise<void> {
+  private release(): Promise<void> {
+    return withRtlSdrLifecycle(async () => {
+      // A fetch from a disposed source may resolve after its replacement has
+      // started. Its stale response must not stop or close the new receiver.
+      if (this.disposed) return;
+      await this.releaseExclusive();
+    });
+  }
+
+  private async releaseExclusive(): Promise<void> {
     this.starting = null;
     this.stats = null;
-    await invoke("stop_mobile_rtlsdr").catch(() => {});
+    // A stuck native reader must retain the Android file descriptor. Propagate
+    // that failure and deliberately leave the UsbDeviceConnection open.
+    try {
+      await invoke("stop_mobile_rtlsdr");
+    } catch {
+      return;
+    }
     bridge()?.close();
   }
 
   async stop(): Promise<void> {
     this.disposed = true;
-    await this.starting?.catch(() => {});
-    await this.release();
+    await withRtlSdrLifecycle(async () => {
+      // A queued/running start precedes this operation in the same lifecycle
+      // chain. By the time this callback runs it has settled, so teardown and
+      // USB close complete before any replacement source can open the bridge.
+      await this.starting?.catch(() => {});
+      await this.releaseExclusive();
+    });
   }
 }

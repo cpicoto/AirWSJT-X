@@ -241,6 +241,7 @@ pub fn run() {
         mobile_dump1090::fetch_mobile_dump1090,
         mobile_dump1090::stop_mobile_dump1090,
         mobile_rtlsdr::start_mobile_rtlsdr,
+        mobile_rtlsdr::prepare_mobile_rtlsdr,
         mobile_rtlsdr::fetch_mobile_rtlsdr,
         mobile_rtlsdr::stop_mobile_rtlsdr,
     ]);
