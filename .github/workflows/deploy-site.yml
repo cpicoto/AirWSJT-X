@@ -1,0 +1,22 @@
+name: Deploy website
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published release version (for example 0.3.34)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render and deploy Azure Static Website
+        env:
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: scripts/deploy_site.sh "${{ inputs.version }}"

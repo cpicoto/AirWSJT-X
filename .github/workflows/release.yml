@@ -197,66 +197,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Substitute version in site template
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/__VERSION__/$VERSION/g" site/index.html
-
-      - name: Deploy to Azure Static Website
+      - name: Render and deploy Azure Static Website
         env:
           AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-        run: |
-          az storage blob upload \
-            --account-name ad7npus \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --name AirWSJT-X/index.html \
-            --file site/index.html \
-            --content-type "text/html; charset=utf-8" \
-            --content-cache-control "no-store, no-cache, must-revalidate, max-age=0" \
-            --overwrite
-          az storage blob upload \
-            --account-name ad7npus \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --name AirWSJT-X \
-            --file site/index.html \
-            --content-type "text/html; charset=utf-8" \
-            --content-cache-control "no-store, no-cache, must-revalidate, max-age=0" \
-            --overwrite
-          az storage blob upload \
-            --account-name ad7npus \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --name Privacy/AirWSJT-X/index.html \
-            --file site/privacy.html \
-            --content-type "text/html; charset=utf-8" \
-            --content-cache-control "public, max-age=3600" \
-            --overwrite
-          az storage blob upload \
-            --account-name ad7npus \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --name Privacy/AirWSJT-X \
-            --file site/privacy.html \
-            --content-type "text/html; charset=utf-8" \
-            --content-cache-control "public, max-age=3600" \
-            --overwrite
-          az storage blob upload \
-            --account-name ad7npus \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --name Support/AirWSJT-X/index.html \
-            --file site/support.html \
-            --content-type "text/html; charset=utf-8" \
-            --content-cache-control "public, max-age=3600" \
-            --overwrite
-          az storage blob upload \
-            --account-name ad7npus \
-            --account-key "$AZURE_STORAGE_KEY" \
-            --container-name '$web' \
-            --name Support/AirWSJT-X \
-            --file site/support.html \
-            --content-type "text/html; charset=utf-8" \
-            --content-cache-control "public, max-age=3600" \
-            --overwrite
+        run: scripts/deploy_site.sh "${GITHUB_REF_NAME#v}"
