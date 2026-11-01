@@ -1,10 +1,14 @@
 const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown> = {
-  rotator_output_status: () => ({
-    mode: (window as unknown as { __mockOutputMode?: string }).__mockOutputMode ?? "off",
+  rotator_output_status: () => {
+    const mock = window as unknown as { __mockOutputMode?: string; __mockOutputStatusRequests?: number; __mockDDEStatus?: unknown };
+    mock.__mockOutputStatusRequests = Number(mock.__mockOutputStatusRequests ?? 0) + 1;
+    return {
+    mode: mock.__mockOutputMode ?? "off",
     hamlib_connected: false,
-    dde: (window as unknown as { __mockDDEStatus?: unknown }).__mockDDEStatus
+    dde: mock.__mockDDEStatus
       ?? { supported: false, enabled: false },
-  }),
+    };
+  },
   rotator_output_set: params => {
     const mock = window as unknown as Record<string, unknown>;
     if (mock.__mockOutputError) throw mock.__mockOutputError;

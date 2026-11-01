@@ -30,6 +30,8 @@ interface RotatorPanelProps {
   clicksBlocked?: boolean;
   onBlockedClick?: () => void;
   onConnect: (host: string, port: number) => void;
+  connecting?: boolean;
+  connectionError?: string | null;
 }
 
 // ─── Compass Rose SVG ─────────────────────────────────────────────────────────
@@ -355,6 +357,7 @@ export default function RotatorPanel({
   onSpeechIntervalSecChange,
   mode = "rotator",
   onSetPosition, onStop, onPark, onConnect, onSync, syncDisabled = false, clicksBlocked = false, onBlockedClick,
+  connecting = false, connectionError = null,
   hamlibEnabled = true,
   publishedTargetOnly = false,
 }: RotatorPanelProps) {
@@ -427,14 +430,24 @@ export default function RotatorPanel({
           <input value={port} inputMode="numeric" maxLength={5}
             onChange={e => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))}
             placeholder="port" style={{ ...inputStyle, width: 60, flexShrink: 0 }} />
-          <button className="btn-secondary" style={{ ...smBtn, flexShrink: 0 }}
+          <button className="btn-secondary" disabled={connecting} style={{
+            ...smBtn, flexShrink: 0,
+            borderColor: connectionError ? "var(--red)" : undefined,
+            color: connectionError ? "var(--red)" : undefined,
+            background: connectionError ? "rgba(248,81,73,0.12)" : undefined,
+          }}
             onClick={() => {
               localStorage.setItem("rotatorHost", host);
               localStorage.setItem("rotatorPort", port);
               onConnect(host, parseInt(port) || 4533);
             }}>
-            Connect
+            {connecting ? "Connecting…" : connectionError ? "Retry" : "Connect"}
           </button>
+        </div>
+      )}
+      {hamlibEnabled && !connected && connectionError && (
+        <div role="alert" style={{ color: "var(--red)", fontSize: 11 }}>
+          {connectionError}
         </div>
       )}
 

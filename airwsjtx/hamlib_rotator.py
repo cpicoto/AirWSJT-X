@@ -196,19 +196,30 @@ class HamlibRotator:
                 return None
 
     def _connect(self) -> bool:
+        sock: socket.socket | None = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(3.0)
             sock.connect((self.host, self.port))
             sock.settimeout(1.5)
             with self._lock:
+                if self._stop.is_set():
+                    sock.close()
+                    return False
                 self._sock = sock
                 self._buf = b""
-            self.connected = True
+                self.connected = True
             if self.on_connected:
                 self.on_connected()
             return True
         except Exception as e:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            if self._stop.is_set():
+                return False
             if self.on_error:
                 self.on_error(f"Cannot connect to rotctld at {self.host}:{self.port}: {e}")
             return False
@@ -228,27 +239,30 @@ class HamlibRotator:
             self.on_disconnected()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            if not self._connect():
-                self._stop.wait(3.0)
-                continue
-
-            consecutive_failures = 0
+        try:
             while not self._stop.is_set():
-                pos = self._get_position()
-                if pos is not None:
-                    consecutive_failures = 0
-                    self._current = pos
-                    if self.on_position:
-                        self.on_position(pos)
-                else:
-                    consecutive_failures += 1
-                    with self._lock:
-                        sock_alive = self._sock is not None
-                    if not sock_alive or consecutive_failures >= 3:
-                        self._disconnect()
-                        break
-                self._stop.wait(self.poll_interval_s)
+                if not self._connect():
+                    self._stop.wait(3.0)
+                    continue
 
-            if not self._stop.is_set():
-                self._stop.wait(3.0)
+                consecutive_failures = 0
+                while not self._stop.is_set():
+                    pos = self._get_position()
+                    if pos is not None:
+                        consecutive_failures = 0
+                        self._current = pos
+                        if self.on_position:
+                            self.on_position(pos)
+                    else:
+                        consecutive_failures += 1
+                        with self._lock:
+                            sock_alive = self._sock is not None
+                        if not sock_alive or consecutive_failures >= 3:
+                            self._disconnect()
+                            break
+                    self._stop.wait(self.poll_interval_s)
+
+                if not self._stop.is_set():
+                    self._stop.wait(3.0)
+        finally:
+            self._disconnect()

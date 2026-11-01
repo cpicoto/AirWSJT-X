@@ -50,6 +50,19 @@ class OutputModeTests(unittest.TestCase):
             self.server.stop.assert_called_once()
             self.rotor.set_position.assert_not_called()
 
+    def test_switching_away_from_hamlib_releases_rotctld_connection(self):
+        self.rpc("rotator_output_set", mode="hamlib")
+        self.rpc("rotator_output_set", mode="off")
+        self.rotor.stop.assert_called_once()
+        self.assertEqual(bridge._output_mode, "off")
+
+        self.rotor.reset_mock()
+        self.rpc("rotator_output_set", mode="hamlib")
+        with patch.object(bridge, "SatPC32DDE", return_value=self.server):
+            self.rpc("rotator_output_set", mode="dde")
+        self.rotor.stop.assert_called_once()
+        self.assertEqual(bridge._output_mode, "dde")
+
     def test_failed_switch_stays_off_and_reports_error(self):
         self.rpc("rotator_output_set", mode="hamlib")
         self.server.start.side_effect = RuntimeError("DDE already running")
@@ -116,6 +129,16 @@ class OutputModeTests(unittest.TestCase):
             self.rpc("rotator_stop")
             self.rotor.stop_rotation.assert_not_called()
             self.assertEqual(bridge._output_mode, "off")
+
+    def test_stop_command_precedes_hamlib_disconnect(self):
+        events = []
+        self.rotor.stop_rotation.side_effect = lambda: events.append("command")
+        self.rotor.stop.side_effect = lambda: events.append("disconnect")
+        self.rpc("rotator_output_set", mode="hamlib")
+        reply = self.rpc("rotator_stop")
+        self.assertTrue(reply["ok"])
+        self.assertEqual(events, ["command", "disconnect"])
+        self.assertEqual(bridge._output_mode, "off")
 
     def test_position_provenance_not_active_feed_controls_expiry_for_both_outputs(self):
         for source, active, age, valid in (

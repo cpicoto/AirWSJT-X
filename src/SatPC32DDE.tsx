@@ -85,7 +85,7 @@ export default function SatPC32DDE({ onModeChange, onTargetChange }: {
         : output?.mode === "dde" ? "SatPC32 DDE selected; Hamlib coordinate output disabled"
         : "Output off. Each launch starts Off; select an output explicitly."}
     </div>
-    {status?.supported && <details style={{ marginTop: 8 }}>
+    {status?.supported && output?.mode !== "hamlib" && <details style={{ marginTop: 8 }}>
     <summary>SatPC32 DDE output (Windows / PST Rotator)</summary>
     <p style={{ fontSize: 11, color: "var(--text-muted)" }}>
       Opt-in aircraft tracking output. In PST Rotator select SatPC32 as Tracker
