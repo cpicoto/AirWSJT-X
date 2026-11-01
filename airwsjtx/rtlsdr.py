@@ -305,7 +305,7 @@ class LocalRTLSDRFeed:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=5)
+                process.wait()
         for thread in self._threads:
             if thread is not threading.current_thread():
                 thread.join(timeout=10)

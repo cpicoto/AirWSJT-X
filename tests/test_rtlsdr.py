@@ -2,10 +2,11 @@ import ctypes
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from airwsjtx.rtlsdr import LocalRTLSDRFeed, _list_devices, discover_devices, reception_message, support_error, tools_directory, validate_gain
 from sidecar import airwsjtx_bridge as bridge
@@ -216,6 +217,31 @@ class ReceiverTests(unittest.TestCase):
             job.return_value.close.assert_called_once()
             self.assertTrue(all(not thread.is_alive() for thread in feed._threads))
             self.assertEqual(feed.snapshot()["state"], "stopped")
+
+    def test_stop_kills_and_reaps_timed_out_helper_before_cleanup(self):
+        process = Mock()
+        process.stdout = Mock()
+        process.stderr = Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("helper", 10), 0]
+        worker = Mock()
+        worker.is_alive.return_value = False
+        job = Mock()
+        feed = LocalRTLSDRFeed(0, Mock(), Mock())
+        feed._process = process
+        feed._threads = [worker]
+        feed._job = job
+
+        feed.stop()
+
+        process.kill.assert_called_once()
+        self.assertEqual(process.wait.call_args_list, [call(timeout=10), call()])
+        worker.join.assert_called_once_with(timeout=10)
+        process.stdout.close.assert_called_once()
+        process.stderr.close.assert_called_once()
+        job.close.assert_called_once()
+        self.assertIsNone(feed._process)
+        self.assertEqual(feed.snapshot()["state"], "stopped")
 
     def test_native_payload_evidence_is_bounded_and_independently_crc_checked(self):
         feed = LocalRTLSDRFeed(0, Mock(), Mock())
