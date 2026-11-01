@@ -92,10 +92,18 @@ class ReceiverTests(unittest.TestCase):
             write.assert_not_called()
 
     def test_unsupported_platform_and_missing_tools_explicit(self):
-        with patch("airwsjtx.rtlsdr.sys.platform", "linux"):
-            self.assertIn("Windows x64 and macOS only", support_error())
+        with patch("airwsjtx.rtlsdr.sys.platform", "freebsd"):
+            self.assertIn("Windows x64, macOS and Linux", support_error())
             with self.assertRaisesRegex(RuntimeError, "Windows x64"):
                 discover_devices()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("airwsjtx.rtlsdr.sys.platform", "linux"), \
+                patch("airwsjtx.rtlsdr.platform.machine", return_value="x86_64"), \
+                patch("airwsjtx.rtlsdr.tools_directory", return_value=Path(directory)):
+            self.assertIn("tools are missing", support_error())
+            (Path(directory) / "airwsjtx_adsb").touch()
+            (Path(directory) / "librtlsdr.so").touch()
+            self.assertIsNone(support_error())
         with tempfile.TemporaryDirectory() as directory, \
                 patch("airwsjtx.rtlsdr.sys.platform", "win32"), \
                 patch("airwsjtx.rtlsdr.platform.machine", return_value="AMD64"), \

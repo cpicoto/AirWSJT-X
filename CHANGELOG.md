@@ -3,6 +3,7 @@
 ## 0.3.30
 
 ### Added
+- Add native local RTL-SDR ADS-B reception on Linux (x64 and arm64) using a bundled, pinned librtlsdr with statically linked libusb, matching the macOS design. Requires a udev rule for USB access; see the README.
 - Add a display-only predicted usable time remaining column to Flight Data using mutual radio visibility and the inward-facing 90-degree geometry window. Keep all filters, scores, ranking and auto-lock unchanged; show unavailable data and the 30-minute cap explicitly.
 - Show feed-reported aircraft ground-track heading in Flight Data as HDG°, with an explicit unavailable indicator, to help diagnose heading-filter exclusions without changing candidate rules.
 

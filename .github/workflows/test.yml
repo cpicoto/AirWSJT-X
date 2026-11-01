@@ -27,6 +27,12 @@ jobs:
           python scripts/install_rtlsdr.py
           python -m unittest tests.test_adsb_native -v
 
+      - name: Build and replay Linux RTL-SDR helper
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/install_rtlsdr.py
+          python -m unittest tests.test_adsb_native -v
+
       - name: Build Windows sidecar
         if: runner.os == 'Windows'
         run: |

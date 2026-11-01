@@ -16,7 +16,9 @@ const python = existsSync(venvPython) ? venvPython : "python";
 
 const windowsX64 = process.platform === "win32" && process.arch === "x64";
 const macos = process.platform === "darwin";
-const rtlRuntime = windowsX64 ? "rtl_adsb.exe" : macos ? "librtlsdr.dylib" : null;
+const linux = process.platform === "linux" && ["x64", "arm64"].includes(process.arch);
+const rtlRuntime = windowsX64 ? "rtl_adsb.exe" : macos ? "librtlsdr.dylib"
+  : linux ? "librtlsdr.so" : null;
 if (rtlRuntime && !existsSync(path.join(root, "sidecar", "rtl-sdr", rtlRuntime))) {
   execFileSync(python, [path.join(root, "scripts", "install_rtlsdr.py")],
     { cwd: root, stdio: "inherit" });

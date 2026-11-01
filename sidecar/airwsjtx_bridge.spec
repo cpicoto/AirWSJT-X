@@ -5,15 +5,17 @@ repo_root = Path(SPECPATH).parent
 rtl_sdr_datas = []
 rtl_sdr_binaries = []
 machine = __import__("platform").machine().lower()
-if sys.platform == "darwin" and machine in ("arm64", "x86_64"):
+unix_rtl = (("darwin", "librtlsdr.dylib", "macOS") if sys.platform == "darwin" else
+            ("linux", "librtlsdr.so", "Linux") if sys.platform.startswith("linux") else None)
+if unix_rtl and machine in ("arm64", "x86_64", "aarch64"):
     rtl_sdr_dir = repo_root / "sidecar" / "rtl-sdr"
-    executables = ("airwsjtx_adsb", "librtlsdr.dylib")
+    executables = ("airwsjtx_adsb", unix_rtl[1])
     required = ("adsb_receiver.c", "build_adsb_receiver.py", "COPYING-AirWSJT-X", "COPYING",
                 "SOURCE.txt", "rtl-sdr-blog-source.zip", "COPYING-libusb", "libusb-1.0.29.tar.bz2")
     required += tuple(f"dump1090-fa/{name}" for name in
                       ("demod_2400.c", "icao_filter.c", "dump1090.h", "COPYING", "UPSTREAM.txt"))
     if any(not (rtl_sdr_dir / name).is_file() for name in executables + required):
-        raise SystemExit("Run python scripts/install_rtlsdr.py before packaging macOS.")
+        raise SystemExit("Run python scripts/install_rtlsdr.py before packaging " + unix_rtl[2] + ".")
     # Binaries keep their executable mode and are signed by PyInstaller with the bridge.
     rtl_sdr_binaries = [(str(rtl_sdr_dir / name), "rtl-sdr") for name in executables]
     rtl_sdr_datas = [(str(rtl_sdr_dir / name), str(Path("rtl-sdr") / Path(name).parent))

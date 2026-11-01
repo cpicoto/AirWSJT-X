@@ -1,4 +1,4 @@
-"""Build the app-owned ADS-B helper (MSVC on Windows x64, clang on macOS)."""
+"""Build the app-owned ADS-B helper (MSVC on Windows x64, clang on macOS, cc on Linux)."""
 from __future__ import annotations
 
 import os
@@ -25,7 +25,7 @@ def helper_name(platform: str | None = None) -> str:
 
 def _build_posix(sources: list[Path], target: Path) -> None:
     env = {**os.environ, "MACOSX_DEPLOYMENT_TARGET": MACOS_DEPLOYMENT_TARGET}
-    subprocess.run([os.environ.get("CC", "clang"), "-O2", "-Wall", "-Wextra", "-o", str(target),
+    subprocess.run([os.environ.get("CC", "cc" if sys.platform.startswith("linux") else "clang"), "-O2", "-Wall", "-Wextra", "-o", str(target),
                     *map(str, sources), "-lm", *(["-ldl"] if sys.platform.startswith("linux") else [])],
                    check=True, env=env)
 

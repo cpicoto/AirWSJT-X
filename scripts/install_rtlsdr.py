@@ -1,7 +1,7 @@
 """Stage pinned upstream receive-only RTL-SDR tools (no driver changes).
 
-Windows x64 uses the upstream prebuilt release. macOS builds librtlsdr from the same
-pinned source with a statically linked, pinned libusb; no Homebrew libraries are used.
+Windows x64 uses the upstream prebuilt release. macOS and Linux build librtlsdr from the
+same pinned source with a statically linked, pinned libusb; no Homebrew/distro libraries are used.
 ``--android`` stages the same pinned sources, with librtlsdr patched to open an Android
 USB file descriptor, for src-tauri/build.rs to compile with the NDK.
 """
@@ -83,6 +83,36 @@ def _build_macos_librtlsdr(source_zip: bytes, libusb_tar: bytes, output: Path) -
         ], env=env, check=True)
 
 
+def _build_linux_librtlsdr(source_zip: bytes, libusb_tar: bytes, output: Path) -> None:
+    """Build a self-contained librtlsdr.so that exports only the rtlsdr_* API."""
+    cc = os.environ.get("CC", "cc")
+    with tempfile.TemporaryDirectory(prefix="airwsjtx-librtlsdr-") as work:
+        root = Path(work)
+        with tarfile.open(fileobj=io.BytesIO(libusb_tar)) as archive:
+            archive.extractall(root, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        libusb = next(root.glob("libusb-*"))
+        prefix = root / "prefix"
+        subprocess.run(["./configure", f"--prefix={prefix}", "--disable-shared", "--enable-static",
+                        "--with-pic", "--disable-dependency-tracking", "--disable-udev",
+                        f"CC={cc}", "CFLAGS=-O2 -fPIC"],
+                       cwd=libusb, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["make", f"-j{os.cpu_count() or 2}", "install"],
+                       cwd=libusb, check=True, stdout=subprocess.DEVNULL)
+        with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
+            archive.extractall(root)
+        rtl = next(path for path in root.iterdir() if path.name.startswith("rtl-sdr-blog-"))
+        exports = root / "exports.map"
+        exports.write_text("{ global: rtlsdr_*; local: *; };\n", encoding="ascii")
+        subprocess.run([
+            cc, "-O2", "-shared", "-fPIC", "-fvisibility=hidden", "-Drtlsdr_EXPORTS",
+            "-I", str(rtl / "include"), "-I", str(prefix / "include" / "libusb-1.0"),
+            *(str(rtl / "src" / name) for name in LIBRTLSDR_SOURCES),
+            str(prefix / "lib" / "libusb-1.0.a"),
+            f"-Wl,--version-script={exports}", "-Wl,-soname,librtlsdr.so", "-Wl,-rpath,$ORIGIN",
+            "-lpthread", "-lm", "-o", str(output),
+        ], check=True)
+
+
 def _license_files(source: bytes, libusb_tar: bytes) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     with zipfile.ZipFile(io.BytesIO(source)) as archive:
@@ -114,6 +144,32 @@ def main_macos() -> None:
         "libusb 1.0.29: LGPL-2.1-or-later, statically linked into librtlsdr.dylib; see COPYING-libusb.\n"
         f"Dependency source: {url}\nSHA256: {checksum}\n"
         "No USB drivers or kernel extensions are included or installed. No bias tee is enabled.\n"
+    ).encode("ascii")
+    for file_name, content in files.items():
+        (DESTINATION / file_name).write_bytes(content)
+    _build_helper()
+    print(f"Built verified receive-only tools in {DESTINATION}")
+
+
+def main_linux() -> None:
+    machine = platform.machine().lower()
+    if machine not in ("x86_64", "amd64", "aarch64", "arm64"):
+        raise RuntimeError(f"Unsupported Linux architecture for RTL-SDR: {machine}")
+    source = download(SOURCE_URL, SOURCE_SHA256)
+    name, url, checksum = LIBUSB_ARCHIVE
+    libusb_tar = download(url, checksum)
+    DESTINATION.mkdir(parents=True, exist_ok=True)
+    _build_linux_librtlsdr(source, libusb_tar, DESTINATION / "librtlsdr.so")
+    files = _license_files(source, libusb_tar)
+    files["rtl-sdr-blog-source.zip"] = source
+    files[name] = libusb_tar
+    files["SOURCE.txt"] = (
+        f"RTL-SDR Blog {VERSION} librtlsdr, built from source for Linux {platform.machine()}.\n"
+        "librtlsdr: GPL-2.0-or-later; see COPYING and the corresponding source archive.\n"
+        f"Source: {SOURCE_URL}\nSHA256: {SOURCE_SHA256}\n"
+        "libusb 1.0.29: LGPL-2.1-or-later, statically linked into librtlsdr.so; see COPYING-libusb.\n"
+        f"Dependency source: {url}\nSHA256: {checksum}\n"
+        "No USB drivers, kernel modules or udev rules are installed. No bias tee is enabled.\n"
     ).encode("ascii")
     for file_name, content in files.items():
         (DESTINATION / file_name).write_bytes(content)
@@ -214,6 +270,9 @@ def main() -> None:
         return
     if sys.platform == "darwin":
         main_macos()
+        return
+    if sys.platform.startswith("linux"):
+        main_linux()
         return
     release = download(RELEASE_URL, RELEASE_SHA256)
     source = download(SOURCE_URL, SOURCE_SHA256)
