@@ -77,6 +77,28 @@ class HamlibRotatorTests(unittest.TestCase):
                 send.assert_called_once_with(f"P {expected_az:.1f} {expected_el:.1f}\n")
                 self.assertEqual(rot._target, RotatorPosition(expected_az, expected_el))
 
+    def test_stop_during_connect_closes_late_socket_without_publishing_connection(self) -> None:
+        connect_started = threading.Event()
+        release_connect = threading.Event()
+        sock = MagicMock()
+        sock.connect.side_effect = lambda _address: (connect_started.set(), release_connect.wait(2.0))
+        connected_events: list[bool] = []
+        rot = HamlibRotator(on_connected=lambda: connected_events.append(True))
+
+        with patch("airwsjtx.hamlib_rotator.socket.socket", return_value=sock):
+            rot.start()
+            self.assertTrue(connect_started.wait(1.0))
+            rot.stop()
+            release_connect.set()
+            self.assertIsNotNone(rot._thread)
+            rot._thread.join(timeout=1.0)
+
+        self.assertFalse(rot._thread.is_alive())
+        self.assertFalse(rot.connected)
+        self.assertIsNone(rot._sock)
+        self.assertEqual(connected_events, [])
+        sock.close.assert_called_once()
+
     def test_live_mock_server_polling_and_commands(self) -> None:
         """Run a mock TCP server speaking the rotctld protocol to test HamlibRotator."""
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

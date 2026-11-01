@@ -423,6 +423,14 @@ export default function App() {
   const [outputMode, setOutputMode] = useState<OutputMode>("off");
   const [publishedDdeTarget, setPublishedDdeTarget] = useState<PublishedTarget | null>(null);
   const rotatorControlEnabled = outputMode === "hamlib";
+  const handleRotatorOutputModeChange = useCallback((mode: OutputMode) => {
+    setOutputMode(mode);
+    if (mode !== "hamlib") {
+      setRotatorConnecting(false);
+      setRotatorConnectionError(null);
+      setRotatorConnected(false);
+    }
+  }, []);
   const [rotatorAz, setRotatorAz] = useState(0);
   const [rotatorEl, setRotatorEl] = useState(0);
   const [rotatorTargetAz, setRotatorTargetAz] = useState<number | null>(null);
@@ -1919,14 +1927,7 @@ export default function App() {
         {/* CENTRE: Rotator */}
         <div className="col" style={{ alignItems: "center", justifyContent: "flex-start", overflowY: "auto" }}>
           <div className="card" style={{ width: "100%", alignSelf: "stretch", flexShrink: 0 }}>
-            <SatPC32DDE onModeChange={(mode) => {
-              setOutputMode(mode);
-              if (mode !== "hamlib") {
-                setRotatorConnecting(false);
-                setRotatorConnectionError(null);
-                setRotatorConnected(false);
-              }
-            }} onTargetChange={setPublishedDdeTarget} />
+            <SatPC32DDE onModeChange={handleRotatorOutputModeChange} onTargetChange={setPublishedDdeTarget} />
             <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, flexWrap: "nowrap", marginBottom: 8 }}>
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
               <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", gap: 4 }}>

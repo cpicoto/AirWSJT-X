@@ -737,9 +737,9 @@ def handle(msg: dict) -> None:
         elif method == "rotator_stop":
             with _output_lock:
                 was_hamlib = _output_mode == "hamlib"
-                _set_output_mode("off")
                 if was_hamlib and _rotator:
                     _rotator.stop_rotation()
+                _set_output_mode("off")
             _ok(id_, {})
 
         elif method == "rotator_park":

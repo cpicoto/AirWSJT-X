@@ -84,6 +84,22 @@ test("rotctld connection attempt reports failure and supports retry", async ({ p
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
+test("DDE status polling remains on its two-second cadence", async ({ page }) => {
+  await page.evaluate(() => Object.assign(window, {
+    __mockOutputMode: "dde",
+    __mockDDEStatus: { supported: true, enabled: true, service: "SatPC32",
+      topic: "SatPcDdeConv", item: "SatPcDdeItem",
+      target: "SNTEST AZ123.4 EL5.6 UP0 UMUSB DN0 DMUSB MA0.0", error: null },
+  }));
+  await page.waitForTimeout(250);
+  const initial = await page.evaluate(() =>
+    Number((window as unknown as { __mockOutputStatusRequests?: number }).__mockOutputStatusRequests ?? 0));
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() =>
+    Number((window as unknown as { __mockOutputStatusRequests?: number }).__mockOutputStatusRequests ?? 0));
+  expect(after - initial).toBeLessThanOrEqual(1);
+});
+
 test("DDE hands use published target without pretending to measure PST feedback", async ({ page }) => {
   await page.evaluate(() => Object.assign(window, {
     __mockOutputMode: "dde",

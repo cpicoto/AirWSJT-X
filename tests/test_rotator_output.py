@@ -130,6 +130,16 @@ class OutputModeTests(unittest.TestCase):
             self.rotor.stop_rotation.assert_not_called()
             self.assertEqual(bridge._output_mode, "off")
 
+    def test_stop_command_precedes_hamlib_disconnect(self):
+        events = []
+        self.rotor.stop_rotation.side_effect = lambda: events.append("command")
+        self.rotor.stop.side_effect = lambda: events.append("disconnect")
+        self.rpc("rotator_output_set", mode="hamlib")
+        reply = self.rpc("rotator_stop")
+        self.assertTrue(reply["ok"])
+        self.assertEqual(events, ["command", "disconnect"])
+        self.assertEqual(bridge._output_mode, "off")
+
     def test_position_provenance_not_active_feed_controls_expiry_for_both_outputs(self):
         for source, active, age, valid in (
             ("rtlsdr", "opensky", 119.9, True),
