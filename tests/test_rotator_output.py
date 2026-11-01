@@ -50,6 +50,19 @@ class OutputModeTests(unittest.TestCase):
             self.server.stop.assert_called_once()
             self.rotor.set_position.assert_not_called()
 
+    def test_switching_away_from_hamlib_releases_rotctld_connection(self):
+        self.rpc("rotator_output_set", mode="hamlib")
+        self.rpc("rotator_output_set", mode="off")
+        self.rotor.stop.assert_called_once()
+        self.assertEqual(bridge._output_mode, "off")
+
+        self.rotor.reset_mock()
+        self.rpc("rotator_output_set", mode="hamlib")
+        with patch.object(bridge, "SatPC32DDE", return_value=self.server):
+            self.rpc("rotator_output_set", mode="dde")
+        self.rotor.stop.assert_called_once()
+        self.assertEqual(bridge._output_mode, "dde")
+
     def test_failed_switch_stays_off_and_reports_error(self):
         self.rpc("rotator_output_set", mode="hamlib")
         self.server.start.side_effect = RuntimeError("DDE already running")

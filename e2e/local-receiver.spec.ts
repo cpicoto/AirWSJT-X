@@ -38,6 +38,8 @@ test("exclusive output ignores legacy activation and never resends displayed coo
   await expect(page.getByRole("button", { name: "Enable DDE output", exact: true })).toHaveCount(0);
   await selector.selectOption("hamlib");
   await expect(page.getByLabel("Rotator output status")).toContainText("Hamlib selected");
+  await expect(page.getByText("SatPC32 DDE output (Windows / PST Rotator)", { exact: true })).toHaveCount(0);
+  await expect(selector).toHaveCSS("font-size", "11px");
   await selector.selectOption("dde");
   await expect(page.getByLabel("Rotator output status")).toContainText("Hamlib coordinate output disabled");
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
@@ -54,6 +56,32 @@ test("failed output switch shows error and keeps backend mode", async ({ page })
   await page.getByLabel("Rotator output", { exact: true }).selectOption("hamlib");
   await expect(page.getByRole("alert")).toContainText("DDE service is already running");
   await expect(page.getByLabel("Rotator output", { exact: true })).toHaveValue("off");
+});
+
+test("rotctld connection attempt reports failure and supports retry", async ({ page }) => {
+  await page.getByLabel("Rotator output", { exact: true }).selectOption("hamlib");
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.click();
+  await expect(page.getByRole("button", { name: "Connecting…", exact: true })).toBeDisabled();
+
+  await page.evaluate(() => {
+    const emit = (window as unknown as { __tauriMockEmit: (event: string, payload: string) => void }).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "rotator_error",
+      data: { message: "Cannot connect to rotctld at 192.0.2.1:4533: timed out" },
+    }));
+  });
+  await expect(page.getByRole("alert")).toContainText("Cannot connect to rotctld at 192.0.2.1:4533");
+  const retry = page.getByRole("button", { name: "Retry", exact: true });
+  await expect(retry).toHaveCSS("color", "rgb(248, 81, 73)");
+  await retry.click();
+  await page.evaluate(() => {
+    const emit = (window as unknown as { __tauriMockEmit: (event: string, payload: string) => void }).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "rotator_connected", data: { host: "192.0.2.1", port: 4533 },
+    }));
+  });
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("DDE hands use published target without pretending to measure PST feedback", async ({ page }) => {

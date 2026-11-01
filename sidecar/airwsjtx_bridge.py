@@ -1526,7 +1526,13 @@ def _set_output_mode(mode: str) -> None:
         if mode == _output_mode and ((mode != "dde" and _satpc32_dde is None) or
                 (mode == "dde" and _satpc32_dde and _satpc32_dde.status()["enabled"])):
             return
+        previous_mode = _output_mode
         _output_mode, _rotator_control_enabled = "off", False
+        if previous_mode == "hamlib" and mode != "hamlib" and _rotator:
+            # Selecting Off or DDE must release rotctld immediately.  Merely
+            # suppressing coordinate output leaves the TCP client connected and
+            # prevents another station/application from taking control.
+            _rotator.stop()
         if _satpc32_dde:
             _satpc32_dde.clear()
             _satpc32_dde.stop()
