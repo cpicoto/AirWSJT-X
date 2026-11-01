@@ -82,7 +82,7 @@ class SidecarSpecTests(unittest.TestCase):
 
     def test_other_platforms_keep_all_collected_binaries(self) -> None:
         for platform in ("darwin", "linux"):
-            with self.subTest(platform=platform):
+            with self.subTest(platform=platform), patch("platform.machine", return_value="unsupported"):
                 analysis, analyze, build_exe, collect = self.run_spec(platform)
                 self.assertEqual(
                     analysis.binaries,
@@ -114,6 +114,25 @@ class SidecarSpecTests(unittest.TestCase):
         with patch("platform.machine", return_value="ARM64"):
             _, analyze, _, _ = self.run_spec("win32")
         self.assertEqual(analyze.call_args.kwargs["datas"], [])
+
+    def test_macos_receiver_runtime_is_signed_binary_with_corresponding_sources(self) -> None:
+        for machine in ("arm64", "x86_64"):
+            with self.subTest(machine=machine), patch("platform.machine", return_value=machine):
+                _, analyze, _, _ = self.run_spec("darwin")
+                binaries = {(Path(source).name, destination)
+                            for source, destination in analyze.call_args.kwargs["binaries"]}
+                self.assertEqual(binaries, {("airwsjtx_adsb", "rtl-sdr"), ("librtlsdr.dylib", "rtl-sdr")})
+                files = {Path(source).name for source, destination in analyze.call_args.kwargs["datas"]
+                         if destination == "rtl-sdr"}
+                for name in ("adsb_receiver.c", "build_adsb_receiver.py", "COPYING-AirWSJT-X", "COPYING",
+                             "SOURCE.txt", "rtl-sdr-blog-source.zip", "COPYING-libusb",
+                             "libusb-1.0.29.tar.bz2"):
+                    self.assertIn(name, files)
+                self.assertNotIn("rtlsdr.dll", files)
+        with patch("platform.machine", return_value="arm64"), patch("sys.platform", "darwin"), \
+                patch("pathlib.Path.is_file", return_value=False):
+            with self.assertRaisesRegex(SystemExit, "install_rtlsdr.py"):
+                runpy.run_path(str(_SPEC), init_globals={"SPECPATH": str(_SPEC.parent)})
 
     def test_missing_receiver_tools_fail_packaging_with_setup_instruction(self) -> None:
         with patch("sys.platform", "win32"), patch("platform.machine", return_value="AMD64"), \

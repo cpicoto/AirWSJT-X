@@ -7,8 +7,21 @@
  * Copyright (c) 2021 FlightAware LLC
  * Additional upstream notices are retained in dump1090-fa/UPSTREAM.txt.
  */
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#include <limits.h>
+#include <pthread.h>
+#include <signal.h>
+#include <time.h>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+#define __cdecl
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,11 +47,64 @@ API(rtlsdr_cancel_async, int, (void *));
 typedef void (__cdecl *sample_callback)(unsigned char *, uint32_t, void *);
 API(rtlsdr_read_async, int, (void *, sample_callback, void *, uint32_t, uint32_t));
 
+#ifdef _WIN32
+typedef volatile LONG flag_t;
+#define FLAG_GET(flag) InterlockedCompareExchange(&(flag), 0, 0)
+#define FLAG_SET(flag) InterlockedExchange(&(flag), 1)
+typedef CRITICAL_SECTION lock_t;
+#define LOCK_INIT(l) InitializeCriticalSection(&(l))
+#define LOCK(l) EnterCriticalSection(&(l))
+#define UNLOCK(l) LeaveCriticalSection(&(l))
+#define LOCK_FREE(l) DeleteCriticalSection(&(l))
+typedef HANDLE signal_t;
+static int signal_init(signal_t *s) { *s = CreateSemaphoreW(NULL, 0, QUEUE + 1, NULL); return *s != NULL; }
+static void signal_post(signal_t *s) { ReleaseSemaphore(*s, 1, NULL); }
+static void signal_wait(signal_t *s, unsigned ms) { WaitForSingleObject(*s, ms); }
+static void signal_free(signal_t *s) { CloseHandle(*s); }
+#else
+typedef volatile sig_atomic_t flag_t;
+#define FLAG_GET(flag) __atomic_load_n(&(flag), __ATOMIC_SEQ_CST)
+#define FLAG_SET(flag) __atomic_store_n(&(flag), 1, __ATOMIC_SEQ_CST)
+typedef pthread_mutex_t lock_t;
+#define LOCK_INIT(l) pthread_mutex_init(&(l), NULL)
+#define LOCK(l) pthread_mutex_lock(&(l))
+#define UNLOCK(l) pthread_mutex_unlock(&(l))
+#define LOCK_FREE(l) pthread_mutex_destroy(&(l))
+/* Counting semaphore; macOS does not implement unnamed POSIX semaphores. */
+typedef struct { pthread_mutex_t lock; pthread_cond_t cond; unsigned value; } signal_t;
+static int signal_init(signal_t *s)
+{
+    s->value = 0;
+    return !pthread_mutex_init(&s->lock, NULL) && !pthread_cond_init(&s->cond, NULL);
+}
+static void signal_post(signal_t *s)
+{
+    pthread_mutex_lock(&s->lock);
+    if (s->value <= QUEUE) ++s->value;
+    pthread_cond_signal(&s->cond);
+    pthread_mutex_unlock(&s->lock);
+}
+static void signal_wait(signal_t *s, unsigned ms)
+{
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += ms / 1000;
+    deadline.tv_nsec += (long)(ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&s->lock);
+    while (!s->value)
+        if (pthread_cond_timedwait(&s->cond, &s->lock, &deadline)) break;
+    if (s->value) --s->value;
+    pthread_mutex_unlock(&s->lock);
+}
+static void signal_free(signal_t *s) { pthread_cond_destroy(&s->cond); pthread_mutex_destroy(&s->lock); }
+#endif
+
 static void *device;
-static volatile LONG exiting, reader_done;
+static flag_t exiting, reader_done;
 static int reader_code;
-static CRITICAL_SECTION queue_lock;
-static HANDLE ready;
+static lock_t queue_lock;
+static signal_t ready;
 static unsigned char queue[QUEUE][BLOCK];
 static unsigned lengths[QUEUE], head, count;
 static uint64_t sequences[QUEUE], offsets[QUEUE], sequence, captured_samples, dropped;
@@ -53,10 +119,16 @@ struct receiver_modes Modes;
 
 static double clock_seconds(void)
 {
+#ifdef _WIN32
     LARGE_INTEGER tick, frequency;
     QueryPerformanceCounter(&tick);
     QueryPerformanceFrequency(&frequency);
     return (double)tick.QuadPart / frequency.QuadPart;
+#else
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec + now.tv_nsec / 1e9;
+#endif
 }
 
 static uint32_t syndrome(const unsigned char *msg, unsigned bits)
@@ -156,9 +228,9 @@ static void report(void)
     if (valid) fprintf(stderr, "%.3f", 10 * log10(signal));
     else fprintf(stderr, "null");
     fprintf(stderr, ",\"candidate_quiet_magnitude\":null");
-    EnterCriticalSection(&queue_lock);
+    LOCK(queue_lock);
     uint64_t lost = dropped;
-    LeaveCriticalSection(&queue_lock);
+    UNLOCK(queue_lock);
     fprintf(stderr,
         ",\"dropped_buffers\":%llu,\"discontinuities\":%llu,"
         "\"usb_overruns\":null,\"native_valid_df17\":%llu,"
@@ -228,8 +300,8 @@ static void flush_tail(void)
 static void __cdecl received(unsigned char *raw, uint32_t length, void *ctx)
 {
     (void)ctx;
-    if (InterlockedCompareExchange(&exiting, 0, 0)) { rtlsdr_cancel_async(device); return; }
-    EnterCriticalSection(&queue_lock);
+    if (FLAG_GET(exiting)) { rtlsdr_cancel_async(device); return; }
+    LOCK(queue_lock);
     uint64_t current = sequence++;
     uint64_t offset = captured_samples;
     captured_samples += length / 2;
@@ -239,26 +311,55 @@ static void __cdecl received(unsigned char *raw, uint32_t length, void *ctx)
         unsigned slot = (head + count) % QUEUE;
         memcpy(queue[slot], raw, length);
         lengths[slot] = length; sequences[slot] = current; offsets[slot] = offset; ++count;
-        ReleaseSemaphore(ready, 1, NULL);
+        signal_post(&ready);
     }
-    LeaveCriticalSection(&queue_lock);
+    UNLOCK(queue_lock);
 }
 
-static DWORD WINAPI reader(void *unused)
+static void read_samples(void)
 {
-    (void)unused;
     reader_code = rtlsdr_read_async(device, received, NULL, 12, BLOCK);
-    InterlockedExchange(&reader_done, 1);
-    ReleaseSemaphore(ready, 1, NULL);
-    return 0;
+    FLAG_SET(reader_done);
+    signal_post(&ready);
 }
+
+#ifdef _WIN32
+static DWORD WINAPI reader(void *unused) { (void)unused; read_samples(); return 0; }
 
 static BOOL WINAPI interrupted(DWORD signal)
 {
     (void)signal;
-    InterlockedExchange(&exiting, 1);
+    FLAG_SET(exiting);
     return TRUE;
 }
+#else
+static void *reader(void *unused) { (void)unused; read_samples(); return NULL; }
+
+static void interrupted(int number)
+{
+    (void)number;
+    FLAG_SET(exiting);
+}
+
+/* Load only the librtlsdr shipped beside this executable; never search other paths. */
+static void *load_bundled_library(const char *name)
+{
+    char path[PATH_MAX], resolved[PATH_MAX];
+#ifdef __APPLE__
+    uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size)) return NULL;
+#else
+    ssize_t size = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (size < 0) return NULL;
+    path[size] = 0;
+#endif
+    if (!realpath(path, resolved)) return NULL;
+    char *slash = strrchr(resolved, '/');
+    if (!slash || (size_t)(slash - resolved) + 1 + strlen(name) >= sizeof(resolved)) return NULL;
+    strcpy(slash + 1, name);
+    return dlopen(resolved, RTLD_NOW | RTLD_LOCAL);
+}
+#endif
 
 int main(int argc, char **argv)
 {
@@ -277,9 +378,8 @@ int main(int argc, char **argv)
     if (rate != 2400000 || index < 0 || duration < 0) {
         fprintf(stderr, "dump1090-fa demodulation requires 2400000 S/s and a valid index/duration\n"); return 2;
     }
-    InitializeCriticalSection(&queue_lock);
-    ready = CreateSemaphoreW(NULL, 0, QUEUE + 1, NULL);
-    if (!ready) { fprintf(stderr, "Failed to create receive semaphore\n"); return 1; }
+    LOCK_INIT(queue_lock);
+    if (!signal_init(&ready)) { fprintf(stderr, "Failed to create receive semaphore\n"); return 1; }
     if (setvbuf(stdout, NULL, _IOFBF, 65536)) {
         fprintf(stderr, "Failed to configure frame output buffering\n"); return 1;
     }
@@ -302,11 +402,26 @@ int main(int argc, char **argv)
             fclose(file);
         }
     } else {
+#ifdef _WIN32
         HMODULE library = LoadLibraryExW(L"rtlsdr.dll", NULL,
                                          LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!library) { fprintf(stderr, "Failed loading bundled rtlsdr.dll (%lu)\n", GetLastError()); return 1; }
 #define LOAD(name) do { *(FARPROC *)&name = GetProcAddress(library, #name); \
     if (!name) { fprintf(stderr, "Missing RTL-SDR API: " #name "\n"); return 1; } } while (0)
+#else
+#ifdef __APPLE__
+        void *library = load_bundled_library("librtlsdr.dylib");
+#else
+        void *library = load_bundled_library("librtlsdr.so");
+#endif
+        if (!library) {
+            const char *reason = dlerror();
+            fprintf(stderr, "Failed loading bundled librtlsdr (%s)\n", reason ? reason : "executable path unavailable");
+            return 1;
+        }
+#define LOAD(name) do { *(void **)&name = dlsym(library, #name); \
+    if (!name) { fprintf(stderr, "Missing RTL-SDR API: " #name "\n"); return 1; } } while (0)
+#endif
         LOAD(rtlsdr_open); LOAD(rtlsdr_close); LOAD(rtlsdr_set_tuner_gain_mode);
         LOAD(rtlsdr_set_tuner_gain); LOAD(rtlsdr_get_tuner_gain); LOAD(rtlsdr_set_agc_mode);
         LOAD(rtlsdr_set_center_freq); LOAD(rtlsdr_set_sample_rate); LOAD(rtlsdr_set_bias_tee);
@@ -327,46 +442,79 @@ int main(int argc, char **argv)
         CHECK(rtlsdr_set_bias_tee(device, 0));
         CHECK(rtlsdr_reset_buffer(device));
         fprintf(stderr, "dump1090-fa 465e063 Mode S: 1090000000 Hz, %u S/s; no correction; digital AGC on; bias tee off.\n", rate);
+#ifdef _WIN32
         SetConsoleCtrlHandler(interrupted, TRUE);
         HANDLE worker = CreateThread(NULL, 0, reader, NULL, 0, NULL);
         if (!worker) { fprintf(stderr, "Failed creating USB reader\n"); result = 1; goto close_device; }
+#else
+        struct sigaction action = {0};
+        action.sa_handler = interrupted;
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGTERM, &action, NULL);
+        sigaction(SIGINT, &action, NULL);
+        sigaction(SIGHUP, &action, NULL);
+        /* A dead bridge must not leave the receiver holding USB: stop when reparented. */
+        pid_t owner = getppid();
+        pthread_t worker;
+        if (pthread_create(&worker, NULL, reader, NULL)) {
+            fprintf(stderr, "Failed creating USB reader\n"); result = 1; goto close_device;
+        }
+#endif
         uint64_t expected = 0;
         double next_report = clock_seconds() + 1;
-        while (!InterlockedCompareExchange(&exiting, 0, 0)) {
+        while (!FLAG_GET(exiting)) {
             if (duration && clock_seconds() - wall_start >= duration) break;
-            WaitForSingleObject(ready, 100);
+#ifndef _WIN32
+            if (getppid() != owner) { fprintf(stderr, "Owning bridge exited; stopping receiver.\n"); break; }
+#endif
+            signal_wait(&ready, 100);
             unsigned length = 0;
             uint64_t current = expected, offset = 0;
-            EnterCriticalSection(&queue_lock);
+            LOCK(queue_lock);
             if (count) {
                 length = lengths[head]; current = sequences[head]; offset = offsets[head];
                 memcpy(raw, queue[head], length);
                 head = (head + 1) % QUEUE; --count;
             }
             int empty = count == 0;
-            LeaveCriticalSection(&queue_lock);
+            UNLOCK(queue_lock);
             if (length) { process(raw, length, current != expected, offset); expected = current + 1; }
             if (clock_seconds() >= next_report) { report(); next_report = clock_seconds() + 1; }
-            if (InterlockedCompareExchange(&reader_done, 0, 0) && empty) break;
+            if (FLAG_GET(reader_done) && empty) break;
         }
-        InterlockedExchange(&exiting, 1);
+        FLAG_SET(exiting);
         rtlsdr_cancel_async(device);
+#ifdef _WIN32
         if (WaitForSingleObject(worker, 5000) != WAIT_OBJECT_0) {
             fprintf(stderr, "Failed to stop USB reader\n");
             /* Process exit releases USB; never unload a DLL executing in a worker. */
             ExitProcess(1);
         }
         CloseHandle(worker);
+#else
+        double stop_deadline = clock_seconds() + 5;
+        while (!FLAG_GET(reader_done) && clock_seconds() < stop_deadline) usleep(10000);
+        if (!FLAG_GET(reader_done)) {
+            fprintf(stderr, "Failed to stop USB reader\n");
+            /* Process exit releases USB; never unload a library executing in a worker. */
+            _exit(1);
+        }
+        pthread_join(worker, NULL);
+#endif
         if (reader_code < 0) { fprintf(stderr, "USB read failed (%d)\n", reader_code); result = 1; }
 close_device:
         if (device) rtlsdr_close(device);
+#ifdef _WIN32
         FreeLibrary(library);
+#else
+        dlclose(library);
+#endif
     }
     flush_tail();
     report();
     fflush(stdout);
     free(raw);
-    CloseHandle(ready);
-    DeleteCriticalSection(&queue_lock);
+    signal_free(&ready);
+    LOCK_FREE(queue_lock);
     return result;
 }

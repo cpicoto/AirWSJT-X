@@ -1,8 +1,7 @@
-"""Windows x64 local RTL-SDR receiver; owns a native receive-only demodulator."""
+"""Local RTL-SDR receiver (Windows x64, macOS); owns a native receive-only demodulator."""
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
 from collections import deque
 import os
 import math
@@ -25,11 +24,31 @@ def tools_directory() -> Path:
     return root / "rtl-sdr"
 
 
+def platform_supported() -> bool:
+    machine = platform.machine().lower()
+    if sys.platform == "win32":
+        return machine in ("amd64", "x86_64")
+    return sys.platform == "darwin" and machine in ("arm64", "x86_64")
+
+
+def helper_name() -> str:
+    return "airwsjtx_adsb.exe" if sys.platform == "win32" else "airwsjtx_adsb"
+
+
+def library_name() -> str:
+    return "rtlsdr.dll" if sys.platform == "win32" else "librtlsdr.dylib"
+
+
 def support_error() -> str | None:
-    if sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64"):
-        return "Integrated RTL-SDR reception currently supports Windows x64 only. Use a network source on this platform."
-    if not (tools_directory() / "airwsjtx_adsb.exe").is_file():
-        return "RTL-SDR tools are missing. Reinstall the Windows x64 app; source builds must run python scripts/install_rtlsdr.py."
+    if not platform_supported():
+        return ("Integrated RTL-SDR reception currently supports Windows x64 and macOS only. "
+                "Use a network source on this platform.")
+    if sys.platform == "darwin" and os.environ.get("APP_SANDBOX_CONTAINER_ID"):
+        return ("Integrated RTL-SDR reception is unavailable in the sandboxed Mac App Store/TestFlight build. "
+                "Use the direct-download macOS app or a network source.")
+    if not (tools_directory() / helper_name()).is_file() or not (tools_directory() / library_name()).is_file():
+        return ("RTL-SDR tools are missing. Reinstall the app; source builds must run "
+                "python scripts/install_rtlsdr.py.")
     return None
 
 
@@ -58,9 +77,14 @@ def _discover_devices() -> list[dict[str, object]]:
     if error:
         raise RuntimeError(error)
     directory = tools_directory()
+    if sys.platform != "win32":
+        # Absolute path to the bundled, self-contained library; no search paths are consulted.
+        # It stays loaded: libusb's Darwin event thread makes unloading unsafe.
+        return _list_devices(ctypes.CDLL(str(directory / library_name()), mode=os.RTLD_LOCAL))
+    from ctypes import wintypes
     # Scope DLL lookup; never search the current working directory for dependencies.
     with os.add_dll_directory(str(directory)):
-        library = ctypes.CDLL(str(directory / "rtlsdr.dll"))
+        library = ctypes.CDLL(str(directory / library_name()))
     try:
         return _list_devices(library)
     finally:
@@ -93,10 +117,13 @@ def _list_devices(library: ctypes.CDLL) -> list[dict[str, object]]:
             message = (
                 "Cannot access USB descriptors. The receiver may be busy or its WinUSB driver missing. "
                 "Close the app using this dongle; do not replace drivers without checking the device."
+                if sys.platform == "win32" else
+                "Cannot access USB descriptors. The receiver may be busy; close other apps using this dongle."
             )
         elif open_code < 0:
             message = (
-                f"Cannot open RTL-SDR receiver ({open_code}). Close other SDR apps and check USB/WinUSB."
+                f"Cannot open RTL-SDR receiver ({open_code}). Close other SDR apps and check USB"
+                + ("/WinUSB." if sys.platform == "win32" else " (another SDR app may own it).")
             )
         else:
             try:
@@ -134,6 +161,7 @@ def validate_gain(value: object, supported: list[float]) -> float | None:
 class _ReceiverJob:
     """Kill only our receiver if the bridge is terminated without stdin cleanup."""
     def __init__(self, process: subprocess.Popen[str]) -> None:
+        from ctypes import wintypes
         from ctypes.wintypes import BOOL, DWORD, HANDLE, LARGE_INTEGER, LPVOID
         SIZE_T = ctypes.c_size_t
 
@@ -242,17 +270,21 @@ class LocalRTLSDRFeed:
         self._status("connecting", "Opening RTL-SDR at 1090 MHz (receive only, bias tee off).")
         try:
             # Never enable -T (bias tee), shell execution, a TCP server, or transmission.
-            args = [str(tools_directory() / "airwsjtx_adsb.exe"), "-d", str(self.device_index)]
+            args = [str(tools_directory() / helper_name()), "-d", str(self.device_index)]
             if self.gain_db is not None:
                 args.extend(["-g", str(self.gain_db)])
+            windows = sys.platform == "win32"
+            # On POSIX the helper stops itself if this bridge exits and it is reparented.
+            platform_options = {"creationflags": subprocess.CREATE_NO_WINDOW} if windows else {}
             self._process = subprocess.Popen(
                 args,
                 cwd=tools_directory(), stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 encoding="ascii", errors="replace", bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                **platform_options,
             )
-            self._job = _ReceiverJob(self._process)
+            if windows:
+                self._job = _ReceiverJob(self._process)
         except (OSError, RuntimeError):
             self.stop()
             raise
@@ -266,7 +298,8 @@ class LocalRTLSDRFeed:
         process = self._process
         if process is not None:
             if process.poll() is None:
-                # Windows closes this process's USB handles on termination. No other PID is touched.
+                # Windows closes this process's USB handles on termination; on POSIX SIGTERM lets
+                # the helper cancel and close the device itself. No other PID is touched.
                 process.terminate()
             process.wait(timeout=10)
         for thread in self._threads:
@@ -341,8 +374,10 @@ class LocalRTLSDRFeed:
                     thread.join(timeout=2)
                 with self._lock:
                     diagnostics = " ".join(self._stderr)
-                self._status("error", f"RTL-SDR exited ({code}). {diagnostics} "
-                             "Check WinUSB for Bulk-In Interface 0, unplugged hardware, or another app using the dongle.")
+                hint = ("Check WinUSB for Bulk-In Interface 0, unplugged hardware, or another app using the dongle."
+                        if sys.platform == "win32" else
+                        "Check for unplugged hardware or another app using the dongle.")
+                self._status("error", f"RTL-SDR exited ({code}). {diagnostics} {hint}")
                 self.on_update([])
                 return
             with self._lock:

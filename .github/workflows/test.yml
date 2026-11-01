@@ -21,6 +21,12 @@ jobs:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
 
+      - name: Build and replay macOS RTL-SDR helper
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/install_rtlsdr.py
+          python -m unittest tests.test_adsb_native -v
+
       - name: Build Windows sidecar
         if: runner.os == 'Windows'
         run: |

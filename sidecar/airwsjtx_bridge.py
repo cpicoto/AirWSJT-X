@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import platform
 import queue
 import re
 import sys
@@ -21,7 +20,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from airwsjtx.airscout import ADSBExchangeFeed, Aircraft, Dump1090Feed, OpenSkyFeed, SourceRateLimit
-from airwsjtx.rtlsdr import LocalRTLSDRFeed, discover_devices, validate_gain, support_error as rtlsdr_support_error
+from airwsjtx.rtlsdr import (LocalRTLSDRFeed, discover_devices, platform_supported as rtlsdr_platform_supported,
+                             validate_gain, support_error as rtlsdr_support_error)
 from airwsjtx.callsign import (
     DEFAULT_DB_MANIFEST_URL,
     check_db_update as callsign_check_db_update,
@@ -63,7 +63,7 @@ _rtlsdr_gain_db: float | None = None
 _rtlsdr_startup_attempted = False
 _rtlsdr_startup_network_priority: list[str] | None = None
 _supported_sources = ("opensky", "dump1090", "adsbexchange") + (
-    ("rtlsdr",) if sys.platform == "win32" and platform.machine().lower() in ("amd64", "x86_64") else ()
+    ("rtlsdr",) if rtlsdr_platform_supported() else ()
 )
 # dump1090 is OFF by default; the user must explicitly enable it via the UI.
 # The priority is persisted in source_priority.json so opt-in choices survive restarts.

@@ -1,10 +1,20 @@
-"""Stage pinned upstream Windows x64 receive-only tools (no driver changes)."""
+"""Stage pinned upstream receive-only RTL-SDR tools (no driver changes).
+
+Windows x64 uses the upstream prebuilt release. macOS builds librtlsdr from the same
+pinned source with a statically linked, pinned libusb; no Homebrew libraries are used.
+"""
 from __future__ import annotations
 
 import hashlib
 import io
+import os
 from pathlib import Path
+import platform
+import shutil
+import subprocess
+import sys
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 
@@ -33,7 +43,95 @@ def download(url: str, expected_hash: str) -> bytes:
     return content
 
 
+LIBUSB_ARCHIVE = DEPENDENCY_SOURCES[0]
+MACOS_DEPLOYMENT_TARGET = "12.0"
+MACOS_RUNTIME_FILES = ("librtlsdr.dylib", "COPYING", "COPYING-libusb", "SOURCE.txt",
+                       "rtl-sdr-blog-source.zip", LIBUSB_ARCHIVE[0])
+LIBRTLSDR_SOURCES = ("librtlsdr.c", "tuner_e4k.c", "tuner_fc0012.c", "tuner_fc0013.c",
+                     "tuner_fc2580.c", "tuner_r82xx.c")
+
+
+def _build_macos_librtlsdr(source_zip: bytes, libusb_tar: bytes, output: Path) -> None:
+    """Build a self-contained librtlsdr.dylib that exports only the rtlsdr_* API."""
+    env = {**os.environ, "MACOSX_DEPLOYMENT_TARGET": MACOS_DEPLOYMENT_TARGET}
+    cc = os.environ.get("CC", "clang")
+    with tempfile.TemporaryDirectory(prefix="airwsjtx-librtlsdr-") as work:
+        root = Path(work)
+        with tarfile.open(fileobj=io.BytesIO(libusb_tar)) as archive:
+            archive.extractall(root, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        libusb = next(root.glob("libusb-*"))
+        prefix = root / "prefix"
+        subprocess.run(["./configure", f"--prefix={prefix}", "--disable-shared", "--enable-static",
+                        "--disable-dependency-tracking", "--disable-udev", f"CC={cc}", "CFLAGS=-O2"],
+                       cwd=libusb, env=env, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["make", f"-j{os.cpu_count() or 2}", "install"],
+                       cwd=libusb, env=env, check=True, stdout=subprocess.DEVNULL)
+        with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
+            archive.extractall(root)
+        rtl = next(path for path in root.iterdir() if path.name.startswith("rtl-sdr-blog-"))
+        subprocess.run([
+            cc, "-O2", "-dynamiclib", "-fvisibility=hidden", "-Drtlsdr_EXPORTS",
+            "-install_name", "@loader_path/librtlsdr.dylib",
+            "-I", str(rtl / "include"), "-I", str(prefix / "include" / "libusb-1.0"),
+            *(str(rtl / "src" / name) for name in LIBRTLSDR_SOURCES),
+            str(prefix / "lib" / "libusb-1.0.a"),
+            "-Wl,-exported_symbol,_rtlsdr_*",
+            "-framework", "CoreFoundation", "-framework", "IOKit", "-framework", "Security",
+            "-lobjc", "-o", str(output),
+        ], env=env, check=True)
+
+
+def _license_files(source: bytes, libusb_tar: bytes) -> dict[str, bytes]:
+    files: dict[str, bytes] = {}
+    with zipfile.ZipFile(io.BytesIO(source)) as archive:
+        copying = next(name for name in archive.namelist() if name.endswith("/COPYING"))
+        files["COPYING"] = archive.read(copying)
+    with tarfile.open(fileobj=io.BytesIO(libusb_tar)) as archive:
+        member = next(member for member in archive.getmembers() if member.name.endswith("/COPYING"))
+        license_file = archive.extractfile(member)
+        if license_file is None:
+            raise RuntimeError("Missing libusb LGPL license in source archive")
+        files["COPYING-libusb"] = license_file.read()
+    return files
+
+
+def main_macos() -> None:
+    source = download(SOURCE_URL, SOURCE_SHA256)
+    name, url, checksum = LIBUSB_ARCHIVE
+    libusb_tar = download(url, checksum)
+    DESTINATION.mkdir(parents=True, exist_ok=True)
+    _build_macos_librtlsdr(source, libusb_tar, DESTINATION / "librtlsdr.dylib")
+    files = _license_files(source, libusb_tar)
+    files["rtl-sdr-blog-source.zip"] = source
+    files[name] = libusb_tar
+    files["SOURCE.txt"] = (
+        f"RTL-SDR Blog {VERSION} librtlsdr, built from source for macOS "
+        f"{platform.machine()} (minimum macOS {MACOS_DEPLOYMENT_TARGET}).\n"
+        "librtlsdr: GPL-2.0-or-later; see COPYING and the corresponding source archive.\n"
+        f"Source: {SOURCE_URL}\nSHA256: {SOURCE_SHA256}\n"
+        "libusb 1.0.29: LGPL-2.1-or-later, statically linked into librtlsdr.dylib; see COPYING-libusb.\n"
+        f"Dependency source: {url}\nSHA256: {checksum}\n"
+        "No USB drivers or kernel extensions are included or installed. No bias tee is enabled.\n"
+    ).encode("ascii")
+    for file_name, content in files.items():
+        (DESTINATION / file_name).write_bytes(content)
+    _build_helper()
+    print(f"Built verified receive-only tools in {DESTINATION}")
+
+
+def _build_helper() -> None:
+    # Imports also work when this file is executed directly from scripts/.
+    try:
+        from scripts.build_adsb_receiver import build
+    except ModuleNotFoundError:
+        from build_adsb_receiver import build
+    build(DESTINATION)
+
+
 def main() -> None:
+    if sys.platform == "darwin":
+        main_macos()
+        return
     release = download(RELEASE_URL, RELEASE_SHA256)
     source = download(SOURCE_URL, SOURCE_SHA256)
     with zipfile.ZipFile(io.BytesIO(release)) as archive:
@@ -69,12 +167,7 @@ def main() -> None:
     DESTINATION.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
         (DESTINATION / name).write_bytes(content)
-    # Imports also work when this file is executed directly from scripts/.
-    try:
-        from scripts.build_adsb_receiver import build
-    except ModuleNotFoundError:
-        from build_adsb_receiver import build
-    build(DESTINATION)
+    _build_helper()
     print(f"Installed verified receive-only tools in {DESTINATION}")
 
 

@@ -54,6 +54,7 @@ class ReceiverTests(unittest.TestCase):
         process = Mock(stdout=io.StringIO(), stderr=io.StringIO())
         process.poll.return_value = None
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
+                patch("airwsjtx.rtlsdr.sys.platform", "win32"), \
                 patch("airwsjtx.rtlsdr.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process) as popen, \
                 patch("airwsjtx.rtlsdr._ReceiverJob"):
@@ -91,7 +92,7 @@ class ReceiverTests(unittest.TestCase):
 
     def test_unsupported_platform_and_missing_tools_explicit(self):
         with patch("airwsjtx.rtlsdr.sys.platform", "linux"):
-            self.assertIn("Windows x64 only", support_error())
+            self.assertIn("Windows x64 and macOS only", support_error())
             with self.assertRaisesRegex(RuntimeError, "Windows x64"):
                 discover_devices()
         with tempfile.TemporaryDirectory() as directory, \
@@ -99,6 +100,17 @@ class ReceiverTests(unittest.TestCase):
                 patch("airwsjtx.rtlsdr.platform.machine", return_value="AMD64"), \
                 patch("airwsjtx.rtlsdr.tools_directory", return_value=Path(directory)):
             self.assertIn("tools are missing", support_error())
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("airwsjtx.rtlsdr.sys.platform", "darwin"), \
+                patch("airwsjtx.rtlsdr.platform.machine", return_value="arm64"), \
+                patch.dict("airwsjtx.rtlsdr.os.environ", {}, clear=True), \
+                patch("airwsjtx.rtlsdr.tools_directory", return_value=Path(directory)):
+            self.assertIn("tools are missing", support_error())
+            (Path(directory) / "airwsjtx_adsb").touch()
+            (Path(directory) / "librtlsdr.dylib").touch()
+            self.assertIsNone(support_error())
+            with patch.dict("airwsjtx.rtlsdr.os.environ", {"APP_SANDBOX_CONTAINER_ID": "x"}):
+                self.assertIn("sandboxed", support_error())
 
     def test_tools_resolve_inside_frozen_runtime_not_path(self):
         with patch("airwsjtx.rtlsdr.sys._MEIPASS", "installed-runtime", create=True):
@@ -178,6 +190,7 @@ class ReceiverTests(unittest.TestCase):
         status = Mock()
         feed = LocalRTLSDRFeed(0, Mock(), status)
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
+                patch("airwsjtx.rtlsdr.sys.platform", "win32"), \
                 patch("airwsjtx.rtlsdr.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process) as popen, \
                 patch("airwsjtx.rtlsdr._ReceiverJob") as job:
@@ -242,11 +255,32 @@ class ReceiverTests(unittest.TestCase):
                 if code is None:
                     feed._process.terminate.assert_called_once()
 
+    def test_posix_helper_has_no_windows_job_or_flags(self):
+        process = Mock(stdout=io.StringIO(), stderr=io.StringIO())
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
+                patch("airwsjtx.rtlsdr.sys.platform", "darwin"), \
+                patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process) as popen, \
+                patch("airwsjtx.rtlsdr._ReceiverJob") as job:
+            feed = LocalRTLSDRFeed(0, Mock(), Mock(), device_info=DEVICE_INFO)
+            feed.start()
+            try:
+                args = popen.call_args
+                self.assertEqual(Path(args.args[0][0]).name, "airwsjtx_adsb")
+                self.assertEqual(args.args[0][1:], ["-d", "0"])
+                self.assertNotIn("creationflags", args.kwargs)
+                job.assert_not_called()
+            finally:
+                feed.stop()
+            process.terminate.assert_called_once()
+
     def test_spawn_failure_never_leaves_owned_process(self):
         feed = LocalRTLSDRFeed(0, Mock(), Mock())
         process = Mock(stdout=io.StringIO(), stderr=io.StringIO())
         process.poll.return_value = None
         with patch("airwsjtx.rtlsdr.support_error", return_value=None), \
+                patch("airwsjtx.rtlsdr.sys.platform", "win32"), \
                 patch("airwsjtx.rtlsdr.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
                 patch("airwsjtx.rtlsdr.subprocess.Popen", return_value=process), \
                 patch("airwsjtx.rtlsdr._ReceiverJob", side_effect=OSError("job failed")):

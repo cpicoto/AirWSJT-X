@@ -12,7 +12,7 @@ import time
 import unittest
 
 from airwsjtx.adsb import ADSBDecoder, crc_ok
-from airwsjtx.rtlsdr import tools_directory
+from airwsjtx.rtlsdr import helper_name, platform_supported, tools_directory
 from tests.test_adsb import EVEN, ODD, change_bits
 
 
@@ -63,8 +63,8 @@ class UpstreamSourceTests(unittest.TestCase):
                          "15914bbc0e9bbeee77a19921206720781664894b43615e8175c312c069e1a564")
 
 
-@unittest.skipUnless(sys.platform == "win32" and (tools_directory() / "airwsjtx_adsb.exe").is_file(),
-                     "Requires compiled Windows x64 ADS-B helper")
+@unittest.skipUnless(platform_supported() and (tools_directory() / helper_name()).is_file(),
+                     "Requires compiled ADS-B helper (Windows x64 or macOS)")
 class PhaseDemodulatorTests(unittest.TestCase):
     def replay(self, raw, rate=2400000):
         with tempfile.TemporaryDirectory() as directory:
@@ -72,7 +72,7 @@ class PhaseDemodulatorTests(unittest.TestCase):
             path.write_bytes(raw)
             start = time.monotonic()
             result = subprocess.run(
-                [str(tools_directory() / "airwsjtx_adsb.exe"), "--input", str(path),
+                [str(tools_directory() / helper_name()), "--input", str(path),
                  "--rate", str(rate)], capture_output=True, text=True, timeout=15,
             )
             elapsed = time.monotonic() - start
@@ -133,7 +133,7 @@ class PhaseDemodulatorTests(unittest.TestCase):
             path = Path(directory) / "wrong-rate.bin"
             path.write_bytes(iq_fixture(2000000, [(1024, EVEN)]))
             result = subprocess.run(
-                [str(tools_directory() / "airwsjtx_adsb.exe"), "--input", str(path),
+                [str(tools_directory() / helper_name()), "--input", str(path),
                  "--rate", "2000000"], capture_output=True, text=True, timeout=5,
             )
         self.assertNotEqual(result.returncode, 0)
@@ -225,7 +225,7 @@ class PhaseDemodulatorTests(unittest.TestCase):
             path = Path(directory) / "odd.bin"
             path.write_bytes(b"\x7f")
             result = subprocess.run(
-                [str(tools_directory() / "airwsjtx_adsb.exe"), "--input", str(path)],
+                [str(tools_directory() / helper_name()), "--input", str(path)],
                 capture_output=True, text=True, timeout=5,
             )
             self.assertNotEqual(result.returncode, 0)

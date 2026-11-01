@@ -172,7 +172,7 @@ export default function LocalReceiver({ request, onChanged, onLog }: {
   const running = status?.state === "connecting" || status?.state === "connected";
   return (
     <details style={{ width: "100%", fontSize: 11, marginTop: 6 }}>
-      <summary>Local RTL-SDR receiver (USB, Windows x64)</summary>
+      <summary>Local RTL-SDR receiver (USB, Windows x64 / macOS)</summary>
       <p>Receive ADS-B directly at 1090 MHz. Startup automatically discovers and starts the first accessible receiver.
         Stop keeps USB reception off for this app run; Discover and Start can retry.
         No external dump1090 service or address is needed.

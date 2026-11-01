@@ -43,8 +43,15 @@ the sidecar. The installer verifies upstream archive SHA256 hashes, stages only
 the required runtime files, and includes the GPL license and corresponding
 RTL-SDR source archive. It does not install USB drivers. Keep these files together
 in the `rtl-sdr` runtime subdirectory; never resolve executables from PATH or an
-external dump1090 installation. This integration is currently Windows x64 only;
-ARM64, macOS (including TestFlight), Linux, and mobile keep the network feeds.
+external dump1090 installation. This integration supports Windows x64 and
+direct-download macOS (arm64/x86_64). On macOS the same installer builds a
+self-contained `librtlsdr.dylib` from the pinned RTL-SDR Blog source with a
+statically linked, pinned libusb (exporting only `rtlsdr_*`), then builds the
+POSIX helper `airwsjtx_adsb` with clang; no Homebrew libraries or drivers are
+used. PyInstaller packages both as binaries so they keep their executable mode
+and signatures. On POSIX the helper stops itself if the owning bridge exits.
+Sandboxed TestFlight/Mac App Store builds report the receiver as unavailable
+(no USB entitlement); Windows ARM64, Linux, and mobile keep the network feeds.
 The production helper is `airwsjtx_adsb.exe`, built by
 `python scripts/build_adsb_receiver.py` using installed Visual Studio x64 C++
 build tools (no new compiler download). The sidecar builder recompiles it on
@@ -65,7 +72,8 @@ never relabel them. Native diagnostics retain accepted DF17 payload bytes,
 zero CRC syndrome and 12 MHz sample timestamps for independent audit; no
 CRC-failing/unknown-address parity candidate is emitted as a validated aircraft frame.
 Run `python -m unittest tests.test_adsb_native tests.test_rtlsdr_demodulator -v`
-with staged tools and the MSVC environment. Keep noisy fractional-phase,
+with staged tools and the MSVC environment (on macOS, `tests.test_adsb_native`
+replays the same IQ fixtures through the clang-built helper). Keep noisy fractional-phase,
 cross-buffer, corrupt-CRC, queue-loss and process-lifecycle tests enforced.
 Compare helpers on identical IQ before claiming decode-yield improvement; raw
 candidate counts, different traffic windows and a clean synthetic pair are not

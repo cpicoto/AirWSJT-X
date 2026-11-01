@@ -130,7 +130,7 @@ test("local locked position becomes stale at 120s using position provenance", as
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __mockReceiverSupported: true }); });
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.getByText("Local RTL-SDR receiver (USB, Windows x64)", { exact: true }).click();
+  await page.getByText("Local RTL-SDR receiver (USB, Windows x64 / macOS)", { exact: true }).click();
 });
 
 test("local receiver preview exposes all best-path ranking methods without starting capture", async ({ page }) => {
