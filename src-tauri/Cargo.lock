@@ -32,6 +32,7 @@ dependencies = [
 name = "airwsjtx"
 version = "0.3.30"
 dependencies = [
+ "cc",
  "httpdate",
  "keyring",
  "reqwest 0.12.28",

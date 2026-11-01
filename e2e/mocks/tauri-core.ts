@@ -182,6 +182,25 @@ export async function invoke(cmd: string, args?: Record<string, unknown>): Promi
       position_age_s: mock.__mockDump1090PositionAge ?? null,
     }] };
   }
+  if (cmd === "start_mobile_rtlsdr") {
+    const mock = window as unknown as Record<string, unknown>;
+    mock.__mockRtlSdrStarts = [...(mock.__mockRtlSdrStarts as unknown[] ?? []), args];
+    return;
+  }
+  if (cmd === "fetch_mobile_rtlsdr") {
+    return {
+      running: true, exit_code: null, valid_messages: 42, crc_errors: 0, positions: 3, log: [],
+      aircraft: [{
+        icao24: "a1b2c3", callsign: "RTLSDR1", lat: 47.6, lon: -122.2, altitude_m: 10000,
+        velocity_ms: 220, heading_deg: 180, vertical_rate_ms: 0, on_ground: false, position_age_s: 1,
+      }],
+    };
+  }
+  if (cmd === "stop_mobile_rtlsdr") {
+    const mock = window as unknown as Record<string, unknown>;
+    mock.__mockRtlSdrStops = Number(mock.__mockRtlSdrStops ?? 0) + 1;
+    return;
+  }
   if (cmd === "stop_mobile_dump1090") {
     const mock = window as unknown as Record<string, unknown>;
     mock.__mockDump1090Stops = Number(mock.__mockDump1090Stops ?? 0) + 1;

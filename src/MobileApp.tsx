@@ -13,6 +13,8 @@ import { Aircraft, OpenSkyPoller, fetchDump1090Aircraft, fetchNativeAircraft } f
 import { invoke } from "@tauri-apps/api/core";
 import AircraftAccounts from "./AircraftAccounts";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
+import { version as appVersion } from "../package.json";
+import { AndroidRtlSdrSource, isAndroidRtlSdrSupported } from "./lib/androidRtlSdr";
 import { downloadDb, getDbStatus, DbStatus } from "./lib/callsign";
 import { isSpeechSupported, speak } from "./lib/speech";
 import { HeadingSmoother, headingFromOrientation, normalizeDegrees, signedHeadingDelta } from "./lib/compass";
@@ -250,7 +252,7 @@ interface MobileSettings {
   dxCall: string;
   dxGrid: string;
   speechEnabled: boolean;
-  aircraftSource?: "opensky" | "adsbexchange" | "dump1090";
+  aircraftSource?: "opensky" | "adsbexchange" | "dump1090" | "rtlsdr";
   dump1090Host?: string;
 }
 
@@ -493,14 +495,18 @@ export default function MobileApp() {
       return;
     }
     let disposed = false;
+    const rtlsdr = source === "rtlsdr" ? new AndroidRtlSdrSource(message => { if (!disposed) setStatus(message); }) : null;
+    const local = source === "dump1090" || rtlsdr !== null;
     const poller = new OpenSkyPoller({
       latMin: Math.max(-90, myLat - bbox),
       lonMin: Math.max(-180, myLon - bbox * 2),
       latMax: Math.min(90, myLat + bbox),
       lonMax: Math.min(180, myLon + bbox * 2),
-      intervalMs: source === "dump1090" ? 5000 : 30000,
-      minimumIntervalMs: source === "opensky" ? 10000 : 5000,
-      fetchAircraft: source === "dump1090"
+      intervalMs: rtlsdr ? 2000 : local ? 5000 : 30000,
+      minimumIntervalMs: rtlsdr ? 2000 : source === "opensky" ? 10000 : 5000,
+      fetchAircraft: source === "rtlsdr"
+        ? () => rtlsdr!.fetchAircraft()
+        : source === "dump1090"
         ? () => fetchDump1090Aircraft(dumpHost)
         : (latMin, lonMin, latMax, lonMax) => fetchNativeAircraft(source, latMin, lonMin, latMax, lonMax),
       onUpdate: (raw: Aircraft[]) => {
@@ -510,7 +516,10 @@ export default function MobileApp() {
           || headingDeltaDeg(bearingDeg(myLat, myLon, a.lat!, a.lon!), pathBearing) <= PATH_TOLERANCE_DEG);
         setRawAircraft(raw);
         setLastUpdate(Date.now());
-        setStatus(source === "dump1090"
+        const stats = rtlsdr?.stats;
+        setStatus(stats
+          ? `RTL-SDR: ${raw.length} aircraft, ${withPos.length} with position · ${stats.validMessages} msgs`
+          : source === "dump1090"
           ? raw.length === 0
             ? "dump1090 connected — no aircraft received"
             : `dump1090: ${raw.length} received, ${withPos.length} with position`
@@ -520,6 +529,11 @@ export default function MobileApp() {
       onRateLimited: (ms) => setStatus(`Rate limited — retry in ${Math.round(ms / 1000)}s`),
     });
     pollerRef.current = poller;
+    if (rtlsdr) {
+      poller.start();
+      setStatus("Starting RTL-SDR...");
+      return () => { disposed = true; poller.stop(); void rtlsdr.stop(); };
+    }
     if (source === "dump1090") {
       poller.start();
       setStatus("Connecting to dump1090...");
@@ -644,10 +658,14 @@ export default function MobileApp() {
           <label style={{ color: "#c9d1d9" }}>Aircraft source
             <select aria-label="Aircraft source" value={settings.aircraftSource ?? "opensky"}
               onChange={e => saveSettings({ ...settings, aircraftSource:
-                e.target.value === "adsbexchange" ? "adsbexchange" : e.target.value === "dump1090" ? "dump1090" : "opensky" })}>
+                e.target.value === "adsbexchange" ? "adsbexchange" : e.target.value === "dump1090" ? "dump1090"
+                  : e.target.value === "rtlsdr" ? "rtlsdr" : "opensky" })}>
               <option value="opensky">OpenSky</option>
               <option value="adsbexchange">ADS-B Exchange</option>
               <option value="dump1090">dump1090 (network)</option>
+              {(isAndroidRtlSdrSupported() || settings.aircraftSource === "rtlsdr") && (
+                <option value="rtlsdr">Local RTL-SDR (USB OTG)</option>
+              )}
             </select>
           </label>
           <AircraftAccounts onLog={accountLog} onChanged={accountsChanged} />
@@ -669,7 +687,7 @@ export default function MobileApp() {
             <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 4 }}>
               Aircraft scatter assistant for WSJT-X
             </div>
-            <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 12 }}>Version 0.3.22</div>
+            <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 12 }}>Version {appVersion}</div>
             <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.6 }}>
               Created by Carlos Picoto, AD7NP<br />
               Contributions by Mike, K7MDL2

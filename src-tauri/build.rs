@@ -122,5 +122,58 @@ fn main() {{
         }
     }
 
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        build_android_rtlsdr(repo_root);
+    }
+
     tauri_build::build();
+}
+
+/// Compiles the receive-only RTL-SDR stack into the Android app: pinned libusb, librtlsdr
+/// patched to open an Android USB file descriptor, and the app's dump1090-fa demodulator.
+/// Sources are staged by `python scripts/install_rtlsdr.py --android`.
+fn build_android_rtlsdr(repo_root: &std::path::Path) {
+    let staged = repo_root.join("sidecar").join("rtl-sdr").join("android");
+    let scripts = repo_root.join("scripts");
+    let libusb = staged.join("libusb");
+    let rtl = staged.join("rtl-sdr");
+    assert!(
+        libusb.join("libusb").join("core.c").exists() && rtl.join("src").join("librtlsdr.c").exists(),
+        "Android RTL-SDR sources are missing; run `python scripts/install_rtlsdr.py --android` first"
+    );
+    let libusb_sources = [
+        "core.c", "descriptor.c", "hotplug.c", "io.c", "strerror.c", "sync.c",
+        "os/events_posix.c", "os/threads_posix.c", "os/linux_usbfs.c", "os/linux_netlink.c",
+    ];
+    let rtl_sources = [
+        "librtlsdr.c", "tuner_e4k.c", "tuner_fc0012.c", "tuner_fc0013.c", "tuner_fc2580.c", "tuner_r82xx.c",
+    ];
+    let demod_sources = ["adsb_receiver.c", "dump1090-fa/demod_2400.c", "dump1090-fa/icao_filter.c"];
+    let mut build = cc::Build::new();
+    build
+        .include(libusb.join("android"))
+        .include(libusb.join("libusb"))
+        .include(libusb.join("libusb").join("os"))
+        .include(rtl.join("include"))
+        .include(&scripts)
+        .define("AIRWSJTX_LIBRARY", None)
+        .define("DETACH_KERNEL_DRIVER", None)
+        .flag_if_supported("-std=gnu11")
+        .opt_level(2)
+        .warnings(false);
+    for name in libusb_sources {
+        build.file(libusb.join("libusb").join(name));
+    }
+    for name in rtl_sources {
+        build.file(rtl.join("src").join(name));
+    }
+    for name in demod_sources {
+        build.file(scripts.join(name));
+    }
+    build.compile("airwsjtx_rtlsdr");
+    println!("cargo:rustc-link-lib=log");
+    println!("cargo:rerun-if-changed={}", staged.display());
+    for name in demod_sources {
+        println!("cargo:rerun-if-changed={}", scripts.join(name).display());
+    }
 }

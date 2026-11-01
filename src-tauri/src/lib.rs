@@ -15,6 +15,12 @@ mod mobile_aircraft;
 #[cfg(any(mobile, test))]
 #[cfg_attr(not(mobile), allow(dead_code))]
 mod mobile_dump1090;
+#[cfg(any(mobile, test))]
+#[cfg_attr(not(mobile), allow(dead_code))]
+mod adsb;
+#[cfg(any(mobile, test))]
+#[cfg_attr(not(mobile), allow(dead_code))]
+mod mobile_rtlsdr;
 
 const REMOTE_DB_URL: &str = "https://ad7np.us/RoverAIM/DB";
 
@@ -99,7 +105,8 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(mobile)]
     let builder = builder.manage(mobile_aircraft::MobileAircraftState::default())
-        .manage(mobile_dump1090::MobileDump1090State::default());
+        .manage(mobile_dump1090::MobileDump1090State::default())
+        .manage(mobile_rtlsdr::MobileRtlSdrState::default());
     #[cfg(target_os = "android")]
     let builder = builder.plugin(mobile_storage::init());
     let builder = builder
@@ -233,6 +240,9 @@ pub fn run() {
         mobile_aircraft::fetch_mobile_aircraft,
         mobile_dump1090::fetch_mobile_dump1090,
         mobile_dump1090::stop_mobile_dump1090,
+        mobile_rtlsdr::start_mobile_rtlsdr,
+        mobile_rtlsdr::fetch_mobile_rtlsdr,
+        mobile_rtlsdr::stop_mobile_rtlsdr,
     ]);
     builder.build(tauri::generate_context!())
         .expect("error while running tauri application")

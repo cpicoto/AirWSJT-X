@@ -51,7 +51,14 @@ POSIX helper `airwsjtx_adsb` with clang; no Homebrew libraries or drivers are
 used. PyInstaller packages both as binaries so they keep their executable mode
 and signatures. On POSIX the helper stops itself if the owning bridge exits.
 Sandboxed TestFlight/Mac App Store builds report the receiver as unavailable
-(no USB entitlement); Windows ARM64, Linux, and mobile keep the network feeds.
+(no USB entitlement); Windows ARM64, Linux, and iOS keep the network feeds.
+Android compiles the same receiver into the app library instead of a sidecar:
+`python scripts/install_rtlsdr.py --android` stages pinned libusb and librtlsdr
+sources, adding `rtlsdr_open_sys_dev()` so librtlsdr opens the file descriptor of
+the `UsbDeviceConnection` that `RtlSdrBridge.kt` obtains after the user's USB
+permission. `src-tauri/build.rs` builds them with `scripts/adsb_receiver.c` in
+`AIRWSJTX_LIBRARY` mode (callbacks, no process or stdout). `src-tauri/src/adsb.rs`
+ports `airwsjtx/adsb.py`; keep both decoders and their test vectors in step.
 The production helper is `airwsjtx_adsb.exe`, built by
 `python scripts/build_adsb_receiver.py` using installed Visual Studio x64 C++
 build tools (no new compiler download). The sidecar builder recompiles it on

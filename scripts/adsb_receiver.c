@@ -6,6 +6,10 @@
  * Copyright (c) 2014-2016 Oliver Jowett <oliver@mutability.co.uk>
  * Copyright (c) 2021 FlightAware LLC
  * Additional upstream notices are retained in dump1090-fa/UPSTREAM.txt.
+ *
+ * Built as an executable by default. With AIRWSJTX_LIBRARY defined (Android), it is
+ * linked in-process against a librtlsdr that opens an Android USB file descriptor,
+ * and frames, IQ reports and messages are delivered through callbacks instead.
  */
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -22,6 +26,7 @@
 #endif
 #define __cdecl
 #endif
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +37,27 @@
 #define BLOCK 262144
 #define QUEUE 32
 #define OVERLAP 300
+#ifdef AIRWSJTX_LIBRARY
+#define API(name, ret, args) ret name args;
+API(rtlsdr_open_sys_dev, int, (void **, intptr_t));
+typedef void (*airwsjtx_frame_fn)(void *ctx, const char *hex, uint64_t timestamp_12mhz);
+typedef void (*airwsjtx_text_fn)(void *ctx, const char *text);
+static airwsjtx_frame_fn frame_cb;
+static airwsjtx_text_fn report_cb, log_cb;
+static void *cb_ctx;
+static void LOG(const char *format, ...)
+{
+    char text[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+    if (log_cb) log_cb(cb_ctx, text);
+}
+#else
 #define API(name, ret, args) static ret (__cdecl *name) args
+#define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
+#endif
 API(rtlsdr_open, int, (void **, uint32_t));
 API(rtlsdr_close, int, (void *));
 API(rtlsdr_set_tuner_gain_mode, int, (void *, int));
@@ -206,11 +231,15 @@ void useModesMessage(struct modesMessage *mm)
         hex[i * 2 + 1] = digits[mm->msg[i] & 15];
     }
     hex[28] = 0;
+#ifdef AIRWSJTX_LIBRARY
+    if (frame_cb) frame_cb(cb_ctx, hex, mm->timestampMsg);
+#else
     printf("*%s;\n", hex);
     fprintf(stderr, "AIRWSJTX_FRAME {\"frame\":\"%s\",\"df\":17,\"crc_syndrome\":0,"
         "\"timestamp_12mhz\":%llu,\"sample_rate\":%u}\n",
         hex, (unsigned long long)mm->timestampMsg, rate);
     fflush(stderr);
+#endif
 }
 
 static void report(void)
@@ -218,30 +247,34 @@ static void report(void)
     double elapsed = clock_seconds() - wall_start;
     double power = samples ? total_power / samples : 0;
     double signal = valid ? valid_signal_sum / valid : 0;
-    fprintf(stderr,
-        "AIRWSJTX_IQ {\"samples\":%llu,\"sample_rate\":%u,\"elapsed_s\":%.3f,"
-        "\"clipped_components\":%llu,\"clipped_fraction\":%.9f,"
-        "\"mean_power_dbfs\":%.3f,\"signal_power_dbfs\":",
-        (unsigned long long)samples, rate, elapsed,
-        (unsigned long long)clipped, samples ? clipped / (2.0 * samples) : 0,
-        power > 0 ? 10 * log10(power / 32512.5) : -120);
-    if (valid) fprintf(stderr, "%.3f", 10 * log10(signal));
-    else fprintf(stderr, "null");
-    fprintf(stderr, ",\"candidate_quiet_magnitude\":null");
+    char text[1024], level[32];
+    if (valid) snprintf(level, sizeof(level), "%.3f", 10 * log10(signal));
+    else strcpy(level, "null");
     LOCK(queue_lock);
     uint64_t lost = dropped;
     UNLOCK(queue_lock);
-    fprintf(stderr,
+    snprintf(text, sizeof(text),
+        "{\"samples\":%llu,\"sample_rate\":%u,\"elapsed_s\":%.3f,"
+        "\"clipped_components\":%llu,\"clipped_fraction\":%.9f,"
+        "\"mean_power_dbfs\":%.3f,\"signal_power_dbfs\":%s,\"candidate_quiet_magnitude\":null"
         ",\"dropped_buffers\":%llu,\"discontinuities\":%llu,"
         "\"usb_overruns\":null,\"native_valid_df17\":%llu,"
         "\"preamble_candidates\":%llu,\"df17_crc_rejected_phase_trials\":%llu,"
-        "\"accepted_other_modes\":%llu,\"rejected_bad\":%llu,\"rejected_unknown_icao\":%llu}\n",
+        "\"accepted_other_modes\":%llu,\"rejected_bad\":%llu,\"rejected_unknown_icao\":%llu}",
+        (unsigned long long)samples, rate, elapsed,
+        (unsigned long long)clipped, samples ? clipped / (2.0 * samples) : 0,
+        power > 0 ? 10 * log10(power / 32512.5) : -120, level,
         (unsigned long long)lost, (unsigned long long)gaps, (unsigned long long)valid,
         (unsigned long long)Modes.stats_current.demod_preambles,
         (unsigned long long)failed_df17_trials, (unsigned long long)accepted_other,
         (unsigned long long)Modes.stats_current.demod_rejected_bad,
         (unsigned long long)Modes.stats_current.demod_rejected_unknown_icao);
+#ifdef AIRWSJTX_LIBRARY
+    if (report_cb) report_cb(cb_ctx, text);
+#else
+    fprintf(stderr, "AIRWSJTX_IQ %s\n", text);
     fflush(stderr);
+#endif
 }
 
 static void demodulate_buffer(unsigned available, int discontinuous)
@@ -263,7 +296,9 @@ static void demodulate_buffer(unsigned available, int discontinuous)
     demodulate2400(&mag);
     tail_length = OVERLAP;
     memmove(magnitudes, magnitudes + available - OVERLAP, OVERLAP * sizeof(uint16_t));
+#ifndef AIRWSJTX_LIBRARY
     fflush(stdout);
+#endif
 }
 
 static void process(const unsigned char *raw, unsigned length, int discontinuous, uint64_t start_sample)
@@ -334,7 +369,9 @@ static BOOL WINAPI interrupted(DWORD signal)
 }
 #else
 static void *reader(void *unused) { (void)unused; read_samples(); return NULL; }
+#endif
 
+#if !defined(_WIN32) && !defined(AIRWSJTX_LIBRARY)
 static void interrupted(int number)
 {
     (void)number;
@@ -361,6 +398,149 @@ static void *load_bundled_library(const char *name)
 }
 #endif
 
+#define STREAM_STUCK 2
+/* Configures the open device and demodulates until stopped, the duration ends or USB fails.
+ * Returns 0, 1 on failure, or STREAM_STUCK when the USB reader could not be stopped. */
+static int stream_device(int manual, int gain, double duration, unsigned char *raw)
+{
+#define CHECK(call) do { int code = (call); if (code < 0) { \
+    LOG("Failed " #call " (%d)\n", code); return 1; } } while (0)
+    CHECK(rtlsdr_set_tuner_gain_mode(device, manual));
+    if (manual) {
+        CHECK(rtlsdr_set_tuner_gain(device, gain));
+        int actual = rtlsdr_get_tuner_gain(device);
+        if (actual != gain) { LOG("Failed gain readback (%d != %d)\n", actual, gain); return 1; }
+        LOG("Tuner gain set to %.2f dB.\n", actual / 10.0);
+    } else LOG("Tuner gain set to automatic.\n");
+    CHECK(rtlsdr_set_agc_mode(device, 1));
+    CHECK(rtlsdr_set_center_freq(device, 1090000000));
+    CHECK(rtlsdr_set_sample_rate(device, rate));
+    CHECK(rtlsdr_set_bias_tee(device, 0));
+    CHECK(rtlsdr_reset_buffer(device));
+#undef CHECK
+    LOG("dump1090-fa 465e063 Mode S: 1090000000 Hz, %u S/s; no correction; digital AGC on; bias tee off.\n", rate);
+#ifdef _WIN32
+    SetConsoleCtrlHandler(interrupted, TRUE);
+    HANDLE worker = CreateThread(NULL, 0, reader, NULL, 0, NULL);
+    if (!worker) { LOG("Failed creating USB reader\n"); return 1; }
+#else
+#ifndef AIRWSJTX_LIBRARY
+    struct sigaction action = {0};
+    action.sa_handler = interrupted;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGTERM, &action, NULL);
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGHUP, &action, NULL);
+    /* A dead bridge must not leave the receiver holding USB: stop when reparented. */
+    pid_t owner = getppid();
+#endif
+    pthread_t worker;
+    if (pthread_create(&worker, NULL, reader, NULL)) { LOG("Failed creating USB reader\n"); return 1; }
+#endif
+    int result = 0;
+    uint64_t expected = 0;
+    double next_report = clock_seconds() + 1;
+    while (!FLAG_GET(exiting)) {
+        if (duration && clock_seconds() - wall_start >= duration) break;
+#if !defined(_WIN32) && !defined(AIRWSJTX_LIBRARY)
+        if (getppid() != owner) { LOG("Owning bridge exited; stopping receiver.\n"); break; }
+#endif
+        signal_wait(&ready, 100);
+        unsigned length = 0;
+        uint64_t current = expected, offset = 0;
+        LOCK(queue_lock);
+        if (count) {
+            length = lengths[head]; current = sequences[head]; offset = offsets[head];
+            memcpy(raw, queue[head], length);
+            head = (head + 1) % QUEUE; --count;
+        }
+        int empty = count == 0;
+        UNLOCK(queue_lock);
+        if (length) { process(raw, length, current != expected, offset); expected = current + 1; }
+        if (clock_seconds() >= next_report) { report(); next_report = clock_seconds() + 1; }
+        if (FLAG_GET(reader_done) && empty) break;
+    }
+    FLAG_SET(exiting);
+    rtlsdr_cancel_async(device);
+#ifdef _WIN32
+    if (WaitForSingleObject(worker, 5000) != WAIT_OBJECT_0) {
+        LOG("Failed to stop USB reader\n");
+        /* Process exit releases USB; never unload a DLL executing in a worker. */
+        ExitProcess(1);
+    }
+    CloseHandle(worker);
+#else
+    double stop_deadline = clock_seconds() + 5;
+    while (!FLAG_GET(reader_done) && clock_seconds() < stop_deadline) usleep(10000);
+    if (!FLAG_GET(reader_done)) {
+        LOG("Failed to stop USB reader\n");
+#ifdef AIRWSJTX_LIBRARY
+        /* In-process: leave the device open rather than free it under a live reader. */
+        pthread_detach(worker);
+        return STREAM_STUCK;
+#else
+        /* Process exit releases USB; never unload a library executing in a worker. */
+        _exit(1);
+#endif
+    }
+    pthread_join(worker, NULL);
+#endif
+    if (reader_code < 0) { LOG("USB read failed (%d)\n", reader_code); result = 1; }
+    return result;
+}
+
+#ifdef AIRWSJTX_LIBRARY
+static flag_t running;
+
+/* Requests a running airwsjtx_adsb_run() to stop; safe from any thread. */
+void airwsjtx_adsb_stop(void) { FLAG_SET(exiting); }
+
+/* Receives ADS-B from the RTL-SDR behind an Android USB file descriptor until
+ * airwsjtx_adsb_stop(). The caller keeps ownership of fd. One receiver at a time. */
+int airwsjtx_adsb_run(intptr_t fd, int manual, double gain_db,
+                      airwsjtx_frame_fn on_frame, airwsjtx_text_fn on_report,
+                      airwsjtx_text_fn on_log, void *ctx)
+{
+    if (__atomic_exchange_n(&running, 1, __ATOMIC_SEQ_CST)) return -1;
+    frame_cb = on_frame; report_cb = on_report; log_cb = on_log; cb_ctx = ctx;
+    device = NULL;
+    __atomic_store_n(&exiting, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&reader_done, 0, __ATOMIC_SEQ_CST);
+    reader_code = 0; head = count = 0; sequence = captured_samples = dropped = 0;
+    samples = clipped = valid = accepted_other = failed_df17_trials = gaps = 0;
+    block_start = input_end = 0; total_power = valid_signal_sum = 0; tail_length = 0;
+    memset(&Modes, 0, sizeof(Modes));
+    int gain = (int)lround(gain_db * 10);
+    LOCK_INIT(queue_lock);
+    int result = 1;
+    unsigned char *raw = malloc(BLOCK);
+    if (!raw) { LOG("Failed to allocate IQ buffer\n"); goto done; }
+    if (!signal_init(&ready)) { LOG("Failed to create receive semaphore\n"); free(raw); goto done; }
+    wall_start = clock_seconds();
+    icaoFilterInit();
+    int code = rtlsdr_open_sys_dev(&device, fd);
+    if (code < 0) { LOG("Failed rtlsdr_open_sys_dev (%d)\n", code); device = NULL; }
+    else {
+        result = stream_device(manual, gain, 0, raw);
+        if (result == STREAM_STUCK) goto stuck;
+        rtlsdr_close(device);
+        device = NULL;
+    }
+    flush_tail();
+    report();
+    signal_free(&ready);
+    free(raw);
+done:
+    LOCK_FREE(queue_lock);
+    frame_cb = NULL; report_cb = NULL; log_cb = NULL; cb_ctx = NULL;
+    __atomic_store_n(&running, 0, __ATOMIC_SEQ_CST);
+    return result;
+stuck:
+    /* The reader thread still uses these; keep them alive and refuse further runs. */
+    frame_cb = NULL; report_cb = NULL; log_cb = NULL;
+    return result;
+}
+#else
 int main(int argc, char **argv)
 {
     const char *input = NULL;
@@ -426,83 +606,9 @@ int main(int argc, char **argv)
         LOAD(rtlsdr_set_tuner_gain); LOAD(rtlsdr_get_tuner_gain); LOAD(rtlsdr_set_agc_mode);
         LOAD(rtlsdr_set_center_freq); LOAD(rtlsdr_set_sample_rate); LOAD(rtlsdr_set_bias_tee);
         LOAD(rtlsdr_reset_buffer); LOAD(rtlsdr_cancel_async); LOAD(rtlsdr_read_async);
-#define CHECK(call) do { int code = (call); if (code < 0) { \
-    fprintf(stderr, "Failed " #call " (%d)\n", code); result = 1; goto close_device; } } while (0)
-        CHECK(rtlsdr_open(&device, (uint32_t)index));
-        CHECK(rtlsdr_set_tuner_gain_mode(device, manual));
-        if (manual) {
-            CHECK(rtlsdr_set_tuner_gain(device, gain));
-            int actual = rtlsdr_get_tuner_gain(device);
-            if (actual != gain) { fprintf(stderr, "Failed gain readback (%d != %d)\n", actual, gain); result = 1; goto close_device; }
-            fprintf(stderr, "Tuner gain set to %.2f dB.\n", actual / 10.0);
-        } else fprintf(stderr, "Tuner gain set to automatic.\n");
-        CHECK(rtlsdr_set_agc_mode(device, 1));
-        CHECK(rtlsdr_set_center_freq(device, 1090000000));
-        CHECK(rtlsdr_set_sample_rate(device, rate));
-        CHECK(rtlsdr_set_bias_tee(device, 0));
-        CHECK(rtlsdr_reset_buffer(device));
-        fprintf(stderr, "dump1090-fa 465e063 Mode S: 1090000000 Hz, %u S/s; no correction; digital AGC on; bias tee off.\n", rate);
-#ifdef _WIN32
-        SetConsoleCtrlHandler(interrupted, TRUE);
-        HANDLE worker = CreateThread(NULL, 0, reader, NULL, 0, NULL);
-        if (!worker) { fprintf(stderr, "Failed creating USB reader\n"); result = 1; goto close_device; }
-#else
-        struct sigaction action = {0};
-        action.sa_handler = interrupted;
-        sigemptyset(&action.sa_mask);
-        sigaction(SIGTERM, &action, NULL);
-        sigaction(SIGINT, &action, NULL);
-        sigaction(SIGHUP, &action, NULL);
-        /* A dead bridge must not leave the receiver holding USB: stop when reparented. */
-        pid_t owner = getppid();
-        pthread_t worker;
-        if (pthread_create(&worker, NULL, reader, NULL)) {
-            fprintf(stderr, "Failed creating USB reader\n"); result = 1; goto close_device;
-        }
-#endif
-        uint64_t expected = 0;
-        double next_report = clock_seconds() + 1;
-        while (!FLAG_GET(exiting)) {
-            if (duration && clock_seconds() - wall_start >= duration) break;
-#ifndef _WIN32
-            if (getppid() != owner) { fprintf(stderr, "Owning bridge exited; stopping receiver.\n"); break; }
-#endif
-            signal_wait(&ready, 100);
-            unsigned length = 0;
-            uint64_t current = expected, offset = 0;
-            LOCK(queue_lock);
-            if (count) {
-                length = lengths[head]; current = sequences[head]; offset = offsets[head];
-                memcpy(raw, queue[head], length);
-                head = (head + 1) % QUEUE; --count;
-            }
-            int empty = count == 0;
-            UNLOCK(queue_lock);
-            if (length) { process(raw, length, current != expected, offset); expected = current + 1; }
-            if (clock_seconds() >= next_report) { report(); next_report = clock_seconds() + 1; }
-            if (FLAG_GET(reader_done) && empty) break;
-        }
-        FLAG_SET(exiting);
-        rtlsdr_cancel_async(device);
-#ifdef _WIN32
-        if (WaitForSingleObject(worker, 5000) != WAIT_OBJECT_0) {
-            fprintf(stderr, "Failed to stop USB reader\n");
-            /* Process exit releases USB; never unload a DLL executing in a worker. */
-            ExitProcess(1);
-        }
-        CloseHandle(worker);
-#else
-        double stop_deadline = clock_seconds() + 5;
-        while (!FLAG_GET(reader_done) && clock_seconds() < stop_deadline) usleep(10000);
-        if (!FLAG_GET(reader_done)) {
-            fprintf(stderr, "Failed to stop USB reader\n");
-            /* Process exit releases USB; never unload a library executing in a worker. */
-            _exit(1);
-        }
-        pthread_join(worker, NULL);
-#endif
-        if (reader_code < 0) { fprintf(stderr, "USB read failed (%d)\n", reader_code); result = 1; }
-close_device:
+        int code = rtlsdr_open(&device, (uint32_t)index);
+        if (code < 0) { fprintf(stderr, "Failed rtlsdr_open(&device, (uint32_t)index) (%d)\n", code); result = 1; device = NULL; }
+        else result = stream_device(manual, gain, duration, raw);
         if (device) rtlsdr_close(device);
 #ifdef _WIN32
         FreeLibrary(library);
@@ -518,3 +624,4 @@ close_device:
     LOCK_FREE(queue_lock);
     return result;
 }
+#endif

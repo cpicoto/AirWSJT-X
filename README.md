@@ -118,6 +118,7 @@ Expand **Aircraft accounts** in the desktop aircraft panel (or mobile **Settings
 - **OpenSky Network** — Create an account at [opensky-network.org](https://opensky-network.org/), create an API client, and paste the `clientId` and `clientSecret` values. The app handles OAuth2 token management automatically.
 - **ADS-B Exchange** — Obtain an API key from [ADS-B Exchange](https://gateway.adsbexchange.com/api/aircraft/v2/docs/index.html) for the direct v2 geographic radius endpoint. Note: RapidAPI keys use a different gateway and are not interchangeable.
 - **Local RTL-SDR (Windows x64, macOS)** — Plug in a compatible RTL-SDR with a 1090 MHz antenna before launching; the app automatically discovers and starts the first accessible receiver. To retry or choose another dongle, expand **Local RTL-SDR receiver (USB, Windows x64 / macOS)** in Flight Data, click **Discover USB receivers**, select it, then **Start local ADS-B**. No external dump1090 service, account, hostname, or TCP port is required. The bundled app-owned native demodulator receives at 1090 MHz / 2.4 MS/s with automatic tuner gain, digital AGC on and bias tee **off**. Close other SDR applications using the dongle first. The app does not install or replace drivers: if discovery is empty, check the physical connection and, on Windows, the WinUSB driver for **Bulk-In Interface 0** (not a different USB device). macOS needs no driver; the sandboxed Mac App Store/TestFlight build cannot access USB receivers, so use the direct-download app. **Stop local receiver** releases the dongle and returns to configured network sources; closing the app also releases it. Native startup/USB errors and candidate-frame, rejected-CRC, valid-message, aircraft, and position counters appear in this panel. A running receiver with no valid messages is not proof of RF reception; antenna placement and local traffic determine coverage.
+- **Local RTL-SDR (Android, USB OTG)** — Connect the receiver with a USB OTG adapter, then in **Settings** set **Aircraft source** to **Local RTL-SDR (USB OTG)** and tap **Done**. Android asks once per connection to allow AirWSJT-X to access the USB device. The app then receives at 1090 MHz / 2.4 MS/s with automatic tuner gain using the same bundled demodulator as desktop, and the status line shows aircraft, positioned aircraft and valid-message counts. Choosing another source releases the dongle. If a DVB-T app (for example Aerial TV) opens when the dongle is plugged in, close it, or clear its **Open by default** setting, so it does not hold the device. The phone powers the dongle; a powered OTG hub helps if the device keeps disconnecting.
 - **dump1090 / readsb** — Connects via SBS TCP (port 30003). On desktop it defaults to a receiver on this computer (`127.0.0.1`); to use a receiver elsewhere on your network (for example a Raspberry Pi), expand **dump1090 source** below **Aircraft accounts**, enter its IP address or hostname, and click **Save dump1090 source**. The port stays 30003. The address is applied immediately and remembered across restarts. On mobile there may not be a local receiver, so the same **dump1090 source** section (in **Settings**) only takes a network address: saving it selects **dump1090 (network)** as the aircraft source, and **Disable dump1090** clears it and returns to OpenSky. The phone must be on the same network as the receiver (iOS asks for Local Network permission on first use).  If you have a tablet for example, with dump1090 and a USB RTL-SDR running, then 127.0.0.1 is valid entry.
 
 Credentials are stored in the OS credential manager (Keychain, Credential Manager, Secret Service, or Android Keystore). Poll intervals default to 30 seconds and are independently configurable per provider.
@@ -133,10 +134,12 @@ supported by librtlsdr are expected to work but have not been tested.
 | Nooelec NESDR SMArt v5 | `0BDA:2838` | R820T | macOS 26.5.1 (Apple Silicon, arm64), direct-download build | None needed | 176 valid messages, 0 CRC errors, 54 positions, 5 aircraft in about 40 s |
 | Nooelec NESDR SMArt v5 | `0BDA:2838` | R820T | Windows x64 | WinUSB (Zadig) on Bulk-In Interface 0 | Discovered, CRC-valid frames received |
 | Generic RTL2832U dongle | `0BDA:2832` | R820T | Windows x64 | WinUSB (Zadig) on Bulk-In Interface 0 | 148 valid messages, 16 aircraft (10 positioned), 37 position fixes in one session |
+| Nooelec NESDR SMArt v5 | `0BDA:2838` | R820T | Android 12 (OnePlus 7 Pro GM1917, arm64), USB OTG | None needed (Android USB permission prompt) | 314 valid messages, 0 CRC errors, 103 positions, 3 aircraft in about 2 minutes; 0 dropped USB buffers |
 
 The sandboxed Mac App Store/TestFlight build has no USB access, so local RTL-SDR
 reception is unavailable there; Intel macOS (x86_64) is supported but not yet
-validated with hardware.
+validated with hardware. Android armv7 and x86_64 builds include the receiver but
+have not been validated with hardware; iOS has no USB host access.
 
 Local reception accepts CRC-valid DF17 ADS-B only, without bit-error correction.
 The app-owned helper now uses FlightAware dump1090's pinned
@@ -407,8 +410,16 @@ need this frozen-runtime configuration.
 ```bash
 npm ci
 npx tauri android init
+python scripts/install_rtlsdr.py --android
 npx tauri android build --apk
 ```
+
+`install_rtlsdr.py --android` stages the pinned, SHA256-verified libusb and
+librtlsdr sources that `src-tauri/build.rs` compiles into the Android library for
+local RTL-SDR reception. CI also copies `src-tauri/android-overrides/*.kt` into the
+generated project and adds the location permission and optional
+`android.hardware.usb.host` feature to the manifest; do the same for a local
+build (see `.github/workflows/mobile.yml`).
 
 GitHub Actions builds signed Android APKs for pushes and pull requests targeting `main`. Download them from the run's **Artifacts** section. Pull requests without access to repository signing secrets use a temporary key, so those APKs cannot update an installation signed by the release key. Version-tag builds are also attached to the GitHub release.
 

@@ -440,11 +440,12 @@ jobs:
       - name: Initialize Tauri Android
         run: npx tauri android init --skip-targets-install
 
-      - name: Install native Android text-to-speech bridge
+      - name: Install native Android text-to-speech and RTL-SDR bridges
         run: |
           PKG_DIR=src-tauri/gen/android/app/src/main/java/us/ad7np/airwsjtx
           test -d "$PKG_DIR" || { echo "Missing $PKG_DIR"; find src-tauri/gen/android -name MainActivity.kt; exit 1; }
-          cp src-tauri/android-overrides/MainActivity.kt src-tauri/android-overrides/TtsBridge.kt "$PKG_DIR/"
+          cp src-tauri/android-overrides/MainActivity.kt src-tauri/android-overrides/TtsBridge.kt \
+            src-tauri/android-overrides/RtlSdrBridge.kt "$PKG_DIR/"
 
       - name: Add Android location permission
         run: |
@@ -452,6 +453,16 @@ jobs:
           grep -q ACCESS_FINE_LOCATION "$MANIFEST" || \
             sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|&\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />|' "$MANIFEST"
           grep ACCESS_FINE_LOCATION "$MANIFEST"
+
+      - name: Declare optional USB host support for RTL-SDR
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          grep -q android.hardware.usb.host "$MANIFEST" || \
+            sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|&\n    <uses-feature android:name="android.hardware.usb.host" android:required="false" />|' "$MANIFEST"
+          grep 'android.hardware.usb.host" android:required="false"' "$MANIFEST"
+
+      - name: Stage pinned libusb and librtlsdr sources for Android
+        run: python scripts/install_rtlsdr.py --android
 
       - name: Build Android ARM APK
         run: |

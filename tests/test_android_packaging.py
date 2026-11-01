@@ -436,5 +436,60 @@ class AndroidNativeSpeechTests(unittest.TestCase):
         self.assertLess(text.index("android-overrides/MainActivity.kt"), text.index("android build"))
 
 
+class AndroidRtlSdrTests(unittest.TestCase):
+    """Local RTL-SDR over USB OTG: Kotlin grants USB access, Rust links librtlsdr."""
+
+    root = Path(__file__).resolve().parent.parent
+
+    def test_bridge_is_registered_and_requests_usb_permission(self) -> None:
+        main = (self.root / "src-tauri" / "android-overrides" / "MainActivity.kt").read_text()
+        bridge = (self.root / "src-tauri" / "android-overrides" / "RtlSdrBridge.kt").read_text()
+        self.assertIn("package us.ad7np.airwsjtx", bridge)
+        self.assertIn('addJavascriptInterface(receiver, "AndroidRtlSdr")', main)
+        self.assertIn("rtlSdr?.close()", main)
+        self.assertIn("usb.requestPermission", bridge)
+        self.assertIn("PendingIntent.FLAG_MUTABLE", bridge)
+        self.assertIn(".setPackage(appContext.packageName)", bridge)
+        self.assertIn("fileDescriptor", bridge)
+        self.assertIn("0x0bda to 0x2838", bridge)
+
+    def test_workflow_installs_bridge_feature_and_sources_before_build(self) -> None:
+        text = (self.root / ".github" / "workflows" / "mobile.yml").read_text()
+        build = text.index("android build")
+        self.assertLess(text.index("android init"), text.index("android-overrides/RtlSdrBridge.kt"))
+        self.assertLess(text.index("android-overrides/RtlSdrBridge.kt"), build)
+        feature = 'android.hardware.usb.host" android:required="false"'
+        self.assertIn(feature, text)
+        self.assertLess(text.index(feature), build)
+        self.assertLess(text.index("install_rtlsdr.py --android"), build)
+
+    def test_librtlsdr_patch_wraps_the_android_descriptor_and_fails_on_drift(self) -> None:
+        from scripts.install_rtlsdr import patch_librtlsdr_for_android
+
+        upstream = (
+            "int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)\n{\n"
+            "\tcnt = libusb_get_device_list(dev->ctx, &list);\n"
+            "\tlibusb_free_device_list(list, 1);\n\n"
+            "\tif (libusb_kernel_driver_active(dev->devh, 0) == 1) {\n}\n"
+        )
+        patched = patch_librtlsdr_for_android(upstream)
+        self.assertIn("static int rtlsdr_open_common(", patched)
+        self.assertLess(patched.index("libusb_wrap_sys_device"), patched.index("libusb_get_device_list"))
+        self.assertLess(patched.index("opened:"), patched.index("libusb_kernel_driver_active"))
+        self.assertIn("int rtlsdr_open_sys_dev(rtlsdr_dev_t **out_dev, intptr_t sys_dev)", patched)
+        self.assertIn("LIBUSB_OPTION_NO_DEVICE_DISCOVERY", patched)
+        self.assertIn("return rtlsdr_open_common(out_dev, index, 0);", patched)
+        with self.assertRaisesRegex(RuntimeError, "no longer matches"):
+            patch_librtlsdr_for_android(upstream.replace("libusb_get_device_list", "renamed"))
+
+    def test_build_script_compiles_receiver_only_for_android(self) -> None:
+        build = (self.root / "src-tauri" / "build.rs").read_text()
+        self.assertIn('CARGO_CFG_TARGET_OS").as_deref() == Ok("android")', build)
+        for source in ("linux_usbfs.c", "librtlsdr.c", "tuner_r82xx.c", "adsb_receiver.c", "demod_2400.c"):
+            self.assertIn(source, build)
+        self.assertIn('define("AIRWSJTX_LIBRARY"', build)
+        self.assertIn("install_rtlsdr.py --android", build)
+
+
 if __name__ == "__main__":
     unittest.main()

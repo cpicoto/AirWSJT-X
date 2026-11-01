@@ -60,6 +60,43 @@ test("mobile dump1090 source is selected by saving an address and disabled retur
   )).toBe(true);
 });
 
+test("android local RTL-SDR asks for USB access, starts with the device fd, and stops cleanly", async ({ page }) => {
+  await page.addInitScript(() => {
+    let granted = false;
+    const calls: string[] = [];
+    Object.assign(window, {
+      __rtlCalls: calls,
+      AndroidRtlSdr: {
+        listDevices: () => JSON.stringify([{
+          name: "/dev/bus/usb/001/002", vendorId: 0x0bda, productId: 0x2838, product: "RTL2838UHIDIR", manufacturer: "Realtek",
+        }]),
+        hasPermission: () => granted,
+        requestPermission: () => { calls.push("request"); setTimeout(() => { granted = true; }, 300); return false; },
+        open: (name: string) => { calls.push(`open ${name}`); return 77; },
+        close: () => { calls.push("close"); },
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Aircraft source", { exact: true }).selectOption("rtlsdr");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.getByText(/RTL-SDR: 1 aircraft, 1 with position · 42 msgs/)).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __mockRtlSdrStarts: unknown[] }).__mockRtlSdrStarts))
+    .toEqual([{ fd: 77 }]);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Aircraft source", { exact: true }).selectOption("opensky");
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __rtlCalls: string[] }).__rtlCalls))
+    .toEqual(["request", "open /dev/bus/usb/001/002", "close"]);
+  expect(await page.evaluate(() => (window as unknown as { __mockRtlSdrStops: number }).__mockRtlSdrStops)).toBe(1);
+});
+
+test("local RTL-SDR source is hidden without the Android USB bridge", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.locator('option[value="rtlsdr"]')).toHaveCount(0);
+});
+
 test("mobile uses a saved 10-second OpenSky polling cadence", async ({ page }) => {
   await page.clock.install();
   await page.addInitScript(() => {

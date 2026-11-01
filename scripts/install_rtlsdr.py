@@ -2,6 +2,8 @@
 
 Windows x64 uses the upstream prebuilt release. macOS builds librtlsdr from the same
 pinned source with a statically linked, pinned libusb; no Homebrew libraries are used.
+``--android`` stages the same pinned sources, with librtlsdr patched to open an Android
+USB file descriptor, for src-tauri/build.rs to compile with the NDK.
 """
 from __future__ import annotations
 
@@ -119,6 +121,84 @@ def main_macos() -> None:
     print(f"Built verified receive-only tools in {DESTINATION}")
 
 
+ANDROID_DESTINATION = DESTINATION / "android"
+_OPEN_SIGNATURE = "int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)\n{"
+_DEVICE_LIST = "\tcnt = libusb_get_device_list(dev->ctx, &list);\n"
+_OPENED = "\tlibusb_free_device_list(list, 1);\n\n\tif (libusb_kernel_driver_active(dev->devh, 0) == 1) {"
+
+
+def patch_librtlsdr_for_android(text: str) -> str:
+    """Add rtlsdr_open_sys_dev(), which wraps an Android UsbDeviceConnection descriptor.
+
+    Android apps cannot enumerate /dev/bus/usb; libusb must wrap the descriptor the
+    platform grants after the user's USB permission. Everything after the device is
+    opened (EEPROM, tuner probe, reset) stays upstream code.
+    """
+    for anchor in (_OPEN_SIGNATURE, _DEVICE_LIST, _OPENED):
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"librtlsdr source no longer matches the Android patch: {anchor!r}")
+    text = text.replace(_OPEN_SIGNATURE,
+                        "static int rtlsdr_open_common(rtlsdr_dev_t **out_dev, uint32_t index, intptr_t sys_dev)\n{")
+    text = text.replace(_DEVICE_LIST,
+                        "\tif (sys_dev) {\n"
+                        "\t\tr = libusb_wrap_sys_device(dev->ctx, sys_dev, &dev->devh);\n"
+                        "\t\tif (r < 0) {\n"
+                        "\t\t\tfprintf(stderr, \"usb_wrap_sys_device error %d\\n\", r);\n"
+                        "\t\t\tgoto err;\n"
+                        "\t\t}\n"
+                        "\t\tgoto opened;\n"
+                        "\t}\n\n" + _DEVICE_LIST)
+    text = text.replace(_OPENED, "\tlibusb_free_device_list(list, 1);\n\nopened:\n"
+                        "\tif (libusb_kernel_driver_active(dev->devh, 0) == 1) {")
+    return text + (
+        "\n/* AirWSJT-X Android patch. */\n"
+        "int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)\n"
+        "{\n\treturn rtlsdr_open_common(out_dev, index, 0);\n}\n\n"
+        "int rtlsdr_open_sys_dev(rtlsdr_dev_t **out_dev, intptr_t sys_dev)\n"
+        "{\n\tif (!sys_dev)\n\t\treturn -1;\n"
+        "\tlibusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);\n"
+        "\treturn rtlsdr_open_common(out_dev, 0, sys_dev);\n}\n"
+    )
+
+
+def main_android() -> None:
+    """Stage verified, patched librtlsdr and libusb sources for the Android NDK build."""
+    source = download(SOURCE_URL, SOURCE_SHA256)
+    name, url, checksum = LIBUSB_ARCHIVE
+    libusb_tar = download(url, checksum)
+    if ANDROID_DESTINATION.exists():
+        shutil.rmtree(ANDROID_DESTINATION)
+    ANDROID_DESTINATION.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix="airwsjtx-android-rtlsdr-") as work:
+        root = Path(work)
+        with tarfile.open(fileobj=io.BytesIO(libusb_tar)) as archive:
+            archive.extractall(root, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        with zipfile.ZipFile(io.BytesIO(source)) as archive:
+            archive.extractall(root)
+        shutil.move(str(next(root.glob("libusb-*"))), ANDROID_DESTINATION / "libusb")
+        rtl = next(path for path in root.iterdir() if path.name.startswith("rtl-sdr-blog-"))
+        shutil.move(str(rtl), ANDROID_DESTINATION / "rtl-sdr")
+    librtlsdr = ANDROID_DESTINATION / "rtl-sdr" / "src" / "librtlsdr.c"
+    librtlsdr.write_text(patch_librtlsdr_for_android(librtlsdr.read_text(encoding="utf-8")),
+                         encoding="utf-8")
+    files = _license_files(source, libusb_tar)
+    files["rtl-sdr-blog-source.zip"] = source
+    files[name] = libusb_tar
+    files["SOURCE.txt"] = (
+        f"RTL-SDR Blog {VERSION} librtlsdr and libusb 1.0.29, compiled into the Android app.\n"
+        "librtlsdr: GPL-2.0-or-later; see COPYING and the corresponding source archive.\n"
+        "Modified: rtlsdr_open_sys_dev() added to open an Android USB file descriptor "
+        "(scripts/install_rtlsdr.py, patch_librtlsdr_for_android).\n"
+        f"Source: {SOURCE_URL}\nSHA256: {SOURCE_SHA256}\n"
+        "libusb 1.0.29: LGPL-2.1-or-later; see COPYING-libusb.\n"
+        f"Dependency source: {url}\nSHA256: {checksum}\n"
+        "No bias tee is enabled.\n"
+    ).encode("ascii")
+    for file_name, content in files.items():
+        (ANDROID_DESTINATION / file_name).write_bytes(content)
+    print(f"Staged verified Android RTL-SDR sources in {ANDROID_DESTINATION}")
+
+
 def _build_helper() -> None:
     # Imports also work when this file is executed directly from scripts/.
     try:
@@ -129,6 +209,9 @@ def _build_helper() -> None:
 
 
 def main() -> None:
+    if "--android" in sys.argv[1:]:
+        main_android()
+        return
     if sys.platform == "darwin":
         main_macos()
         return
