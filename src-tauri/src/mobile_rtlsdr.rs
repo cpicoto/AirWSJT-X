@@ -71,6 +71,7 @@ mod native {
     type TextFn = extern "C" fn(*mut c_void, *const c_char);
 
     extern "C" {
+        fn airwsjtx_adsb_prepare();
         fn airwsjtx_adsb_run(
             fd: isize, manual: i32, gain_db: f64,
             on_frame: FrameFn, on_report: TextFn, on_log: TextFn, ctx: *mut c_void,
@@ -114,6 +115,10 @@ mod native {
         if let Some(line) = text(line) {
             context.shared.push_log(&line);
         }
+    }
+
+    pub fn prepare() {
+        unsafe { airwsjtx_adsb_prepare() }
     }
 
     /// Runs the receiver until stopped. Blocks the calling thread.
@@ -174,6 +179,7 @@ pub fn start_mobile_rtlsdr(
     let started = Instant::now();
     #[cfg(target_os = "android")]
     let thread = {
+        native::prepare();
         let context = Box::new(native::Context { shared: shared.clone(), started });
         let thread_shared = shared.clone();
         std::thread::Builder::new()

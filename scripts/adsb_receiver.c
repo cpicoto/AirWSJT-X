@@ -495,6 +495,9 @@ static flag_t running;
 /* Requests a running airwsjtx_adsb_run() to stop; safe from any thread. */
 void airwsjtx_adsb_stop(void) { FLAG_SET(exiting); }
 
+/* Initializes cancellation before the caller starts the receiver thread. */
+void airwsjtx_adsb_prepare(void) { __atomic_store_n(&exiting, 0, __ATOMIC_SEQ_CST); }
+
 /* Receives ADS-B from the RTL-SDR behind an Android USB file descriptor until
  * airwsjtx_adsb_stop(). The caller keeps ownership of fd. One receiver at a time. */
 int airwsjtx_adsb_run(intptr_t fd, int manual, double gain_db,
@@ -504,7 +507,6 @@ int airwsjtx_adsb_run(intptr_t fd, int manual, double gain_db,
     if (__atomic_exchange_n(&running, 1, __ATOMIC_SEQ_CST)) return -1;
     frame_cb = on_frame; report_cb = on_report; log_cb = on_log; cb_ctx = ctx;
     device = NULL;
-    __atomic_store_n(&exiting, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&reader_done, 0, __ATOMIC_SEQ_CST);
     reader_code = 0; head = count = 0; sequence = captured_samples = dropped = 0;
     samples = clipped = valid = accepted_other = failed_df17_trials = gaps = 0;
