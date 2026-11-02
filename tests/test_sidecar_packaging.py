@@ -115,6 +115,18 @@ class SidecarSpecTests(unittest.TestCase):
             _, analyze, _, _ = self.run_spec("win32")
         self.assertEqual(analyze.call_args.kwargs["datas"], [])
 
+    def test_linux_receiver_runtime_is_bundled_with_corresponding_sources(self) -> None:
+        for machine in ("x86_64", "aarch64"):
+            with self.subTest(machine=machine), patch("platform.machine", return_value=machine):
+                _, analyze, _, _ = self.run_spec("linux")
+                binaries = {(Path(source).name, destination)
+                            for source, destination in analyze.call_args.kwargs["binaries"]}
+                self.assertEqual(binaries, {("airwsjtx_adsb", "rtl-sdr"), ("librtlsdr.so", "rtl-sdr")})
+                files = {Path(source).name for source, destination in analyze.call_args.kwargs["datas"]
+                         if destination == "rtl-sdr"}
+                for name in ("SOURCE.txt", "rtl-sdr-blog-source.zip", "COPYING-libusb"):
+                    self.assertIn(name, files)
+
     def test_macos_receiver_runtime_is_signed_binary_with_corresponding_sources(self) -> None:
         for machine in ("arm64", "x86_64"):
             with self.subTest(machine=machine), patch("platform.machine", return_value=machine):

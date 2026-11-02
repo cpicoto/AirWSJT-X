@@ -1,4 +1,4 @@
-"""Local RTL-SDR receiver (Windows x64, macOS); owns a native receive-only demodulator."""
+"""Local RTL-SDR receiver (Windows x64, macOS, Linux x64/arm64); owns a native receive-only demodulator."""
 from __future__ import annotations
 
 import ctypes
@@ -28,6 +28,8 @@ def platform_supported() -> bool:
     machine = platform.machine().lower()
     if sys.platform == "win32":
         return machine in ("amd64", "x86_64")
+    if sys.platform == "linux":
+        return machine in ("x86_64", "amd64", "aarch64", "arm64")
     return sys.platform == "darwin" and machine in ("arm64", "x86_64")
 
 
@@ -36,12 +38,14 @@ def helper_name() -> str:
 
 
 def library_name() -> str:
-    return "rtlsdr.dll" if sys.platform == "win32" else "librtlsdr.dylib"
+    if sys.platform == "win32":
+        return "rtlsdr.dll"
+    return "librtlsdr.so" if sys.platform.startswith("linux") else "librtlsdr.dylib"
 
 
 def support_error() -> str | None:
     if not platform_supported():
-        return ("Integrated RTL-SDR reception currently supports Windows x64 and macOS only. "
+        return ("Integrated RTL-SDR reception currently supports Windows x64, macOS and Linux (x64/arm64) only. "
                 "Use a network source on this platform.")
     if sys.platform == "darwin" and os.environ.get("APP_SANDBOX_CONTAINER_ID"):
         return ("Integrated RTL-SDR reception is unavailable in the sandboxed Mac App Store/TestFlight build. "
@@ -79,7 +83,7 @@ def _discover_devices() -> list[dict[str, object]]:
     directory = tools_directory()
     if sys.platform != "win32":
         # Absolute path to the bundled, self-contained library; no search paths are consulted.
-        # It stays loaded: libusb's Darwin event thread makes unloading unsafe.
+        # It stays loaded: libusb's event thread makes unloading unsafe.
         return _list_devices(ctypes.CDLL(str(directory / library_name()), mode=os.RTLD_LOCAL))
     from ctypes import wintypes
     # Scope DLL lookup; never search the current working directory for dependencies.
@@ -118,12 +122,17 @@ def _list_devices(library: ctypes.CDLL) -> list[dict[str, object]]:
                 "Cannot access USB descriptors. The receiver may be busy or its WinUSB driver missing. "
                 "Close the app using this dongle; do not replace drivers without checking the device."
                 if sys.platform == "win32" else
+                "Cannot access USB descriptors. The receiver may be busy or lack USB permission "
+                "(see the Linux udev note in the user guide); close other apps using this dongle."
+                if sys.platform.startswith("linux") else
                 "Cannot access USB descriptors. The receiver may be busy; close other apps using this dongle."
             )
         elif open_code < 0:
             message = (
                 f"Cannot open RTL-SDR receiver ({open_code}). Close other SDR apps and check USB"
-                + ("/WinUSB." if sys.platform == "win32" else " (another SDR app may own it).")
+                + ("/WinUSB." if sys.platform == "win32" else
+                   " permissions (udev rule) or another SDR app/kernel DVB driver owning it."
+                   if sys.platform.startswith("linux") else " (another SDR app may own it).")
             )
         else:
             try:
