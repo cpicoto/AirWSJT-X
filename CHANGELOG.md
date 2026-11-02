@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Replace the robotic Linux Speech Dispatcher/eSpeak default with a bundled Piper US-English neural voice. Keep the model loaded in an app-owned worker for responsive Az/El callouts and isolated cancellation; retain the old native engines only as fallback.
+- Bundle the pinned voice model, model card, Piper license and corresponding source archive in Linux packages, with SHA-256 verification during staging.
+
+### Validation
+- Automated tests cover worker reuse, cancellation, RPC behavior, pinned packaging inputs and frozen sidecar contents. Installed Linux audio playback still requires validation on PulseAudio/PipeWire/ALSA hardware.
+
 ## 0.3.30
 
 ### Added

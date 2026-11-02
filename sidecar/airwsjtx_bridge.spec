@@ -4,6 +4,8 @@ from pathlib import Path, PureWindowsPath
 repo_root = Path(SPECPATH).parent
 rtl_sdr_datas = []
 rtl_sdr_binaries = []
+piper_datas = []
+piper_hiddenimports = []
 machine = __import__("platform").machine().lower()
 unix_rtl = (("darwin", "librtlsdr.dylib", "macOS") if sys.platform == "darwin" else
             ("linux", "librtlsdr.so", "Linux") if sys.platform.startswith("linux") else None)
@@ -20,6 +22,16 @@ if unix_rtl and machine in ("arm64", "x86_64", "aarch64"):
     rtl_sdr_binaries = [(str(rtl_sdr_dir / name), "rtl-sdr") for name in executables]
     rtl_sdr_datas = [(str(rtl_sdr_dir / name), str(Path("rtl-sdr") / Path(name).parent))
                     for name in required]
+    if sys.platform.startswith("linux"):
+        piper_dir = repo_root / "sidecar" / "piper-voice"
+        piper_required = (
+            "en_US-ljspeech-medium.onnx", "en_US-ljspeech-medium.onnx.json",
+            "MODEL_CARD", "COPYING-Piper", "SOURCE.txt", "piper_tts-1.8.0.tar.gz",
+        )
+        if any(not (piper_dir / name).is_file() for name in piper_required):
+            raise SystemExit("Run python scripts/install_piper_voice.py before packaging Linux.")
+        piper_datas = [(str(piper_dir / name), "piper-voice") for name in piper_required]
+        piper_hiddenimports = ["piper.voice"]
 elif sys.platform == "win32" and machine in ("amd64", "x86_64"):
     rtl_sdr_dir = repo_root / "sidecar" / "rtl-sdr"
     required = ("airwsjtx_adsb.exe", "adsb_receiver.c", "build_adsb_receiver.py",
@@ -36,7 +48,9 @@ analysis = Analysis(
     [str(repo_root / "sidecar" / "airwsjtx_bridge.py")],
     pathex=[str(repo_root)],
     binaries=rtl_sdr_binaries,
-    datas=rtl_sdr_datas,
+    datas=rtl_sdr_datas + piper_datas,
+    hiddenimports=piper_hiddenimports,
+    hookspath=[str(repo_root / "sidecar" / "hooks")],
 )
 
 if sys.platform == "win32":

@@ -27,6 +27,11 @@ if (rtlRuntime) {
   execFileSync(python, [path.join(root, "scripts", "build_adsb_receiver.py")],
     { cwd: root, stdio: "inherit" });
 }
+if (linux) {
+  execFileSync(python, ["-c", "import piper"], { cwd: root, stdio: "inherit" });
+  execFileSync(python, [path.join(root, "scripts", "install_piper_voice.py")],
+    { cwd: root, stdio: "inherit" });
+}
 
 execFileSync(python, [
   "-m", "PyInstaller", "--noconfirm", "--clean",

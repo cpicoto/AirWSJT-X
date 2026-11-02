@@ -79,6 +79,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Stage bundled Linux Piper voice
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install "piper-tts==1.8.0"
+          python scripts/install_piper_voice.py
+
       - name: Bundle Python sidecar with PyInstaller
         run: |
           pip install pyinstaller certifi
@@ -153,19 +159,17 @@ jobs:
             ## AirWSJT-X ${{ github.ref_name }}
 
             ### What's New in this release
-            - **Mobile app** (iOS & Android) — standalone aircraft tracking with OpenSky Network
-            - Mobile compass rose and elevation arc for hand-pointing antennas
-            - Offline callsign database with IndexedDB on mobile
-            - Speech callouts for selected aircraft Az/El on mobile
-            - Platform detection: desktop launches full WSJT-X supervisor, mobile launches standalone tracker
+            - Linux speech callouts now default to a bundled Piper US-English neural voice
+            - Piper stays loaded in an app-owned worker for responsive, replaceable callouts
+            - Speech Dispatcher/eSpeak remain available as a runtime fallback
 
             ### Downloads
             - **macOS (Apple Silicon):** `.dmg` file
             - **Windows (x64):** `.msi` installer or `.exe` setup
             - **Windows (ARM64):** native `_arm64-setup.exe` setup (Windows 11 / Snapdragon)
             - **Linux (x64):** `.AppImage`, `.deb` (Debian/Ubuntu/Mint), `.rpm` (Fedora/openSUSE)
-            - **iOS:** `.tar.gz` (from mobile build workflow)
-            - **Android:** `.apk` (from mobile build workflow)
+            - **iOS Simulator:** `.tar.gz`; signed iOS builds are delivered through TestFlight
+            - **Android:** signed ARM and x86_64 `.apk` files
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }} --config src-tauri/tauri.desktop.conf.json${{ runner.os == 'Windows' && ' --config src-tauri/tauri.windows-desktop.conf.json' || '' }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
