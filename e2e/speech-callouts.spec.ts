@@ -209,10 +209,34 @@ test.describe("Speech callouts — Linux native fallback", () => {
     await page.addInitScript(() => {
       Object.defineProperty(window, "speechSynthesis", { value: undefined, configurable: true });
       delete (window as unknown as Record<string, unknown>).speechSynthesis;
-      Object.assign(window, { __TAURI_INTERNALS__: {} });
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {},
+        // Most tests below exercise the retained native fallback. A dedicated
+        // test clears this error and proves Piper is preferred.
+        __mockRpcErrors: { speech_speak: "Piper unavailable" },
+      });
       localStorage.setItem("airwsjtx.rotatorSpeech.enabled", "1");
       localStorage.setItem("airwsjtx.rotatorSpeech.intervalSec", "2");
     });
+  });
+
+  test("prefers bundled Piper and stops it without invoking native speech", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate(() => Object.assign(window, { __mockRpcErrors: {} }));
+    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await page.locator('svg[width="170"][height="170"]').first().click({ position: { x: 85, y: 10 } });
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockRpcRequests?: { method: string; params: { text?: string } }[] })
+        .__mockRpcRequests?.find(request => request.method === "speech_speak")?.params.text
+    )).toBe("Rotor off");
+    expect(await page.evaluate(() =>
+      (window as unknown as { __mockSpeechRequests?: unknown[] }).__mockSpeechRequests ?? []
+    )).toEqual([]);
+    await page.getByRole("button", { name: /Speech on/i }).click();
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __mockRpcRequests?: { method: string }[] })
+        .__mockRpcRequests?.filter(request => request.method === "speech_stop").length
+    )).toBe(1);
   });
 
   for (const error of [
@@ -227,7 +251,7 @@ test.describe("Speech callouts — Linux native fallback", () => {
       await page.goto("/");
       await page.getByRole("button", { name: "Manual", exact: true }).click();
       await page.locator('svg[width="170"][height="170"]').first().click({ position: { x: 85, y: 10 } });
-      await expect(page.getByText(`Speech: ${error}`, { exact: false })).toBeVisible();
+      await expect(page.getByText(`Linux speech fallback failed (${error})`, { exact: false })).toBeVisible();
       expect(errors).toEqual([]);
     });
   }
@@ -261,7 +285,7 @@ test.describe("Speech callouts — Linux native fallback", () => {
       (window as unknown as { __mockSpeechRequests?: { text?: string }[] })
         .__mockSpeechRequests?.some(request => request.text === "Lost plane lock")
     )).toBe(true);
-    await expect(page.getByText("Speech: Lost-lock native speech failed", { exact: false })).toBeVisible();
+    await expect(page.getByText("Linux speech fallback failed (Lost-lock native speech failed)", { exact: false })).toBeVisible();
     expect(errors).toEqual([]);
   });
 

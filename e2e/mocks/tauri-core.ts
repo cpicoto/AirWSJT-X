@@ -59,6 +59,10 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
     Object.assign(window, { __mockReceiverStatus: status, __mockReceiverActive: false });
     return status;
   },
+  speech_status: () => ({ supported: true, engine: "piper", voice: "en_US-ljspeech-medium",
+    runtime_available: true, model_available: true, loaded: true, active: false }),
+  speech_speak: () => ({ engine: "piper", voice: "en_US-ljspeech-medium", player: "paplay" }),
+  speech_stop: () => ({}),
   get_status: () => {
     const mock = window as unknown as Record<string, unknown>;
     return {

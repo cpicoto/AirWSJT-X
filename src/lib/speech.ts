@@ -25,6 +25,15 @@ interface AndroidTtsBridge {
 }
 
 let linuxBackend: "piper" | "native" | null = null;
+let linuxSpeechOperation: Promise<void> = Promise.resolve();
+
+function enqueueLinuxSpeech(operation: () => Promise<void>): Promise<void> {
+  const current = linuxSpeechOperation.then(operation, operation);
+  // Keep later callouts usable after a failed backend operation while returning
+  // the original result to the caller that needs to log it.
+  linuxSpeechOperation = current.catch(() => undefined);
+  return current;
+}
 
 /** Native Android text-to-speech, injected by MainActivity as `window.AndroidTts`. */
 function androidTts(): AndroidTtsBridge | null {
@@ -54,10 +63,12 @@ export async function cancelSpeech(): Promise<void> {
   const native = androidTts();
   if (native) { native.stop(); return; }
   if (linuxNativeSpeech()) {
-    if (linuxBackend === "piper") await rpc("speech_stop");
-    else if (linuxBackend === "native") await invoke("stop_native_speech");
-    linuxBackend = null;
-    return;
+    return enqueueLinuxSpeech(async () => {
+      const backend = linuxBackend;
+      linuxBackend = null;
+      if (backend === "piper") await rpc("speech_stop");
+      else if (backend === "native") await invoke("stop_native_speech");
+    });
   }
   if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
 }
@@ -78,21 +89,23 @@ export async function speak(text: string): Promise<void> {
   if (native) { native.speak(text); return; }
   if (linuxNativeSpeech()) {
     const spoken = text.replace(/\b(Azimuth|Elevation) (?=-?\d)/g, "$1, ");
-    if (linuxBackend === "piper") await rpc("speech_stop");
-    else if (linuxBackend === "native") await invoke("stop_native_speech");
-    linuxBackend = null;
-    try {
-      await rpc("speech_speak", { text: spoken });
-      linuxBackend = "piper";
-    } catch (piperError) {
+    return enqueueLinuxSpeech(async () => {
+      const backend = linuxBackend;
+      linuxBackend = null;
+      if (backend === "piper") await rpc("speech_stop");
+      else if (backend === "native") await invoke("stop_native_speech");
       try {
-        await invoke("speak_native", { text: spoken });
-        linuxBackend = "native";
-      } catch (fallbackError) {
-        throw new Error(`Piper failed (${String(piperError)}); Linux speech fallback failed (${String(fallbackError)})`);
+        await rpc("speech_speak", { text: spoken });
+        linuxBackend = "piper";
+      } catch (piperError) {
+        try {
+          await invoke("speak_native", { text: spoken });
+          linuxBackend = "native";
+        } catch (fallbackError) {
+          throw new Error(`Piper failed (${String(piperError)}); Linux speech fallback failed (${String(fallbackError)})`);
+        }
       }
-    }
-    return;
+    });
   }
   const ss = window.speechSynthesis;
   ss.cancel();
