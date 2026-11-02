@@ -118,8 +118,78 @@ class HamlibRotatorTests(unittest.TestCase):
                 rot = HamlibRotator()
                 with patch.object(rot, "_send_command") as send:
                     rot.set_position(az, el)
-                send.assert_called_once_with(f"P {expected_az:.1f} {expected_el:.1f}\n")
+                send.assert_called_once_with(
+                    f"P {expected_az:.1f} {expected_el:.1f}\n",
+                    target=RotatorPosition(expected_az, expected_el))
                 self.assertEqual(rot._target, RotatorPosition(expected_az, expected_el))
+
+    def _command_then_feedback(self, acknowledgement: str | None,
+                               feedback: bytes) -> HamlibRotator:
+        rot = self._create_mock_rotator(feedback)
+        with patch.object(rot, "_read_line", return_value=acknowledgement):
+            rot.set_position(123.4, 25.26)
+        return rot
+
+    def test_empty_feedback_uses_acknowledged_wire_target(self) -> None:
+        for acknowledgement in ("RPRT 0", "set_pos:;RPRT 0"):
+            for feedback in (b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n",
+                             b"get_pos:\nAzimuth: \nElevation: \nRPRT 0\n"):
+                with self.subTest(acknowledgement=acknowledgement, feedback=feedback):
+                    rot = self._command_then_feedback(acknowledgement, feedback)
+                    self.assertEqual(rot._get_position(), RotatorPosition(123.4, 25.3))
+
+    def test_empty_feedback_without_successful_command_does_not_assume_position(self) -> None:
+        for acknowledgement in (None, "RPRT -1", "unexpected"):
+            with self.subTest(acknowledgement=acknowledgement):
+                rot = self._command_then_feedback(
+                    acknowledgement, b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n")
+                self.assertIsNone(rot._get_position())
+                self.assertIsNone(rot._acknowledged_target)
+
+    def test_failed_send_clears_previous_acknowledged_target(self) -> None:
+        rot = self._command_then_feedback("RPRT 0", b"")
+        rot._sock.sendall.side_effect = OSError("send failed")
+        rot.set_position(200, 30)
+        self.assertIsNone(rot._acknowledged_target)
+
+    def test_rejected_new_target_clears_previous_acknowledged_target(self) -> None:
+        rot = self._command_then_feedback(
+            "RPRT 0", b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n")
+        with patch.object(rot, "_read_line", return_value="RPRT -1"):
+            rot.set_position(200, 30)
+        self.assertIsNone(rot._get_position())
+
+    def test_valid_feedback_takes_precedence_over_assumed_target(self) -> None:
+        rot = self._command_then_feedback(
+            "RPRT 0", b"get_pos:;Azimuth: 110;Elevation: 20;RPRT 0\n")
+        self.assertEqual(rot._get_position(), RotatorPosition(110, 20))
+
+    def test_invalid_or_failed_feedback_does_not_use_target(self) -> None:
+        for feedback in (
+            b"get_pos:;Azimuth: ;Elevation: ;RPRT -1\n",
+            b"get_pos:;Azimuth: ;Elevation: 20;RPRT 0\n",
+            b"get_pos:;Azimuth: invalid;Elevation: invalid;RPRT 0\n",
+            b"RPRT -1\n", b"get_pos:;Azimuth: ;Elevation: \n",
+        ):
+            with self.subTest(feedback=feedback):
+                rot = self._command_then_feedback("RPRT 0", feedback)
+                self.assertIsNone(rot._get_position())
+
+    def test_stop_disconnect_and_reconnect_clear_assumed_target(self) -> None:
+        rot = self._command_then_feedback("RPRT 0", b"")
+        with patch.object(rot, "_read_line", return_value="RPRT 0"):
+            rot.stop_rotation()
+        self.assertIsNone(rot._acknowledged_target)
+        with patch.object(rot, "_read_line", return_value="RPRT 0"):
+            rot.set_position(90, 10)
+        rot._disconnect()
+        self.assertIsNone(rot._acknowledged_target)
+        self.assertIsNone(rot.current_position)
+        rot._acknowledged_target = RotatorPosition(1, 2)
+        with patch("airwsjtx.hamlib_rotator.socket.socket", return_value=MagicMock()):
+            self.assertTrue(rot._connect())
+        self.assertIsNone(rot._acknowledged_target)
+        rot.stop()
 
     def test_stop_during_connect_closes_late_socket_without_publishing_connection(self) -> None:
         connect_started = threading.Event()
@@ -175,8 +245,10 @@ class HamlibRotatorTests(unittest.TestCase):
                             continue
                         commands_received.append(cmd)
                         if cmd == "p":
-                            # Pyrodrifter format
-                            conn.sendall(b"180.500000\n45.200000\n")
+                            if "P 90.0 15.0" in commands_received:
+                                conn.sendall(b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n")
+                            else:
+                                conn.sendall(b"180.500000\n45.200000\n")
                         elif cmd.startswith("P"):
                             conn.sendall(b"RPRT 0\n")
                         elif cmd == "S":
@@ -221,6 +293,7 @@ class HamlibRotatorTests(unittest.TestCase):
             rot.set_position(90.0, 15.0)
             time.sleep(0.15)
             self.assertIn("P 90.0 15.0", commands_received)
+            self.assertEqual(rot.current_position, RotatorPosition(90, 15))
 
             # Test stop
             rot.stop_rotation()
