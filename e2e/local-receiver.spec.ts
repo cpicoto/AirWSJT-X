@@ -1,5 +1,47 @@
 import { test, expect } from "@playwright/test";
 
+test("Hamlib solid hands follow feedback independently of requested targets", async ({ page }) => {
+  await page.getByLabel("Rotator output", { exact: true }).selectOption("hamlib");
+  await page.evaluate(() => {
+    const emit = (window as unknown as {
+      __tauriMockEmit: (event: string, payload: string) => void;
+    }).__tauriMockEmit;
+    emit("sidecar-message", JSON.stringify({
+      event: "rotator_connected", data: { host: "127.0.0.1", port: 4533 },
+    }));
+    emit("sidecar-message", JSON.stringify({ event: "plane_locked", data: {
+      icao24: "abc123", callsign: "TEST", altitude_ft: 10000,
+      az_a: 123.4, el_a: 25.3, az_b: 0, el_b: 0,
+      scatter_score: 0.8, off_path_deg: 0, state: "tracking",
+      position_updated_epoch_s: Date.now() / 1000,
+      position_source: "rtlsdr", position_max_age_s: 120,
+    } }));
+  });
+  const dials = page.getByTestId("rotator-dials");
+  await expect(dials).toHaveAttribute("data-target-az", "123.4");
+  await expect(dials).toHaveAttribute("data-current-az", "0");
+
+  const feedback = async (azimuth: number, elevation: number) => {
+    await page.evaluate(data => {
+      const emit = (window as unknown as {
+        __tauriMockEmit: (event: string, payload: string) => void;
+      }).__tauriMockEmit;
+      emit("sidecar-message", JSON.stringify({ event: "rotator_position", data }));
+    }, { azimuth, elevation });
+    await expect(dials).toHaveAttribute("data-current-az", String(azimuth));
+    await expect(dials).toHaveAttribute("data-current-el", String(elevation));
+    const points = await dials.locator('polygon[fill="#58a6ff"]').getAttribute("points");
+    const [x, y] = points!.split(" ")[0].split(",").map(Number);
+    const bearing = (Math.atan2(y - 85, x - 85) * 180 / Math.PI + 450) % 360;
+    expect(bearing).toBeCloseTo(azimuth, 5);
+  };
+  // The backend uses the same event for acknowledged-target assumptions and measurements.
+  await feedback(123.4, 25.3);
+  await feedback(110, 20);
+  await expect(dials).toHaveAttribute("data-target-az", "123.4");
+  await expect(dials).toHaveAttribute("data-target-el", "25.3");
+});
+
 test("Windows DDE output requires explicit enable and is not saved", async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, { __mockDDEStatus: { supported: true, enabled: false,

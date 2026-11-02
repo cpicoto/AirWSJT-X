@@ -131,12 +131,25 @@ class HamlibRotatorTests(unittest.TestCase):
         return rot
 
     def test_empty_feedback_uses_acknowledged_wire_target(self) -> None:
-        for acknowledgement in ("RPRT 0", "set_pos:;RPRT 0"):
+        for acknowledgement in ("RPRT 0", "set_pos:;RPRT 0", "set_pos:;RPRT 0;"):
             for feedback in (b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n",
                              b"get_pos:\nAzimuth: \nElevation: \nRPRT 0\n"):
                 with self.subTest(acknowledgement=acknowledgement, feedback=feedback):
                     rot = self._command_then_feedback(acknowledgement, feedback)
                     self.assertEqual(rot._get_position(), RotatorPosition(123.4, 25.3))
+
+    def test_fragmented_extended_command_acknowledgement_is_consumed(self) -> None:
+        for status in ("RPRT 0", "RPRT -1", None):
+            with self.subTest(status=status):
+                rot = self._create_mock_rotator(
+                    b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n")
+                with patch.object(rot, "_read_line", side_effect=[
+                    "set_pos: 123.4 25.3", status,
+                ]) as read:
+                    rot.set_position(123.4, 25.3)
+                self.assertEqual(read.call_count, 2)
+                expected = RotatorPosition(123.4, 25.3) if status == "RPRT 0" else None
+                self.assertEqual(rot._get_position(), expected)
 
     def test_empty_feedback_without_successful_command_does_not_assume_position(self) -> None:
         for acknowledgement in (None, "RPRT -1", "unexpected"):
@@ -250,9 +263,11 @@ class HamlibRotatorTests(unittest.TestCase):
                             else:
                                 conn.sendall(b"180.500000\n45.200000\n")
                         elif cmd.startswith("P"):
+                            conn.sendall(f"set_pos: {cmd[2:]}\n".encode("ascii"))
+                            time.sleep(0.02)
                             conn.sendall(b"RPRT 0\n")
                         elif cmd == "S":
-                            conn.sendall(b"RPRT 0\n")
+                            conn.sendall(b"stop:\nRPRT 0\n")
                         else:
                             conn.sendall(b"RPRT 0\n")
                 except socket.timeout:

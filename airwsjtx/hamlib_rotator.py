@@ -147,10 +147,23 @@ class HamlibRotator:
             try:
                 self._drain()
                 self._sock.sendall(cmd.encode("ascii"))
+                deadline = time.monotonic() + 2.0
                 resp = self._read_line(timeout=2.0)
+                # Extended replies echo the command before the final RPRT.
+                # Consume the whole reply, including when TCP splits its lines.
+                if resp is not None and resp.lower().startswith(("set_pos:", "stop:")):
+                    while not any(field.strip().startswith("RPRT ") for field in resp.split(";")):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            resp = None
+                            break
+                        resp = self._read_line(timeout=remaining)
+                        if resp is None:
+                            break
                 while b"\n" in self._buf:
                     _, self._buf = self._buf.split(b"\n", 1)
-                if resp is not None and resp.split(";")[-1].strip() == "RPRT 0":
+                fields = [field.strip() for field in resp.split(";") if field.strip()] if resp else []
+                if fields and fields[-1] == "RPRT 0":
                     self._acknowledged_target = target
                 elif self.on_error:
                     self.on_error(f"rotctld command was not acknowledged: {resp!r}")
