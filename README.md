@@ -315,6 +315,14 @@ gate; direct coordinate commands require Manual mode and Hamlib output.
 Output defaults to **Off on every launch**. The last explicit choice is recorded
 as a preference but never automatically activated; legacy saved Rotor-control
 settings are discarded without enabling either output.
+
+Hamlib position feedback accepts newline-separated and semicolon-separated
+extended replies. If rotctld responds with missing/invalid coordinates or a
+device error, AirWSJT-X logs the error without treating it as a lost TCP
+connection or publishing a replacement position. Check the remote daemon's
+rotator/device configuration if it returns empty coordinates, even with
+`RPRT 0`. Three consecutive transport/read failures still trigger reconnection.
+
 Unlock, output Off, manual
 mode, source stop, missing/expired positions, and below-horizon targets suppress
 coordinates (`** NO SATELLITE **`). Local pointing and displayed positions expire

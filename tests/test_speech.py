@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import socket
 import subprocess
 import threading
 import time
@@ -9,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from airwsjtx.speech import MAX_TEXT_LENGTH, PiperSpeech, _player_command
+from airwsjtx.hamlib_rotator import HamlibRotator, RotatorPosition
 from sidecar import airwsjtx_bridge as bridge
 
 
@@ -143,6 +145,67 @@ class PiperSpeechTests(unittest.TestCase):
             self.assertTrue(processes[0].terminated)
             gate.set()
             manager.shutdown()
+
+    def test_rotctld_stays_responsive_during_callout_and_missing_positions(self):
+        import tempfile
+        gate, stop_server = threading.Event(), threading.Event()
+        positions, disconnects, errors, commands = [], [], [], []
+        with socket.socket() as server, tempfile.TemporaryDirectory() as directory:
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            server.settimeout(2)
+
+            def serve():
+                with server.accept()[0] as conn:
+                    conn.settimeout(0.1)
+                    pending = b""
+                    while not stop_server.is_set():
+                        try:
+                            chunk = conn.recv(128)
+                        except socket.timeout:
+                            continue
+                        if not chunk:
+                            break
+                        pending += chunk
+                        while b"\n" in pending:
+                            command, pending = pending.split(b"\n", 1)
+                            commands.append(command)
+                            if len(commands) <= 6:
+                                conn.sendall(b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n")
+                            else:
+                                conn.sendall(b"get_pos:;Azimuth: 90;Elevation: 25;RPRT 0\n")
+
+            thread = threading.Thread(target=serve)
+            thread.start()
+            rotator = HamlibRotator(
+                port=server.getsockname()[1], poll_interval_s=0.02,
+                on_position=positions.append, on_error=errors.append,
+                on_disconnected=lambda: disconnects.append(True))
+            voice, processes = FakeVoice(gate), []
+            manager = self.manager(Path(directory), voice, processes)
+            read_line = rotator._read_line
+            try:
+                # Bound failed legacy reads so the regression fails promptly.
+                with patch.object(rotator, "_read_line", side_effect=lambda **_: read_line(0.1)):
+                    manager.speak("Azimuth ninety, Elevation twenty five")
+                    wait_for(lambda: bool(voice.texts))
+                    rotator.start()
+                    wait_for(lambda: len(positions) >= 3, timeout=1.5)
+                    self.assertTrue(rotator.connected)
+                    self.assertEqual(disconnects, [])
+                    self.assertEqual(positions[-1], RotatorPosition(90, 25))
+                    self.assertEqual(commands, [b"p"] * len(commands))
+                    self.assertEqual(errors, [
+                        "rotctld returned invalid position: azimuth='', elevation=''"])
+                    self.assertFalse(processes[0].stdin.data)
+            finally:
+                gate.set()
+                manager.shutdown()
+                rotator.stop()
+                stop_server.set()
+                if rotator._thread:
+                    rotator._thread.join(2)
+                thread.join(2)
 
     def test_rejects_missing_runtime_inputs(self):
         import tempfile

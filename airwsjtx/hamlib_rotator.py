@@ -8,6 +8,7 @@ rotctld protocol (port 4533 by default):
 """
 from __future__ import annotations
 
+import math
 import socket
 import threading
 import time
@@ -55,6 +56,8 @@ class HamlibRotator:
         self._thread: threading.Thread | None = None
         self._current: RotatorPosition | None = None
         self._target: RotatorPosition | None = None
+        self._poll_responded = False
+        self._last_poll_error: str | None = None
         self.connected = False
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -151,48 +154,68 @@ class HamlibRotator:
 
     def _get_position(self) -> RotatorPosition | None:
         with self._lock:
+            self._poll_responded = False
             if not self._sock:
                 return None
+
+            def poll_error(message: str) -> None:
+                if message != self._last_poll_error and self.on_error:
+                    self.on_error(message)
+                self._last_poll_error = message
+
+            fields: list[str] = []
+
+            def read_field() -> str:
+                if not fields:
+                    line = self._read_line(timeout=2.0)
+                    if line is None:
+                        raise TimeoutError("rotctld position reply timed out or connection closed")
+                    # Extended replies may put all fields on one line.
+                    fields.extend(line.split(";"))
+                return fields.pop(0).strip()
+
             try:
                 self._drain()
                 self._sock.sendall(b"p\n")
-                line1 = self._read_line(timeout=2.0)
-                if line1 is None:
-                    return None
+                line1 = read_field()
 
                 # Error reported by rotator daemon (e.g. "RPRT -1")
                 if line1.startswith("RPRT"):
-                    if not line1.startswith("RPRT 0"):
+                    if line1 != "RPRT 0":
+                        self._poll_responded = True
+                        poll_error(f"rotctld position query failed: {line1}")
                         return None
                     # If RPRT 0 appeared first, read next line
-                    line1 = self._read_line(timeout=2.0)
-                    if line1 is None:
-                        return None
+                    line1 = read_field()
 
                 # Skip Hamlib extended response header like "get_pos:"
                 if line1.lower().startswith("get_pos"):
-                    line1 = self._read_line(timeout=2.0)
-                    if line1 is None:
-                        return None
+                    line1 = read_field()
 
-                line2 = self._read_line(timeout=2.0)
-                if line2 is None:
-                    return None
+                line2 = read_field()
 
                 # Skip any stray RPRT in line2
-                if line2.startswith("RPRT 0"):
-                    line2 = self._read_line(timeout=2.0)
-                    if line2 is None:
-                        return None
+                if line2 == "RPRT 0":
+                    line2 = read_field()
 
+                self._poll_responded = True
                 # Drain any remaining lines in buffer (e.g. trailing blank or RPRT 0)
                 while b"\n" in self._buf:
                     _, self._buf = self._buf.split(b"\n", 1)
 
                 az_str = line1.split(":", 1)[1].strip() if ":" in line1 else line1
                 el_str = line2.split(":", 1)[1].strip() if ":" in line2 else line2
-                return RotatorPosition(float(az_str), float(el_str))
-            except Exception:
+                try:
+                    az, el = float(az_str), float(el_str)
+                    if not math.isfinite(az) or not math.isfinite(el):
+                        raise ValueError
+                except ValueError:
+                    poll_error(f"rotctld returned invalid position: azimuth={az_str!r}, elevation={el_str!r}")
+                    return None
+                self._last_poll_error = None
+                return RotatorPosition(az, el)
+            except OSError as exc:
+                poll_error(f"rotctld position query failed: {exc}")
                 return None
 
     def _connect(self) -> bool:
@@ -253,6 +276,10 @@ class HamlibRotator:
                         self._current = pos
                         if self.on_position:
                             self.on_position(pos)
+                    elif self._poll_responded:
+                        # A daemon reporting missing coordinates or a device error
+                        # is still reachable; reconnecting cannot repair its position.
+                        consecutive_failures = 0
                     else:
                         consecutive_failures += 1
                         with self._lock:
