@@ -57,6 +57,7 @@ def check_sidecar(path: Path) -> None:
         {"id": "linux-status", "method": "get_status", "params": {}},
         {"id": "linux-receiver", "method": "rtlsdr_status", "params": {}},
         {"id": "linux-speech", "method": "speech_status", "params": {}},
+        {"id": "linux-speech-probe", "method": "speech_probe", "params": {}},
     ]
     with tempfile.TemporaryDirectory(prefix="airwsjtx-linux-smoke-") as directory:
         result = subprocess.run(
@@ -82,6 +83,10 @@ def check_sidecar(path: Path) -> None:
                 payload.get("engine") == "piper" and payload.get("runtime_available") is True
                 and payload.get("model_available") is True and payload.get("supported") is True):
             raise RuntimeError(f"Bundled Piper runtime is unavailable: {payload}")
+        if request["method"] == "speech_probe" and not (
+                payload.get("engine") == "piper" and payload.get("sample_rate", 0) > 0
+                and payload.get("audio_bytes", 0) > 0):
+            raise RuntimeError(f"Bundled Piper synthesis probe failed: {payload}")
 
 
 if __name__ == "__main__":

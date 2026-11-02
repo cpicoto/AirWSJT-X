@@ -32,7 +32,7 @@ def _load_voice(model_path: Path) -> Any:
 def _player_command(which: Callable[[str], str | None], sample_rate: int) -> tuple[str, list[str]]:
     candidates = (
         ("paplay", ["paplay", "--raw", "--format=s16le", f"--rate={sample_rate}", "--channels=1"]),
-        ("pw-play", ["pw-play", "--raw", "--format=s16", f"--rate={sample_rate}", "--channels=1", "-"]),
+        ("pw-play", ["pw-play", "--format=s16", f"--rate={sample_rate}", "--channels=1", "-"]),
         ("aplay", ["aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", str(sample_rate), "-c", "1"]),
         ("ffplay", ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le",
                     "-ar", str(sample_rate), "-ac", "1", "-"]),
@@ -138,6 +138,16 @@ class PiperSpeech:
             self._stop_player_locked()
             self._drain_requests()
 
+    def probe(self) -> dict[str, object]:
+        """Load the bundled runtime and synthesize one chunk without audio output."""
+        voice = self._ensure_voice()
+        for chunk in voice.synthesize("Air W S J T X speech test"):
+            audio = chunk.audio_int16_bytes
+            if audio:
+                return {"engine": "piper", "voice": VOICE_NAME,
+                        "sample_rate": int(voice.config.sample_rate), "audio_bytes": len(audio)}
+        raise RuntimeError("Piper produced no audio during its runtime probe")
+
     def shutdown(self) -> None:
         self.stop()
         self._requests.put(None)
@@ -184,6 +194,18 @@ class PiperSpeech:
                 if current:
                     self._on_error(f"Piper speech failed: {error}")
             finally:
+                try:
+                    if player.stdin and not player.stdin.closed:
+                        player.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
+                if player.poll() is None:
+                    player.terminate()
+                    try:
+                        player.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        player.kill()
+                        player.wait(timeout=1)
                 with self._lock:
                     if generation == self._generation and self._player is player:
                         self._player = None

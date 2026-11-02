@@ -389,6 +389,9 @@ def handle(msg: dict) -> None:
         if method == "speech_status":
             _ok(id_, _speech_manager().status())
 
+        elif method == "speech_probe":
+            _ok(id_, _speech_manager().probe())
+
         elif method == "speech_speak":
             _ok(id_, _speech_manager().speak(params.get("text", "")))
 

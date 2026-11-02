@@ -19,7 +19,7 @@ class LinuxSidecarTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "64-bit ELF"):
                 require_header(header, "aarch64", "test")
 
-    def result(self, *, status=True, receiver=True, speech=True, code=0):
+    def result(self, *, status=True, receiver=True, speech=True, probe=True, code=0):
         return SimpleNamespace(
             returncode=code, stderr="diagnostic",
             stdout="\n".join(json.dumps(message) for message in (
@@ -28,6 +28,9 @@ class LinuxSidecarTests(unittest.TestCase):
                 {"id": "linux-speech", "ok": speech, "result": {
                     "engine": "piper", "runtime_available": True,
                     "model_available": True, "supported": True,
+                }},
+                {"id": "linux-speech-probe", "ok": probe, "result": {
+                    "engine": "piper", "sample_rate": 22050, "audio_bytes": 128,
                 }},
             )),
         )
@@ -42,7 +45,7 @@ class LinuxSidecarTests(unittest.TestCase):
 
     def test_missing_successful_reply_and_nonzero_exit_fail(self):
         for result in (self.result(status=False), self.result(receiver=False),
-                       self.result(speech=False), self.result(code=1)):
+                       self.result(speech=False), self.result(probe=False), self.result(code=1)):
             with self.subTest(result=result), \
                     patch("scripts.verify_linux_sidecar.subprocess.run", return_value=result):
                 with self.assertRaises(RuntimeError):

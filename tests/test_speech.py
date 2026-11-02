@@ -62,6 +62,13 @@ class FakeVoice:
         yield SimpleNamespace(audio_int16_bytes=b"neural-audio")
 
 
+class FailingVoice(FakeVoice):
+    def synthesize(self, text: str):
+        self.texts.append(text)
+        raise RuntimeError("synthesis failed")
+        yield  # pragma: no cover - preserve generator semantics
+
+
 def wait_for(predicate, timeout: float = 2) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
@@ -88,6 +95,10 @@ class PiperSpeechTests(unittest.TestCase):
         name, command = _player_command(lambda candidate: f"/bin/{candidate}", 22050)
         self.assertEqual(name, "paplay")
         self.assertEqual(command[:3], ["/bin/paplay", "--raw", "--format=s16le"])
+        name, command = _player_command(
+            lambda candidate: f"/bin/{candidate}" if candidate == "pw-play" else None, 22050)
+        self.assertEqual(name, "pw-play")
+        self.assertNotIn("--raw", command)
         with self.assertRaisesRegex(RuntimeError, "no audio player"):
             _player_command(lambda _candidate: None, 22050)
 
@@ -104,6 +115,20 @@ class PiperSpeechTests(unittest.TestCase):
             self.assertEqual(voice.texts, ["Azimuth 10 Elevation 20", "Azimuth 11"])
             self.assertEqual(processes[0].stdin.data, b"neural-audio")
             self.assertTrue(manager.status()["loaded"])
+            self.assertEqual(manager.probe()["audio_bytes"], len(b"neural-audio"))
+            manager.shutdown()
+
+    def test_synthesis_failure_terminates_and_reaps_player(self):
+        import tempfile
+        errors: list[str] = []
+        with tempfile.TemporaryDirectory() as directory, patch("airwsjtx.speech.sys.platform", "linux"):
+            voice, processes = FailingVoice(), []
+            manager = self.manager(Path(directory), voice, processes)
+            manager._on_error = errors.append
+            manager.speak("Azimuth 10")
+            wait_for(lambda: bool(errors))
+            self.assertTrue(processes[0].terminated)
+            self.assertIsNotNone(processes[0].returncode)
             manager.shutdown()
 
     def test_stop_terminates_only_current_player(self):
@@ -134,18 +159,20 @@ class PiperSpeechTests(unittest.TestCase):
     def test_bridge_exposes_start_stop_and_status(self):
         speech = Mock()
         speech.status.return_value = {"supported": True, "engine": "piper"}
+        speech.probe.return_value = {"engine": "piper", "sample_rate": 22050, "audio_bytes": 128}
         speech.speak.return_value = {"engine": "piper", "voice": "test"}
         with patch.object(bridge, "_speech", speech), patch.object(bridge, "_emit") as emit:
             bridge.handle({"id": "status", "method": "speech_status", "params": {}})
+            bridge.handle({"id": "probe", "method": "speech_probe", "params": {}})
             bridge.handle({"id": "speak", "method": "speech_speak", "params": {"text": "Azimuth 10"}})
             bridge.handle({"id": "stop", "method": "speech_stop", "params": {}})
         speech.speak.assert_called_once_with("Azimuth 10")
         speech.stop.assert_called_once()
+        speech.probe.assert_called_once()
         replies = [call.args[0] for call in emit.call_args_list]
-        self.assertEqual([reply["id"] for reply in replies], ["status", "speak", "stop"])
+        self.assertEqual([reply["id"] for reply in replies], ["status", "probe", "speak", "stop"])
         self.assertTrue(all(reply["ok"] for reply in replies))
 
 
 if __name__ == "__main__":
     unittest.main()
-
