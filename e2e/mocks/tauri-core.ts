@@ -113,6 +113,8 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
     Object.assign(window, { __mockRotatorTarget: params });
     return null;
   },
+  speech_speak: () => null,
+  speech_stop: () => null,
 };
 
 export async function invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
