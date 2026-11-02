@@ -61,6 +61,50 @@ class HamlibRotatorTests(unittest.TestCase):
         rot = self._create_mock_rotator(b"RPRT -1\n")
         pos = rot._get_position()
         self.assertIsNone(pos)
+        self.assertTrue(rot._poll_responded)
+
+    def test_parses_semicolon_extended_position(self) -> None:
+        rot = self._create_mock_rotator(
+            b"get_pos:;Azimuth: 123.400000;Elevation: 30.100000;RPRT 0\n")
+        self.assertEqual(rot._get_position(), RotatorPosition(123.4, 30.1))
+        self.assertTrue(rot._poll_responded)
+
+    def test_missing_coordinates_report_error_without_transport_failure(self) -> None:
+        rot = self._create_mock_rotator(b"get_pos:;Azimuth: ;Elevation: ;RPRT 0\n")
+        rot.on_error = MagicMock()
+        self.assertIsNone(rot._get_position())
+        self.assertTrue(rot._poll_responded)
+        rot.on_error.assert_called_once_with(
+            "rotctld returned invalid position: azimuth='', elevation=''")
+
+    def test_incomplete_reply_is_transport_failure(self) -> None:
+        rot = self._create_mock_rotator(b"90.0\n")
+        rot.on_error = MagicMock()
+        self.assertIsNone(rot._get_position())
+        self.assertFalse(rot._poll_responded)
+        rot.on_error.assert_called_once()
+
+    def test_nonfinite_coordinates_are_not_published(self) -> None:
+        rot = self._create_mock_rotator(b"nan\ninf\n")
+        self.assertIsNone(rot._get_position())
+        self.assertTrue(rot._poll_responded)
+
+    def test_three_transport_failures_still_disconnect(self) -> None:
+        rot = HamlibRotator(poll_interval_s=0)
+        rot._sock = MagicMock()
+        rot.connected = True
+        disconnect = rot._disconnect
+
+        def stop_after_disconnect():
+            disconnect()
+            rot._stop.set()
+
+        with patch.object(rot, "_connect", return_value=True), \
+                patch.object(rot, "_get_position", return_value=None) as poll, \
+                patch.object(rot, "_disconnect", side_effect=stop_after_disconnect):
+            rot._run()
+        self.assertEqual(poll.call_count, 3)
+        self.assertFalse(rot.connected)
 
     def test_set_position_preserves_overtravel_and_normalizes_out_of_range_values(self) -> None:
         for az, el, expected_az, expected_el in (
