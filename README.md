@@ -317,7 +317,9 @@ as a preference but never automatically activated; legacy saved Rotor-control
 settings are discarded without enabling either output.
 
 Hamlib position feedback accepts newline-separated and semicolon-separated
-extended replies. If rotctld responds with missing/invalid coordinates or a
+extended replies. Command acknowledgements also consume extended command echoes
+through their final `RPRT` status before position polling resumes, including
+fragmented TCP replies. If rotctld responds with missing/invalid coordinates or a
 device error, AirWSJT-X logs the error without treating it as a lost TCP
 connection. When a successful reply has both AZ and EL empty, the last target
 acknowledged with `RPRT 0` on that connection is assumed to be the current
