@@ -1,4 +1,4 @@
-"""Relative ranking indices; legacy geometry still controls lock eligibility."""
+"""Relative ranking indices and shared mutual QSO-window eligibility."""
 from __future__ import annotations
 
 import math
@@ -22,6 +22,17 @@ def _destination(lat: float, lon: float, heading: float, distance_km: float) -> 
     return math.degrees(target_lat), (math.degrees(target_lon) + 180) % 360 - 180
 
 
+def within_qso_window(geo: dict, *, distinct_stations: bool = True) -> bool:
+    """Same mutual visibility and inward-bearing gates as the usable-time display."""
+    if "qso_viable" in geo:
+        # scatter_geometry computes this before rounding its display coordinates.
+        return geo["qso_viable"] is True
+    return (
+        all(math.isfinite(geo[key]) for key in ("el_a", "el_b", "off_path_deg"))
+        and geo["el_a"] > 0 and geo["el_b"] > 0
+        and (not distinct_stations or geo["off_path_deg"] < 90))
+
+
 def usable_seconds(ac: Aircraft, a: StationPosition, b: StationPosition) -> tuple[float, bool]:
     """First exit with the same five-second search as src/lib/usableTime.ts."""
     assert ac.lat is not None and ac.lon is not None and ac.altitude_m is not None
@@ -31,12 +42,13 @@ def usable_seconds(ac: Aircraft, a: StationPosition, b: StationPosition) -> tupl
 
     def usable_at(seconds: float) -> bool:
         lat, lon = _destination(ac.lat, ac.lon, ac.heading_deg, ac.velocity_ms * seconds / 1000)
-        return (
-            elevation_deg(haversine_km(*a[:2], lat, lon), ac.altitude_m, a[2]) > 0
-            and elevation_deg(haversine_km(*b[:2], lat, lon), ac.altitude_m, b[2]) > 0
-            and (not distinct or (
-                heading_delta_deg(bearing_deg(*a[:2], lat, lon), ab) < 90
-                and heading_delta_deg(bearing_deg(*b[:2], lat, lon), ba) < 90)))
+        return within_qso_window({
+            "el_a": elevation_deg(haversine_km(*a[:2], lat, lon), ac.altitude_m, a[2]),
+            "el_b": elevation_deg(haversine_km(*b[:2], lat, lon), ac.altitude_m, b[2]),
+            "off_path_deg": max(
+                heading_delta_deg(bearing_deg(*a[:2], lat, lon), ab),
+                heading_delta_deg(bearing_deg(*b[:2], lat, lon), ba)),
+        }, distinct_stations=distinct)
 
     if not usable_at(0):
         return 0.0, False

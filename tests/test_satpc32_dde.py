@@ -123,7 +123,7 @@ class DDETests(unittest.TestCase):
             rotor.set_position.assert_not_called()
 
     def test_selected_aircraft_geometry_to_exact_wire_uses_my_station_not_dx(self):
-        # A=(0,0), B=(0,2), aircraft=(1,0): due north from A, NW from B.
+        # A=(0,0), B=(1,2), aircraft=(1,0): due north from A, west from B.
         # Independent cardinal bearing is 0; repository 4/3-Earth EL rounds to 4.8.
         ac = Aircraft("abc123", " QXE2033 ", 1, 0, 10000, 200, 0, 0, False,
                       position_updated_epoch_s=100)
@@ -133,15 +133,14 @@ class DDETests(unittest.TestCase):
             _locked_aircraft_id=ac.icao24, _station_a_locator="AA00",
             _station_b_locator="AA01", _station_a_alt_m=0, _station_b_alt_m=0,
             _rotator=None, _rotator_control_enabled=True, _manual_pointing=False,
-            _local_lock_waiting_for_window=True,
-        ), patch.object(bridge, "locator_to_latlon", side_effect=[(0, 0), (0, 2)]), \
+        ), patch.object(bridge, "locator_to_latlon", side_effect=[(0, 0), (1, 2)]), \
                 patch.object(bridge.time, "time", return_value=101), \
                 patch.object(bridge, "_emit") as emit:
             bridge._update_rotator_for_locked([ac])
             self.assertEqual(server.status()["target"], "SNQXE2033 AZ0.0 EL4.8" + SUFFIX)
             data = emit.call_args.args[0]["data"]
             self.assertEqual((data["az_a"], data["el_a"]), (0, 4.8))
-            self.assertEqual((data["az_b"], data["el_b"]), (296.6, 1.5))
+            self.assertEqual((data["az_b"], data["el_b"]), (270.0, 1.8))
             status = bridge._dde_status()
             self.assertEqual(status["station_grid"], "AA00")
             self.assertEqual(status["reference"], "MY station (A)")
@@ -176,9 +175,8 @@ class DDETests(unittest.TestCase):
             _aircraft_last_update_monotonic=None, _station_a_locator="AA00",
             _station_b_locator="AA01", _station_a_alt_m=0, _station_b_alt_m=0,
             _rotator=None, _rotator_control_enabled=True, _manual_pointing=False,
-            _local_lock_waiting_for_window=True,
         ), patch.object(bridge, "locator_to_latlon",
-                        side_effect=lambda grid: (0, 0) if grid == "AA00" else (0, 2)), \
+                        side_effect=lambda grid: (0, 0) if grid == "AA00" else (1, 2)), \
                 patch.object(bridge.time, "time", return_value=101), \
                 patch.object(bridge, "_aircraft_matches_filters", return_value=True), \
                 patch.object(bridge, "_emit"):
@@ -205,7 +203,7 @@ class DDETests(unittest.TestCase):
             with self.subTest(method=method), patch.multiple(
                 bridge, _satpc32_dde=server, _rotator=None, _manual_pointing=False,
                 _rotator_control_enabled=True, _locked_aircraft_id=None,
-                _local_lock_waiting_for_window=False, _lock_score=0, supervisor=Mock(),
+                _lock_score=0, supervisor=Mock(),
             ), patch.object(bridge, "_emit"):
                 bridge.handle({"id": "test", "method": method, "params": params})
                 if method == "rotator_stop":
@@ -236,7 +234,8 @@ class DDETests(unittest.TestCase):
         ), patch.object(bridge, "_current_aircraft_snapshot", return_value=[ac]), \
                 patch.object(bridge.time, "time", return_value=107), \
                 patch.object(bridge, "scatter_geometry",
-                             return_value={"az_a": 20, "el_a": 4.8, "scatter_score": 0}), \
+                             return_value={"az_a": 20, "el_a": 4.8, "el_b": 3,
+                                           "off_path_deg": 20, "scatter_score": 0.2}), \
                 patch.object(bridge, "_locked_aircraft_info", return_value={}), \
                 patch.object(bridge, "SatPC32DDE", return_value=server), \
                 patch.object(server, "start"), patch.object(bridge, "_emit"):
@@ -283,7 +282,8 @@ class DDETests(unittest.TestCase):
             ), patch.object(bridge, "_current_aircraft_snapshot", return_value=[ac]), \
                     patch.object(bridge.time, "time", return_value=100 + age), \
                     patch.object(bridge, "scatter_geometry",
-                                 return_value={"az_a": 20, "el_a": elevation}), \
+                                 return_value={"az_a": 20, "el_a": elevation,
+                                               "el_b": 3, "off_path_deg": 20}), \
                     patch.object(bridge, "SatPC32DDE", return_value=server), \
                     patch.object(server, "start"), patch.object(bridge, "_emit") as emit:
                 bridge.handle({"id": "test", "method": "satpc32_dde_set",
@@ -303,7 +303,7 @@ class DDETests(unittest.TestCase):
             bridge, _satpc32_dde=server, _active_source="rtlsdr",
             _locked_aircraft_id=ac.icao24, _aircraft_cache=[ac],
             _aircraft_last_update_monotonic=None, _station_a_locator="CN87",
-            _station_b_locator="CN89", _local_lock_waiting_for_window=True,
+            _station_b_locator="CN89",
         ), patch.object(bridge, "_emit"), patch.object(bridge, "_do_unlock") as unlock, \
                 patch.object(bridge, "_update_rotator_for_locked") as track:
             bridge._emit_aircraft_update()
@@ -328,7 +328,7 @@ class DDETests(unittest.TestCase):
                 _station_b_locator="CN89", _rotator=None, _rotator_control_enabled=True,
                 _manual_pointing=False, _manual_aircraft_lock=False,
                 _manual_lock_source=None, _manual_lock_last_seen=0,
-                _local_lock_waiting_for_window=False, _lock_score=0,
+                _lock_score=0,
             ), patch("airwsjtx.supervisor.AirWSJTXSupervisor", return_value=supervisor), \
                     patch.object(bridge.time, "monotonic", return_value=1000) as clock, \
                     patch.object(bridge.time, "time", return_value=1000), \
@@ -380,7 +380,7 @@ class DDETests(unittest.TestCase):
                 _station_b_locator="CN89", _rotator=rotor, _rotator_control_enabled=True,
                 _manual_pointing=False, _manual_aircraft_lock=True,
                 _manual_lock_source="opensky", _manual_lock_last_seen=1000,
-                _local_lock_waiting_for_window=False, _lock_score=0,
+                _lock_score=0,
             ), patch.object(ac, "on_ground", ground), \
                     patch.object(bridge.time, "monotonic", return_value=1000), \
                     patch.object(bridge.time, "time", return_value=1000), \

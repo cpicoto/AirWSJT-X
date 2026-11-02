@@ -144,7 +144,8 @@ class AircraftRankingTests(unittest.TestCase):
             lock.assert_not_called()
         with patch.multiple(bridge, _station_a_locator="JJ00", _station_b_locator="JJ01"), \
                 patch.object(bridge, "_aircraft_matches_filters", return_value=True), \
-                patch.object(bridge, "scatter_geometry", return_value={"scatter_score": 0.049}), \
+                patch.object(bridge, "scatter_geometry", return_value={
+                    "scatter_score": 0.049, "el_a": 1, "el_b": 1, "off_path_deg": 0}), \
                 patch.dict(bridge._aircraft_filters, {"ranking_method": "range-product"}):
             self.assertIsNone(bridge._select_auto_lock_candidate([PLANE]))
 
@@ -191,7 +192,7 @@ class AircraftRankingTests(unittest.TestCase):
             error.assert_called_once()
             write.assert_not_called()
 
-    def test_watched_flight_unlock_exemption_is_preserved_in_every_method(self):
+    def test_watched_flight_loses_viability_in_every_ranking_method(self):
         behind = replace(PLANE, lon=-0.1)
         for method in RANKING_METHODS:
             for watched in (True, False):
@@ -205,10 +206,8 @@ class AircraftRankingTests(unittest.TestCase):
                         patch.object(bridge, "_do_unlock") as unlock, \
                         patch.object(bridge, "_emit") as emit:
                     bridge._update_rotator_for_locked([behind])
-                    self.assertEqual(unlock.call_count, int(not watched))
-                    if watched:
-                        self.assertEqual(emit.call_args.args[0]["event"], "plane_tracking")
-                        self.assertEqual(emit.call_args.args[0]["data"]["scatter_score"], 0)
+                    unlock.assert_called_once()
+                    self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
 
     def test_persistence_failure_reports_error_and_leaves_active_policy(self):
         original = dict(bridge._aircraft_filters)

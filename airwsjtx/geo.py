@@ -138,7 +138,8 @@ def scatter_geometry(
 
     # Geometry score (0-1):
     # Require mutual visibility and an inward bearing from both path endpoints.
-    if el_a <= 0 or el_b <= 0 or (d_ab > 0 and off_path >= 90.0):
+    qso_viable = el_a > 0 and el_b > 0 and (d_ab == 0 or off_path < 90.0)
+    if not qso_viable:
         scatter_score = 0.0
     else:
         # Elevation sweet-spot: 1-20° from each station
@@ -172,4 +173,5 @@ def scatter_geometry(
         "dist_ab_km": round(d_ab, 1),
         "off_path_deg": round(off_path, 1),
         "scatter_score": round(scatter_score, 3),
+        "qso_viable": qso_viable,
     }
