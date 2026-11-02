@@ -375,13 +375,16 @@ provide a position: complementary airborne CPR even/odd messages are needed.
 ## Building from Source
 
 On Linux desktops whose WebKitGTK lacks the Web Speech API, speech callouts use
-the first installed `spd-say`, `espeak-ng`, or `espeak` executable. Install
-`speech-dispatcher` or `espeak-ng` to enable this fallback. Missing engines and
-native launch/exit errors appear in the app's log; the Speech button indicates
-platform support, not that an engine or audio output has been verified.
-Stopping or replacing callouts cancels only AirWSJT-X's own Speech Dispatcher
-client or terminates its owned espeak process, without interrupting other clients
-such as screen readers.
+the bundled Piper `en_US-ljspeech-medium` neural US-English voice. The model is
+loaded once in an app-owned worker so repeated Az/El announcements remain
+responsive; replacing or stopping a callout terminates only AirWSJT-X's current
+audio player. The app tries `paplay`, `pw-play`, `aplay`, then `ffplay`, which
+covers the normal PulseAudio, PipeWire and ALSA desktop configurations. If the
+bundled runtime, model or an audio player is unavailable, AirWSJT-X reports the
+failure and falls back to the first installed `spd-say`, `espeak-ng`, or `espeak`
+engine. Piper's GPL source archive, license, pinned voice model and model card are
+included in the Linux package; the model card identifies the training dataset as
+public domain.
 
 ### Prerequisites
 
@@ -389,6 +392,7 @@ such as screen readers.
 - [Rust](https://rustup.rs/) (stable)
 - [Python](https://www.python.org/) 3.12+ (desktop only)
 - [PyInstaller](https://pyinstaller.org/) (desktop only)
+- `piper-tts==1.8.0` when building the Linux desktop sidecar from source
 
 ### Desktop
 

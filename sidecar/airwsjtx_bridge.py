@@ -22,6 +22,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from airwsjtx.airscout import ADSBExchangeFeed, Aircraft, Dump1090Feed, OpenSkyFeed, SourceRateLimit
 from airwsjtx.rtlsdr import (LocalRTLSDRFeed, discover_devices, platform_supported as rtlsdr_platform_supported,
                              validate_gain, support_error as rtlsdr_support_error)
+from airwsjtx.speech import PiperSpeech
 from airwsjtx.callsign import (
     DEFAULT_DB_MANIFEST_URL,
     check_db_update as callsign_check_db_update,
@@ -42,6 +43,7 @@ from airwsjtx.wsjtx_udp import WSJTXDecode, WSJTXListener, WSJTXQsoLogged, WSJTX
 
 supervisor = AirWSJTXSupervisor()
 _stdout_lock = threading.Lock()
+_speech: PiperSpeech | None = None
 
 # AirScout state
 _aircraft_lock = threading.Lock()
@@ -352,6 +354,15 @@ def _err(id_: str | None, message: str) -> None:
     _emit({"id": id_, "ok": False, "error": message})
 
 
+def _speech_manager() -> PiperSpeech:
+    global _speech
+    if _speech is None:
+        _speech = PiperSpeech(on_error=lambda message: _emit({
+            "event": "speech_error", "data": {"message": message},
+        }))
+    return _speech
+
+
 def _parse_tracks(raw: list[dict]) -> list[AircraftTrack]:
     tracks = []
     for t in raw:
@@ -375,7 +386,18 @@ def handle(msg: dict) -> None:
     id_ = msg.get("id")
 
     try:
-        if method == "source_credentials_set":
+        if method == "speech_status":
+            _ok(id_, _speech_manager().status())
+
+        elif method == "speech_speak":
+            _ok(id_, _speech_manager().speak(params.get("text", "")))
+
+        elif method == "speech_stop":
+            if _speech is not None:
+                _speech.stop()
+            _ok(id_, {})
+
+        elif method == "source_credentials_set":
             global _opensky_client_id, _opensky_client_secret, _adsbexchange_api_key
             provider = params.get("provider")
             client_id = params.get("client_id", "")
@@ -1999,6 +2021,11 @@ def _shutdown_backend() -> None:
                 resource.stop()
             except Exception as exc:
                 print(f"Cannot stop {name} during shutdown: {exc}", file=sys.stderr, flush=True)
+    if _speech is not None:
+        try:
+            _speech.shutdown()
+        except Exception as exc:
+            print(f"Cannot stop Piper speech during shutdown: {exc}", file=sys.stderr, flush=True)
 
 
 def main() -> None:

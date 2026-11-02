@@ -36,10 +36,27 @@ def check_receiver_archive(path: Path, machine: str) -> None:
         require_header(archive.extract(name)[:20], machine, name)
 
 
+def check_piper_archive(path: Path) -> None:
+    from PyInstaller.archive.readers import CArchiveReader
+
+    names = set(CArchiveReader(str(path)).toc)
+    for name in (
+        "piper-voice/en_US-ljspeech-medium.onnx",
+        "piper-voice/en_US-ljspeech-medium.onnx.json",
+        "piper-voice/MODEL_CARD",
+        "piper-voice/COPYING-Piper",
+        "piper-voice/SOURCE.txt",
+        "piper-voice/piper_tts-1.8.0.tar.gz",
+    ):
+        if name not in names:
+            raise RuntimeError(f"Missing bundled Piper file: {name}")
+
+
 def check_sidecar(path: Path) -> None:
     requests = [
         {"id": "linux-status", "method": "get_status", "params": {}},
         {"id": "linux-receiver", "method": "rtlsdr_status", "params": {}},
+        {"id": "linux-speech", "method": "speech_status", "params": {}},
     ]
     with tempfile.TemporaryDirectory(prefix="airwsjtx-linux-smoke-") as directory:
         result = subprocess.run(
@@ -61,6 +78,10 @@ def check_sidecar(path: Path) -> None:
         if request["method"] == "rtlsdr_status" and payload.get("state") not in (
                 "stopped", "connecting", "connected", "error"):
             raise RuntimeError(f"Unexpected receiver status: {payload}")
+        if request["method"] == "speech_status" and not (
+                payload.get("engine") == "piper" and payload.get("runtime_available") is True
+                and payload.get("model_available") is True and payload.get("supported") is True):
+            raise RuntimeError(f"Bundled Piper runtime is unavailable: {payload}")
 
 
 if __name__ == "__main__":
@@ -72,5 +93,6 @@ if __name__ == "__main__":
     require_machine(args.app, args.machine)
     require_machine(args.sidecar, args.machine)
     check_receiver_archive(args.sidecar, args.machine)
+    check_piper_archive(args.sidecar)
     check_sidecar(args.sidecar)
-    print(f"Linux {args.machine} app/sidecar verified; frozen backend and RTL-SDR status succeeded.")
+    print(f"Linux {args.machine} app/sidecar verified; frozen backend, RTL-SDR and Piper succeeded.")

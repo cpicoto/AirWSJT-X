@@ -6,10 +6,9 @@
  *                        the default voice is selected automatically even before
  *                        the voice list is populated.
  * - macOS (WKWebView):   Works. Voices are available synchronously.
- * - Linux (WebKitGTK):   Uses native spd-say / espeak-ng / espeak when the
- *                        Web Speech API is absent. Native launch/exit errors
- *                        reject the returned promise for the caller to display.
- *                        When the API is present, backend detection is limited.
+ * - Linux (WebKitGTK):   Uses the bundled Piper US-English voice through the
+ *                        persistent Python sidecar when the Web Speech API is
+ *                        absent. spd-say / espeak-ng / espeak remain fallback.
  * - Android WebView:     speechSynthesis is typically absent; MainActivity exposes
  *                        native TextToSpeech as window.AndroidTts, used first.
  * - iOS WKWebView:       Works when triggered from a user gesture; background
@@ -17,12 +16,15 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { rpc } from "./sidecarRpc";
 
 interface AndroidTtsBridge {
   isAvailable(): boolean;
   speak(text: string): void;
   stop(): void;
 }
+
+let linuxBackend: "piper" | "native" | null = null;
 
 /** Native Android text-to-speech, injected by MainActivity as `window.AndroidTts`. */
 function androidTts(): AndroidTtsBridge | null {
@@ -33,7 +35,8 @@ function androidTts(): AndroidTtsBridge | null {
 
 /**
  * Linux desktop Tauri (WebKitGTK) may be built without the Web Speech API.
- * The Rust side then speaks through spd-say / espeak-ng / espeak.
+ * The Python sidecar speaks through bundled Piper; Rust keeps the legacy
+ * spd-say / espeak-ng / espeak fallback.
  */
 function linuxNativeSpeech(): boolean {
   if (typeof window === "undefined" || "speechSynthesis" in window) return false;
@@ -50,7 +53,12 @@ export function isSpeechSupported(): boolean {
 export async function cancelSpeech(): Promise<void> {
   const native = androidTts();
   if (native) { native.stop(); return; }
-  if (linuxNativeSpeech()) { await invoke("stop_native_speech"); return; }
+  if (linuxNativeSpeech()) {
+    if (linuxBackend === "piper") await rpc("speech_stop");
+    else if (linuxBackend === "native") await invoke("stop_native_speech");
+    linuxBackend = null;
+    return;
+  }
   if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 
@@ -69,7 +77,21 @@ export async function speak(text: string): Promise<void> {
   const native = androidTts();
   if (native) { native.speak(text); return; }
   if (linuxNativeSpeech()) {
-    await invoke("speak_native", { text: text.replace(/\b(Azimuth|Elevation) (?=-?\d)/g, "$1, ") });
+    const spoken = text.replace(/\b(Azimuth|Elevation) (?=-?\d)/g, "$1, ");
+    if (linuxBackend === "piper") await rpc("speech_stop");
+    else if (linuxBackend === "native") await invoke("stop_native_speech");
+    linuxBackend = null;
+    try {
+      await rpc("speech_speak", { text: spoken });
+      linuxBackend = "piper";
+    } catch (piperError) {
+      try {
+        await invoke("speak_native", { text: spoken });
+        linuxBackend = "native";
+      } catch (fallbackError) {
+        throw new Error(`Piper failed (${String(piperError)}); Linux speech fallback failed (${String(fallbackError)})`);
+      }
+    }
     return;
   }
   const ss = window.speechSynthesis;

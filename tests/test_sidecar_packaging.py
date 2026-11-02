@@ -126,6 +126,15 @@ class SidecarSpecTests(unittest.TestCase):
                          if destination == "rtl-sdr"}
                 for name in ("SOURCE.txt", "rtl-sdr-blog-source.zip", "COPYING-libusb"):
                     self.assertIn(name, files)
+                piper_files = {Path(source).name for source, destination in analyze.call_args.kwargs["datas"]
+                               if destination == "piper-voice"}
+                self.assertEqual(piper_files, {
+                    "en_US-ljspeech-medium.onnx", "en_US-ljspeech-medium.onnx.json",
+                    "MODEL_CARD", "COPYING-Piper", "SOURCE.txt", "piper_tts-1.8.0.tar.gz",
+                })
+                self.assertEqual(analyze.call_args.kwargs["hiddenimports"], ["piper.voice"])
+                self.assertEqual(analyze.call_args.kwargs["hookspath"],
+                                 [str(_REPO_ROOT / "sidecar" / "hooks")])
 
     def test_macos_receiver_runtime_is_signed_binary_with_corresponding_sources(self) -> None:
         for machine in ("arm64", "x86_64"):

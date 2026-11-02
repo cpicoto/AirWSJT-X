@@ -697,6 +697,8 @@ export default function App() {
             addLog("Rotator disconnected");
           } else if (evt === "source_credentials_error") {
             addLog(`Aircraft credentials: ${evtData.message}`);
+          } else if (evt === "speech_error") {
+            addLog(`Speech: ${evtData.message}`);
           } else if (evt === "rotator_error") {
             setRotatorConnecting(false);
             setRotatorConnectionError(String(evtData.message));

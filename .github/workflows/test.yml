@@ -96,7 +96,8 @@ jobs:
       - name: Install build dependencies
         run: |
           npm ci
-          python -m pip install pyinstaller certifi
+          python -m pip install pyinstaller certifi "piper-tts==1.8.0"
+          python scripts/install_piper_voice.py
 
       - name: Build native ARM64 receiver and frozen sidecar
         run: node scripts/build-desktop-sidecar.js

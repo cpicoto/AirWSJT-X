@@ -14,6 +14,7 @@ src-tauri/target/
 !sidecar/airwsjtx_bridge.spec
 build/
 sidecar/rtl-sdr/
+sidecar/piper-voice/
 
 # Compiled sidecar binaries
 src-tauri/binaries/airwsjtx_bridge/
