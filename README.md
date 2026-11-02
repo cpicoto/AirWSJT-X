@@ -319,9 +319,13 @@ settings are discarded without enabling either output.
 Hamlib position feedback accepts newline-separated and semicolon-separated
 extended replies. If rotctld responds with missing/invalid coordinates or a
 device error, AirWSJT-X logs the error without treating it as a lost TCP
-connection or publishing a replacement position. Check the remote daemon's
-rotator/device configuration if it returns empty coordinates, even with
-`RPRT 0`. Three consecutive transport/read failures still trigger reconnection.
+connection. When a successful reply has both AZ and EL empty, the last target
+acknowledged with `RPRT 0` on that connection is assumed to be the current
+position. This is assumed feedback, not confirmation that the rotor has arrived.
+Valid measured coordinates always take precedence. No position is invented
+before an acknowledged target; new commands, Stop and disconnection clear the
+assumption. Partial/invalid coordinates and error replies do not use this fallback.
+Three consecutive transport/read failures still trigger reconnection.
 
 Unlock, output Off, manual
 mode, source stop, missing/expired positions, and below-horizon targets suppress

@@ -56,6 +56,7 @@ class HamlibRotator:
         self._thread: threading.Thread | None = None
         self._current: RotatorPosition | None = None
         self._target: RotatorPosition | None = None
+        self._acknowledged_target: RotatorPosition | None = None
         self._poll_responded = False
         self._last_poll_error: str | None = None
         self.connected = False
@@ -82,7 +83,9 @@ class HamlibRotator:
             azimuth = azimuth % 360.0
         elevation = min(max(elevation, 0.0), 90.0)
         self._target = RotatorPosition(azimuth, elevation)
-        self._send_command(f"P {azimuth:.1f} {elevation:.1f}\n")
+        self._send_command(
+            f"P {azimuth:.1f} {elevation:.1f}\n",
+            target=RotatorPosition(azimuth, round(elevation, 1)))
 
     def stop_rotation(self) -> None:
         """Send stop command."""
@@ -135,9 +138,10 @@ class HamlibRotator:
         line, self._buf = self._buf.split(b"\n", 1)
         return line.decode("ascii", "ignore").strip()
 
-    def _send_command(self, cmd: str) -> str | None:
+    def _send_command(self, cmd: str, *, target: RotatorPosition | None = None) -> str | None:
         """Send a command (e.g. P or S) and read the response line (e.g. RPRT 0)."""
         with self._lock:
+            self._acknowledged_target = None
             if not self._sock:
                 return None
             try:
@@ -146,6 +150,10 @@ class HamlibRotator:
                 resp = self._read_line(timeout=2.0)
                 while b"\n" in self._buf:
                     _, self._buf = self._buf.split(b"\n", 1)
+                if resp is not None and resp.split(";")[-1].strip() == "RPRT 0":
+                    self._acknowledged_target = target
+                elif self.on_error:
+                    self.on_error(f"rotctld command was not acknowledged: {resp!r}")
                 return resp
             except Exception as e:
                 if self.on_error:
@@ -189,7 +197,8 @@ class HamlibRotator:
                     line1 = read_field()
 
                 # Skip Hamlib extended response header like "get_pos:"
-                if line1.lower().startswith("get_pos"):
+                extended = line1.lower().startswith("get_pos")
+                if extended:
                     line1 = read_field()
 
                 line2 = read_field()
@@ -199,12 +208,20 @@ class HamlibRotator:
                     line2 = read_field()
 
                 self._poll_responded = True
+                if extended:
+                    status = read_field()
+                    if status != "RPRT 0":
+                        poll_error(f"rotctld position query failed: {status}")
+                        return None
                 # Drain any remaining lines in buffer (e.g. trailing blank or RPRT 0)
                 while b"\n" in self._buf:
                     _, self._buf = self._buf.split(b"\n", 1)
 
                 az_str = line1.split(":", 1)[1].strip() if ":" in line1 else line1
                 el_str = line2.split(":", 1)[1].strip() if ":" in line2 else line2
+                if not az_str and not el_str and self._acknowledged_target is not None:
+                    self._last_poll_error = None
+                    return self._acknowledged_target
                 try:
                     az, el = float(az_str), float(el_str)
                     if not math.isfinite(az) or not math.isfinite(el):
@@ -215,6 +232,7 @@ class HamlibRotator:
                 self._last_poll_error = None
                 return RotatorPosition(az, el)
             except OSError as exc:
+                self._poll_responded = False
                 poll_error(f"rotctld position query failed: {exc}")
                 return None
 
@@ -231,6 +249,8 @@ class HamlibRotator:
                     return False
                 self._sock = sock
                 self._buf = b""
+                self._acknowledged_target = None
+                self._current = None
                 self.connected = True
             if self.on_connected:
                 self.on_connected()
@@ -251,6 +271,8 @@ class HamlibRotator:
         was_connected = self.connected
         self.connected = False
         with self._lock:
+            self._acknowledged_target = None
+            self._current = None
             if self._sock:
                 try:
                     self._sock.close()
