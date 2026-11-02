@@ -11,6 +11,7 @@ import math
 import os
 import queue
 import re
+import secrets
 import sys
 import tempfile
 import threading
@@ -39,9 +40,22 @@ from airwsjtx.models import AircraftSample, AircraftTrack, Station
 from airwsjtx.ranking import RANKING_METHODS, rank_geometry, ranking_key, within_qso_window
 from airwsjtx.supervisor import AirWSJTXSupervisor
 from airwsjtx.tracking import build_track, select_best_aircraft
-from airwsjtx.wsjtx_udp import WSJTXDecode, WSJTXListener, WSJTXQsoLogged, WSJTXStatus
+from airwsjtx.wsjtx import MIN_QSO_FREQUENCY_HZ
+from airwsjtx.wsjtx_udp import (
+    WSJTXDecode, WSJTXListener, WSJTXQsoLogged, WSJTXStartDxTxResult, WSJTXStatus,
+)
+from airwsjtx.wsjtx_qso import (
+    CONFIGURATION_CONFIRM_S,
+    START_DX_TX_CONFIRM_S,
+    QsoProgress,
+    WSJTXQsoAssistant,
+)
 
 supervisor = AirWSJTXSupervisor()
+_qso_assistant = WSJTXQsoAssistant()
+_qso_lock = threading.RLock()
+_qso_request_id = secrets.randbits(32)
+_latest_wsjtx_status: WSJTXStatus | None = None
 _stdout_lock = threading.Lock()
 _speech: PiperSpeech | None = None
 
@@ -300,11 +314,12 @@ def _replace_aircraft_cache(aircraft: list[Aircraft], *, source: str | None = No
     if source is not None:
         for ac in aircraft:
             ac.position_source = source
-    with _aircraft_lock:
-        _aircraft_cache.clear()
-        _aircraft_cache.extend(aircraft)
-        _aircraft_last_update_monotonic = now_monotonic
-        _aircraft_last_update_epoch_s = now_epoch
+    with _qso_lock:
+        with _aircraft_lock:
+            _aircraft_cache.clear()
+            _aircraft_cache.extend(aircraft)
+            _aircraft_last_update_monotonic = now_monotonic
+            _aircraft_last_update_epoch_s = now_epoch
 
 
 def _aircraft_cache_age_s(now: float | None = None) -> float | None:
@@ -345,6 +360,116 @@ def _emit(msg: dict) -> None:
         print(json.dumps(msg), flush=True)
 
 
+def _emit_qso_progress(progress: QsoProgress) -> None:
+    with _qso_lock:
+        if progress != _qso_assistant.snapshot():
+            return
+        _emit({
+            "event": "qso_progress",
+            "data": {
+                "stage": progress.stage,
+                "message": progress.message,
+                "dx_call": progress.dx_call,
+            },
+        })
+
+
+def _check_qso_configuration_timeout() -> None:
+    with _qso_lock:
+        previous_progress = _qso_assistant.snapshot()
+        progress = _qso_assistant.configuration_timeout()
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
+
+
+def _qso_tracking_viable_locked(*, require_active: bool = True) -> bool:
+    """Check the current aircraft and path before issuing a QSO control command."""
+    from airwsjtx.state_machine import SessionState
+
+    session = supervisor.session
+    if require_active and session.state != SessionState.ACTIVE_QSO:
+        return False
+    if not _locked_aircraft_id or session.selected_aircraft_id != _locked_aircraft_id:
+        return False
+    if not _station_a_locator or not _station_b_locator:
+        return False
+    if require_active and not _qso_assistant.matches_station(
+        _station_b_call, _station_b_locator, _station_a_call,
+    ):
+        return False
+    aircraft = next(
+        (ac for ac in _current_aircraft_snapshot() if ac.icao24 == _locked_aircraft_id),
+        None,
+    )
+    if aircraft is None or not aircraft.has_position or _position_valid_for_s(aircraft) <= 0:
+        return False
+    try:
+        lat_a, lon_a = locator_to_latlon(_station_a_locator)
+        lat_b, lon_b = locator_to_latlon(_station_b_locator)
+        geo = scatter_geometry(
+            lat_a, lon_a, lat_b, lon_b, aircraft.lat, aircraft.lon, aircraft.altitude_m,
+            _station_a_alt_m, _station_b_alt_m,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return within_qso_window(geo, distinct_stations=(lat_a, lon_a) != (lat_b, lon_b))
+
+
+def _suspend_qso_for_aircraft() -> QsoProgress:
+    return _qso_assistant.suspend(
+        "Aircraft is unlocked or has no current viable position; re-arm the QSO after checking tracking"
+    )
+
+
+def _check_qso_start_tx(request_id: int) -> None:
+    with _qso_lock:
+        previous_progress = _qso_assistant.snapshot()
+        progress = _qso_assistant.start_timeout(request_id)
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
+
+
+def _send_qso_start_locked() -> QsoProgress:
+    """Request an atomic direct call once; caller must hold _qso_lock."""
+    global _qso_request_id
+    status = _qso_assistant.direct_start_status()
+    if status is None:
+        return _qso_assistant.snapshot()
+    if not _qso_tracking_viable_locked():
+        return _suspend_qso_for_aircraft()
+    if (
+        status.source_addr is None or not status.de_call or not status.dx_call
+        or not status.mode or status.tr_period != 15
+    ):
+        return _qso_assistant.suspend("Cannot identify the verified WSJT-X settings; re-arm")
+    _qso_request_id = (_qso_request_id + 1) & 0xFFFFFFFF or 1
+    request_id = _qso_request_id
+    _qso_assistant.mark_start_requested(request_id)
+    if not (
+        _wsjtx_listener
+        and _wsjtx_listener.send_start_dx_tx(
+            request_id=request_id,
+            app_id=status.app_id,
+            destination=status.source_addr,
+            de_call=status.de_call,
+            freq_hz=status.freq_hz,
+            dx_call=status.dx_call,
+            dx_grid=status.dx_grid or "",
+            mode=status.mode,
+            sub_mode=status.sub_mode or "",
+            tr_period=int(status.tr_period),
+        )
+    ):
+        return _qso_assistant.suspend(
+            "Could not send the direct-call request to the verified WSJT-X instance; check its connection and re-arm"
+        )
+    progress = _qso_assistant.snapshot()
+    timer = threading.Timer(START_DX_TX_CONFIRM_S, _check_qso_start_tx, args=(request_id,))
+    timer.daemon = True
+    timer.start()
+    return progress
+
+
 def _ok(id_: str | None, result: object) -> None:
     _emit({"id": id_, "ok": True, "result": result})
 
@@ -380,6 +505,11 @@ def _parse_tracks(raw: list[dict]) -> list[AircraftTrack]:
 
 def handle(msg: dict) -> None:
     global _rtlsdr_device_index, _rtlsdr_device_info, _rtlsdr_gain_db, _rtlsdr_startup_attempted
+    global _station_a_locator, _station_b_locator, _dx_grid_manual
+    global _station_a_call, _station_b_call, _station_a_alt_m
+    global _my_call_override, _my_grid_override
+    global _station_b_alt_m, _opensky_client_id, _opensky_client_secret, _adsbexchange_api_key
+    global _dump1090_host, _dump1090_port, _aircraft_filters, _manual_pointing, _auto_lock_enabled
     method = msg.get("method", "")
     params = msg.get("params", {})
     id_ = msg.get("id")
@@ -400,7 +530,6 @@ def handle(msg: dict) -> None:
             _ok(id_, {})
 
         elif method == "source_credentials_set":
-            global _opensky_client_id, _opensky_client_secret, _adsbexchange_api_key
             provider = params.get("provider")
             client_id = params.get("client_id", "")
             secret = params.get("secret", "")
@@ -444,45 +573,127 @@ def handle(msg: dict) -> None:
             station_a = Station(**params["station_a"])
             station_b = Station(**params["station_b"])
             tracks = _parse_tracks(params["tracks"])
-            hint = supervisor.begin_session(
-                station_a=station_a,
-                station_b=station_b,
-                band_mhz=params["band_mhz"],
-                frequency_hz=params["frequency_hz"],
-                tracks=tracks,
-            )
-            _ok(id_, {"hint": hint, "state": supervisor.session.state.value})
+            with _qso_lock:
+                hint = supervisor.begin_session(
+                    station_a=station_a,
+                    station_b=station_b,
+                    band_mhz=params["band_mhz"],
+                    frequency_hz=params["frequency_hz"],
+                    tracks=tracks,
+                )
+                _ok(id_, {"hint": hint, "state": supervisor.session.state.value})
 
         elif method == "update_tracking":
-            cmd = supervisor.update_tracking(
-                current_azimuth_deg=params["current_azimuth_deg"],
-                current_elevation_deg=params["current_elevation_deg"],
-            )
-            _ok(id_, {
-                "state": supervisor.session.state.value,
-                "target_azimuth_deg": cmd.target_azimuth_deg,
-                "target_elevation_deg": cmd.target_elevation_deg,
-            })
+            with _qso_lock:
+                cmd = supervisor.update_tracking(
+                    current_azimuth_deg=params["current_azimuth_deg"],
+                    current_elevation_deg=params["current_elevation_deg"],
+                )
+                _ok(id_, {
+                    "state": supervisor.session.state.value,
+                    "target_azimuth_deg": cmd.target_azimuth_deg,
+                    "target_elevation_deg": cmd.target_elevation_deg,
+                })
 
         elif method == "start_qso":
             from airwsjtx.state_machine import SessionState
-            # After an abort or completed QSO the session is terminal; re-arm it for the still-locked plane
-            if supervisor.session.state in (SessionState.ABORTED, SessionState.COMPLETED) and _locked_aircraft_id:
-                _do_lock(_locked_aircraft_id)
-            supervisor.operator_start_qso()
-            _ok(id_, {"state": supervisor.session.state.value})
+            with _qso_lock:
+                dx_call = str(params.get("dx_call") or _station_b_call or "").strip().upper()
+                dx_grid = str(params.get("dx_grid") or _station_b_locator or "").strip().upper() or None
+                # After a terminal session, re-arm the still-locked aircraft.
+                if supervisor.session.state in (SessionState.ABORTED, SessionState.COMPLETED) and _locked_aircraft_id:
+                    _do_lock(_locked_aircraft_id)
+                if supervisor.session.state not in (
+                    SessionState.ACTIVE_QSO, SessionState.PLANE_LOCKED,
+                    SessionState.TRACKING, SessionState.READY,
+                ) or not _qso_tracking_viable_locked(require_active=False):
+                    raise ValueError("Lock a viable aircraft with a current position before preparing a QSO.")
+                if (
+                    supervisor.session.state == SessionState.ACTIVE_QSO
+                    and _qso_assistant.snapshot().stage not in {
+                        "idle", "suspended", "aborted", "finished", "logged",
+                    }
+                ):
+                    raise ValueError("A QSO is already armed; abort or finish it before starting another.")
+                if (
+                    (_station_b_call and _station_b_call.strip().upper() != dx_call)
+                    or not WSJTXQsoAssistant.grids_match(dx_grid, _station_b_locator)
+                ):
+                    raise ValueError("The selected DX no longer matches the tracked station; check the DX and re-arm.")
+                status = _latest_wsjtx_status
+                listener = _wsjtx_listener
+                if status is None or listener is None or not listener.is_connected():
+                    raise ValueError("WSJT-X is not connected; connect the selected rig before preparing a QSO.")
+                if status.source_addr is None:
+                    raise ValueError("Cannot identify the selected WSJT-X source address; wait for its status.")
+                if status.tx_enabled or status.transmitting:
+                    raise ValueError("Disable WSJT-X Tx before preparing the DX; you can re-enable it after settings are verified.")
+                if status.freq_hz < MIN_QSO_FREQUENCY_HZ:
+                    raise ValueError("QSO control requires WSJT-X to be on 2 m (144 MHz) or higher.")
+                supervisor.wsjtx.configure_q65_15s(
+                    band_mhz=status.freq_mhz,
+                    frequency_hz=status.freq_hz,
+                )
+                progress = _qso_assistant.arm(
+                    dx_call=dx_call,
+                    dx_grid=dx_grid,
+                    my_call=_station_a_call or status.de_call,
+                    app_id=status.app_id,
+                    source_addr=status.source_addr,
+                )
+                requested_at = time.monotonic()
+                if not listener.send_configure(
+                    dx_call=dx_call, dx_grid=dx_grid,
+                    app_id=status.app_id, destination=status.source_addr,
+                ):
+                    progress = _qso_assistant.suspend(
+                        "Could not send QSO settings; verify Accept UDP requests and re-arm"
+                    )
+                    _emit_qso_progress(progress)
+                    raise ValueError("Could not send QSO settings to WSJT-X. Enable Accept UDP requests and check the selected rig.")
+                _qso_assistant.configuration_requested(requested_at)
+                if not listener.send_replay(app_id=status.app_id, destination=status.source_addr):
+                    progress = _qso_assistant.suspend(
+                        "Could not request a fresh WSJT-X status; check the connection and re-arm"
+                    )
+                    _emit_qso_progress(progress)
+                    raise ValueError("Could not request a fresh status from the selected WSJT-X instance.")
+                try:
+                    if supervisor.session.state != SessionState.ACTIVE_QSO:
+                        supervisor.operator_start_qso()
+                except ValueError:
+                    progress = _qso_assistant.suspend("Aircraft is no longer locked; re-arm the QSO")
+                    _emit_qso_progress(progress)
+                    raise
+                _emit_qso_progress(progress)
+                _ok(id_, {"state": supervisor.session.state.value, "qso": progress.__dict__})
+            timeout = threading.Timer(CONFIGURATION_CONFIRM_S, _check_qso_configuration_timeout)
+            timeout.daemon = True
+            timeout.start()
 
         elif method == "finish_qso":
-            wsjtx_tx = None
-            if params.get("control_wsjtx") and _wsjtx_listener:
-                wsjtx_tx = _wsjtx_listener.send_halt_tx()
-            try:
-                supervisor.finish_qso(abort=params.get("abort", False))
-            except ValueError:
-                # Halt Tx must still go out when the app session is already closed but WSJT-X is transmitting
-                if not wsjtx_tx:
-                    raise
-            _ok(id_, {"state": supervisor.session.state.value, "wsjtx_tx_sent": wsjtx_tx})
+            with _qso_lock:
+                target = _qso_assistant.halt_target()
+                if (
+                    target is None and _qso_assistant.snapshot().stage == "idle"
+                    and _latest_wsjtx_status and _latest_wsjtx_status.source_addr
+                ):
+                    target = (_latest_wsjtx_status.app_id, _latest_wsjtx_status.source_addr)
+                progress = _qso_assistant.finish(aborted=bool(params.get("abort", False)))
+                _emit_qso_progress(progress)
+                wsjtx_tx = None
+                if params.get("control_wsjtx"):
+                    wsjtx_tx = bool(
+                        _wsjtx_listener and target
+                        and _wsjtx_listener.send_halt_tx(app_id=target[0], destination=target[1])
+                    )
+                try:
+                    supervisor.finish_qso(abort=params.get("abort", False))
+                except ValueError:
+                    # Halt Tx may be needed after the app session has already closed.
+                    if not wsjtx_tx:
+                        raise
+                _ok(id_, {"state": supervisor.session.state.value, "wsjtx_tx_sent": wsjtx_tx})
 
         elif method == "get_status":
             _recover_startup_receiver_failure()
@@ -499,8 +710,8 @@ def handle(msg: dict) -> None:
                     "configured": supervisor.wsjtx.status.configured,
                     "mode": supervisor.wsjtx.status.mode,
                     "band_mhz": supervisor.wsjtx.status.band_mhz,
-                    "ptt_enabled": supervisor.wsjtx.status.ptt_enabled,
                 },
+                "qso": _qso_assistant.snapshot().__dict__,
             })
 
         elif method == "rank_candidates":
@@ -519,11 +730,11 @@ def handle(msg: dict) -> None:
         # ── AirScout methods ──────────────────────────────────────────────────
 
         elif method == "airscout_set_stations":
-            global _station_a_locator, _station_b_locator, _dx_grid_manual
-            _station_a_locator = params.get("locator_a")
-            _station_b_locator = params.get("locator_b")
-            # A DX chosen in the app must not be clobbered by WSJT-X's DX grid.
-            _dx_grid_manual = bool(params.get("dx_local", bool(_station_b_locator)))
+            with _qso_lock:
+                _station_a_locator = params.get("locator_a")
+                _station_b_locator = params.get("locator_b")
+                # A DX chosen in the app must not be clobbered by WSJT-X's DX grid.
+                _dx_grid_manual = bool(params.get("dx_local", bool(_station_b_locator)))
             _start_configured_airscout_feed(force_restart=True)
             _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"locator_a": _station_a_locator, "locator_b": _station_b_locator})
@@ -600,7 +811,6 @@ def handle(msg: dict) -> None:
             _ok(id_, {"state": "stopped", "message": "Receiver stopped; returned to configured network sources."})
 
         elif method == "airscout_get_dump1090_host":
-            global _dump1090_host, _dump1090_port
             _ok(id_, {"host": _dump1090_host, "port": _dump1090_port})
 
         elif method == "airscout_set_dump1090_host":
@@ -676,7 +886,6 @@ def handle(msg: dict) -> None:
                 return
             next_filters["priority_flight"] = priority_flight.strip().upper()
             next_filters["priority_flight_exclusive"] = exclusive
-            global _aircraft_filters
             _write_filters(next_filters)
             _aircraft_filters = next_filters
             _emit({"event": "airscout_filters_updated", "data": {"filters": dict(next_filters)}})
@@ -731,7 +940,6 @@ def handle(msg: dict) -> None:
             _ok(id_, {"host": host, "port": port})
 
         elif method == "set_pointing_mode":
-            global _manual_pointing
             with _output_lock:
                 _manual_pointing = params.get("mode") == "manual"
                 if _manual_pointing and _satpc32_dde:
@@ -855,8 +1063,6 @@ def handle(msg: dict) -> None:
                 _ok(id_, result)
 
         elif method == "set_my_station_override":
-            global _my_call_override, _my_grid_override
-            global _station_a_call, _station_b_call, _station_a_alt_m
             call = (params.get("callsign") or "").strip().upper() or None
             grid = (params.get("grid") or "").strip().upper() or None
             if grid:
@@ -869,27 +1075,29 @@ def handle(msg: dict) -> None:
             alt_m = 0.0 if alt_raw in (None, "") else float(alt_raw)
             if not -500.0 <= alt_m <= 9000.0:
                 raise ValueError("MY altitude must be between -500 and 9000 metres")
-            _station_a_alt_m = alt_m
-            _my_call_override, _my_grid_override = call, grid
-            _station_a_call = call or _wsjtx_de_call
-            _station_a_locator = grid or _wsjtx_de_grid
+            with _qso_lock:
+                _station_a_alt_m = alt_m
+                _my_call_override, _my_grid_override = call, grid
+                _station_a_call = call or _wsjtx_de_call
+                _station_a_locator = grid or _wsjtx_de_grid
             _start_configured_airscout_feed(force_restart=True)
             _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"callsign": call, "grid": grid, "altitude_m": alt_m})
 
         elif method == "set_dx_altitude":
-            global _station_b_alt_m
             alt_raw = params.get("altitude_m")
             alt_m = 0.0 if alt_raw in (None, "") else float(alt_raw)
             if not -500.0 <= alt_m <= 9000.0:
                 raise ValueError("DX altitude must be between -500 and 9000 metres")
-            _station_b_alt_m = alt_m
+            with _qso_lock:
+                _station_b_alt_m = alt_m
             _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {"altitude_m": alt_m})
 
         elif method == "set_station_calls":
-            _station_a_call = params.get("call_a")
-            _station_b_call = params.get("call_b")
+            with _qso_lock:
+                _station_a_call = params.get("call_a")
+                _station_b_call = params.get("call_b")
             _emit_aircraft_update(try_auto_lock=False)
             _ok(id_, {})
 
@@ -900,7 +1108,8 @@ def handle(msg: dict) -> None:
                 rig_name = params.get("rig_name")
                 if rig_name is not None:
                     rig_name = str(rig_name)
-                configured_rig_name = _wsjtx_listener.set_rig_name_filter(rig_name)
+                with _qso_lock:
+                    configured_rig_name = _wsjtx_listener.set_rig_name_filter(rig_name)
                 _ok(id_, {"rig_name": configured_rig_name})
 
         elif method == "wsjtx_get_rig_name_filter":
@@ -909,8 +1118,16 @@ def handle(msg: dict) -> None:
             else:
                 _ok(id_, {"rig_name": _wsjtx_listener.get_rig_name_filter()})
 
+        elif method == "wsjtx_request_status":
+            listener = _wsjtx_listener
+            if listener is None or not listener.is_connected():
+                _ok(id_, {"requested": False})
+            elif listener.send_replay():
+                _ok(id_, {"requested": True})
+            else:
+                _err(id_, "Could not request status from the selected WSJT-X instance.")
+
         elif method == "auto_lock_set":
-            global _auto_lock_enabled
             _auto_lock_enabled = bool(params.get("enabled", True))
             _ok(id_, {"enabled": _auto_lock_enabled})
 
@@ -1038,7 +1255,11 @@ def _recover_startup_receiver_failure() -> None:
             or _rtlsdr_feed is None or _rtlsdr_feed.snapshot()["state"] != "error"):
         return
     message = _rtlsdr_feed.snapshot().get("message")
-    _stop_source("rtlsdr")
+    try:
+        _stop_source("rtlsdr")
+    except RuntimeError as error:
+        _set_source_status("rtlsdr", "error", str(error))
+        return
     _rtlsdr_device_index = None
     with _source_priority_lock:
         _source_priority = [s for s in _source_priority if s != "rtlsdr"]
@@ -1336,12 +1557,17 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
     """Lock onto a specific aircraft (by icao24). Returns lock info or None."""
     global _locked_aircraft_id, _lock_score, supervisor
     global _manual_aircraft_lock, _manual_lock_source, _manual_lock_last_seen
-    if not _station_a_locator or not _station_b_locator:
+    with _qso_lock:
+        station_geometry = (
+            _station_a_locator, _station_b_locator, _station_a_alt_m, _station_b_alt_m,
+        )
+    locator_a, locator_b, altitude_a, altitude_b = station_geometry
+    if not locator_a or not locator_b:
         return None
 
     try:
-        lat_a, lon_a = locator_to_latlon(_station_a_locator)
-        lat_b, lon_b = locator_to_latlon(_station_b_locator)
+        lat_a, lon_a = locator_to_latlon(locator_a)
+        lat_b, lon_b = locator_to_latlon(locator_b)
     except Exception:
         return None
 
@@ -1351,65 +1577,56 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
         return None
 
     # Compute scatter score
-    geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore
+    geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, altitude_a, altitude_b)  # type: ignore
     if not within_qso_window(geo, distinct_stations=(lat_a, lon_a) != (lat_b, lon_b)):
         raise ValueError("Selected aircraft is outside the current mutual QSO window")
 
     # Build track (current pos + projections)
-    track = build_track(ac, lat_a, lon_a, n_samples=6, sample_interval_s=15.0, station_alt_m=_station_a_alt_m)
+    track = build_track(ac, lat_a, lon_a, n_samples=6, sample_interval_s=15.0, station_alt_m=altitude_a)
 
-    # Reset supervisor and begin session
+    # Replace the aircraft session atomically with respect to QSO commands.
     from airwsjtx.state_machine import SessionState
-    if supervisor.session.state not in (SessionState.IDLE, SessionState.ABORTED, SessionState.COMPLETED):
-        try:
-            supervisor.finish_qso(abort=True)
-        except Exception:
-            pass
-
-    # Re-init supervisor for new session
     from airwsjtx.supervisor import AirWSJTXSupervisor, SupervisorConfig
-    supervisor = AirWSJTXSupervisor(config=SupervisorConfig(minimum_score_to_lock=0.05))
-
-    station_a = Station(
-        callsign=_station_a_call or "DE",
-        locator=_station_a_locator,
-    )
-    station_b = Station(
-        callsign=_station_b_call or "DX",
-        locator=_station_b_locator,
-    )
-
-    band_mhz = _wsjtx_band_mhz or 1296.0
-    freq_hz = _wsjtx_freq_hz or 1296150000
-
-    try:
-        hint = supervisor.begin_session(
+    with _qso_lock:
+        if station_geometry != (
+            _station_a_locator, _station_b_locator, _station_a_alt_m, _station_b_alt_m,
+        ):
+            return None
+        with _aircraft_lock:
+            if not any(candidate is ac for candidate in _aircraft_cache):
+                return None
+        new_supervisor = AirWSJTXSupervisor(config=SupervisorConfig(minimum_score_to_lock=0.05))
+        station_a = Station(callsign=_station_a_call or "DE", locator=locator_a)
+        station_b = Station(callsign=_station_b_call or "DX", locator=locator_b)
+        hint = new_supervisor.begin_session(
             station_a=station_a,
             station_b=station_b,
-            band_mhz=band_mhz,
-            frequency_hz=freq_hz,
+            band_mhz=_wsjtx_band_mhz or 0.0,
+            frequency_hz=_wsjtx_freq_hz or 0,
             tracks=[track],
+            allow_unconfigured_tracking=True,
         )
-    except ValueError as e:
-        # Band check — force-set band for non-23cm if needed
-        if "23cm" in str(e) or "threshold" in str(e):
-            from unittest.mock import patch
-            supervisor.wsjtx.MIN_AUTOMATION_BAND_MHZ = 0
-            hint = supervisor.begin_session(
-                station_a=station_a,
-                station_b=station_b,
-                band_mhz=max(band_mhz, 1240.0),
-                frequency_hz=freq_hz,
-                tracks=[track],
+        previous_progress = _qso_assistant.snapshot()
+        if previous_progress.stage not in {"idle", "logged", "aborted", "finished"}:
+            progress = _qso_assistant.finish(
+                aborted=True,
+                message="Aircraft selection changed; QSO control disarmed. Stop WSJT-X Tx if needed.",
             )
         else:
-            raise
-
-    _locked_aircraft_id = icao24
-    _lock_score = geo["scatter_score"]
-    _manual_aircraft_lock = manual
-    _manual_lock_source = _active_source
-    _manual_lock_last_seen = time.monotonic()
+            progress = previous_progress
+        if supervisor.session.state not in (SessionState.IDLE, SessionState.ABORTED, SessionState.COMPLETED):
+            try:
+                supervisor.finish_qso(abort=True)
+            except ValueError:
+                pass
+        supervisor = new_supervisor
+        _locked_aircraft_id = icao24
+        _lock_score = geo["scatter_score"]
+        _manual_aircraft_lock = manual
+        _manual_lock_source = _active_source
+        _manual_lock_last_seen = time.monotonic()
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
     _publish_dde_target(ac, geo)
 
     # Point rotator immediately (manual pointing mode ignores plane positions)
@@ -1423,16 +1640,22 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
 def _do_unlock() -> None:
     global _locked_aircraft_id, _lock_score
     global _manual_aircraft_lock, _manual_lock_source
-    _locked_aircraft_id = None
-    _lock_score = 0.0
-    _manual_aircraft_lock = False
-    _manual_lock_source = None
+    with _qso_lock:
+        _locked_aircraft_id = None
+        _lock_score = 0.0
+        _manual_aircraft_lock = False
+        _manual_lock_source = None
+        progress = _qso_assistant.finish(
+            aborted=True,
+            message="Aircraft unlocked; QSO control disarmed. Stop WSJT-X Tx if needed.",
+        )
+        try:
+            supervisor.finish_qso(abort=True)
+        except ValueError:
+            pass
     if _satpc32_dde:
         _satpc32_dde.clear()
-    try:
-        supervisor.finish_qso(abort=True)
-    except Exception:
-        pass
+    _emit_qso_progress(progress)
     _emit({"event": "plane_unlocked", "data": {}})
 
 
@@ -1898,22 +2121,48 @@ def _emit_aircraft_update(*, try_auto_lock: bool = True) -> None:
 
 
 def _on_wsjtx_status(st: WSJTXStatus) -> None:
+    global _latest_wsjtx_status
     global _station_a_locator, _station_b_locator, _station_a_call, _wsjtx_freq_hz, _wsjtx_band_mhz
     global _wsjtx_de_call, _wsjtx_de_grid
-    previous_locators = (_station_a_locator, _station_b_locator)
+    observed_at = time.monotonic()
     de_grid = (st.de_grid or "").strip().upper()
     dx_grid = (st.dx_grid or "").strip().upper()
-    _wsjtx_de_call = st.de_call
-    _wsjtx_de_grid = de_grid if _STATION_GRID_RE.fullmatch(de_grid) else None
-    # Capture frequency for supervisor begin_session
-    if st.freq_hz:
-        _wsjtx_freq_hz = st.freq_hz
-        _wsjtx_band_mhz = st.freq_mhz
-    # Auto-populate station A call + locator from WSJT-X de_call/de_grid
-    if st.de_call and not _my_call_override:
-        _station_a_call = st.de_call
-    if _wsjtx_de_grid and not _my_grid_override and _wsjtx_de_grid != _station_a_locator:
-        _station_a_locator = _wsjtx_de_grid
+    with _qso_lock:
+        source = _qso_assistant.active_source()
+        if source is not None and (st.app_id, st.source_addr) != source:
+            previous_progress = _qso_assistant.snapshot()
+            progress = _qso_assistant.observe_status(st, observed_at=observed_at)
+            if progress != previous_progress:
+                _emit_qso_progress(progress)
+            return
+        _latest_wsjtx_status = st
+        previous_locators = (_station_a_locator, _station_b_locator)
+        _wsjtx_de_call = st.de_call
+        _wsjtx_de_grid = de_grid if _STATION_GRID_RE.fullmatch(de_grid) else None
+        if st.freq_hz:
+            _wsjtx_freq_hz = st.freq_hz
+            _wsjtx_band_mhz = st.freq_mhz
+        if st.de_call and not _my_call_override:
+            _station_a_call = st.de_call
+        my_grid_changed = bool(
+            _wsjtx_de_grid and not _my_grid_override and _wsjtx_de_grid != _station_a_locator
+        )
+        if my_grid_changed:
+            _station_a_locator = _wsjtx_de_grid
+        dx_grid_changed = bool(
+            _STATION_GRID_RE.fullmatch(dx_grid) and not _dx_grid_manual and dx_grid != _station_b_locator
+        )
+        if dx_grid_changed:
+            _station_b_locator = dx_grid
+        locators_changed = (_station_a_locator, _station_b_locator) != previous_locators
+        previous_progress = _qso_assistant.snapshot()
+        _qso_assistant.observe_status(st, observed_at=observed_at)
+        progress = _send_qso_start_locked()
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
+    for changed in (my_grid_changed, dx_grid_changed):
+        if not changed:
+            continue
         with _source_status_lock:
             active_source = _active_source
         if active_source == "opensky":
@@ -1922,17 +2171,7 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
             _start_adsbexchange_feed()
         else:
             _start_configured_airscout_feed()
-    if _STATION_GRID_RE.fullmatch(dx_grid) and not _dx_grid_manual and dx_grid != _station_b_locator:
-        _station_b_locator = dx_grid
-        with _source_status_lock:
-            active_source = _active_source
-        if active_source == "opensky":
-            _start_opensky_feed()
-        elif active_source == "adsbexchange":
-            _start_adsbexchange_feed()
-        else:
-            _start_configured_airscout_feed()
-    if (_station_a_locator, _station_b_locator) != previous_locators:
+    if locators_changed:
         _emit_aircraft_update(try_auto_lock=False)
     _emit({
         "event": "wsjtx_status",
@@ -1953,11 +2192,17 @@ def _on_wsjtx_status(st: WSJTXStatus) -> None:
             "tx_df": st.tx_df,
             "tr_period": st.tr_period,
             "config_name": st.config_name,
+            "tx_message": st.tx_message,
         },
     })
 
 
 def _on_wsjtx_decode(dec: WSJTXDecode) -> None:
+    with _qso_lock:
+        previous_progress = _qso_assistant.snapshot()
+        progress = _qso_assistant.observe_decode(dec)
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
     _emit({
         "event": "wsjtx_decode",
         "data": {
@@ -1972,16 +2217,32 @@ def _on_wsjtx_decode(dec: WSJTXDecode) -> None:
     })
 
 
+def _on_wsjtx_start_dx_tx_result(result: WSJTXStartDxTxResult) -> None:
+    with _qso_lock:
+        previous_progress = _qso_assistant.snapshot()
+        progress = _qso_assistant.observe_start_result(result)
+        if progress.stage in {"tx_enabled", "transmitting"} and not _qso_tracking_viable_locked():
+            progress = _qso_assistant.suspend(
+                "Aircraft is no longer viable; WSJT-X may have enabled Tx. Stop Tx if needed."
+            )
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
+
+
 def _on_wsjtx_qso_logged(qso: WSJTXQsoLogged) -> None:
     from airwsjtx.state_machine import SessionState
     # WSJT-X is the authority on a finished QSO; close the app session to match
     completed = False
-    if supervisor.session.state == SessionState.ACTIVE_QSO:
-        try:
+    with _qso_lock:
+        previous_progress = _qso_assistant.snapshot()
+        matched = _qso_assistant.complete_logged_qso(qso)
+        progress = _qso_assistant.snapshot()
+        if matched and supervisor.session.state == SessionState.ACTIVE_QSO:
             supervisor.finish_qso(abort=False)
             completed = True
-        except Exception:
-            pass
+        state = supervisor.session.state.value
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
     _emit({
         "event": "qso_logged",
         "data": {
@@ -1991,7 +2252,7 @@ def _on_wsjtx_qso_logged(qso: WSJTXQsoLogged) -> None:
             "mode": qso.mode,
             "report_sent": qso.report_sent,
             "report_rcvd": qso.report_rcvd,
-            "state": supervisor.session.state.value,
+            "state": state,
             "session_completed": completed,
         },
     })
@@ -2002,10 +2263,22 @@ def _on_wsjtx_connected(app_id: str) -> None:
 
 
 def _on_wsjtx_disconnected() -> None:
+    global _latest_wsjtx_status
+    with _qso_lock:
+        _latest_wsjtx_status = None
+        previous_progress = _qso_assistant.snapshot()
+        progress = _qso_assistant.suspend("WSJT-X disconnected; check Tx before re-arming")
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
     _emit({"event": "wsjtx_disconnected", "data": {}})
 
 
 def _on_wsjtx_error(message: str) -> None:
+    with _qso_lock:
+        previous_progress = _qso_assistant.snapshot()
+        progress = _qso_assistant.suspend("WSJT-X connection error; check Tx before re-arming")
+    if progress != previous_progress:
+        _emit_qso_progress(progress)
     _emit({"event": "wsjtx_error", "data": {"message": message}})
 
 
@@ -2040,6 +2313,7 @@ def main() -> None:
         on_status=_on_wsjtx_status,
         on_decode=_on_wsjtx_decode,
         on_qso_logged=_on_wsjtx_qso_logged,
+        on_start_dx_tx_result=_on_wsjtx_start_dx_tx_result,
         on_connected=_on_wsjtx_connected,
         on_disconnected=_on_wsjtx_disconnected,
         on_error=_on_wsjtx_error,

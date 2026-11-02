@@ -10,6 +10,34 @@ from sidecar import airwsjtx_bridge
 
 
 class AirscoutBridgeCacheTests(unittest.TestCase):
+    def test_lock_preserves_actual_band_without_spoofing_qso_readiness(self) -> None:
+        from airwsjtx.supervisor import AirWSJTXSupervisor
+
+        ac = Aircraft(
+            icao24="abc123", callsign="TEST1", lat=48.5, lon=-123,
+            altitude_m=10000, velocity_ms=200, heading_deg=0,
+            vertical_rate_ms=0, on_ground=False,
+        )
+        for band, frequency, configured in (
+            (None, None, False),
+            (50.1, 50_100_000, False),
+            (144.18, 144_180_000, True),
+            (1296.15, 1_296_150_000, True),
+        ):
+            with self.subTest(band=band), patch.multiple(
+                airwsjtx_bridge, _station_a_locator="CN87", _station_b_locator="CN89",
+                _aircraft_cache=[ac], _locked_aircraft_id=None, _lock_score=0.0,
+                _wsjtx_band_mhz=band, _wsjtx_freq_hz=frequency,
+                supervisor=AirWSJTXSupervisor(),
+            ), patch.object(airwsjtx_bridge, "_emit"), \
+                    patch.object(airwsjtx_bridge, "_publish_hamlib_target"), \
+                    patch.object(airwsjtx_bridge, "_publish_dde_target"):
+                self.assertIsNotNone(airwsjtx_bridge._do_lock(ac.icao24))
+                qso_status = airwsjtx_bridge.supervisor.wsjtx.status
+                self.assertEqual(qso_status.configured, configured)
+                self.assertEqual(qso_status.frequency_hz, frequency if configured else None)
+                self.assertEqual(qso_status.band_mhz, band if configured else None)
+
     def test_aircraft_update_includes_applied_station_altitudes(self) -> None:
         with patch.multiple(airwsjtx_bridge, _station_a_alt_m=150.0, _station_b_alt_m=1000.0,
                             _locked_aircraft_id=None, _aircraft_cache=[]), \

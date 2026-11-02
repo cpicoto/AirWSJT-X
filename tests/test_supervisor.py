@@ -74,15 +74,53 @@ class SupervisorTests(unittest.TestCase):
         self.valid_track = track("A1", [100, 101, 102], [16, 17, 18], [250, 255, 260])
         self.supervisor = AirWSJTXSupervisor()
 
-    def test_rejects_band_below_23cm(self) -> None:
-        with self.assertRaises(ValueError):
+    def test_rejects_band_below_2m(self) -> None:
+        with self.assertRaisesRegex(ValueError, "144 MHz"):
             self.supervisor.begin_session(
                 station_a=self.station_a,
                 station_b=self.station_b,
-                band_mhz=432.0,
-                frequency_hz=432150000,
+                band_mhz=143.999999,
+                frequency_hz=143999999,
                 tracks=[self.valid_track],
             )
+
+    def test_2m_and_higher_are_supported(self) -> None:
+        for frequency_hz in (144_000_000, 144_180_000, 432_150_000, 1_296_150_000):
+            with self.subTest(frequency_hz=frequency_hz):
+                supervisor = AirWSJTXSupervisor()
+                supervisor.begin_session(
+                    station_a=self.station_a,
+                    station_b=self.station_b,
+                    band_mhz=frequency_hz / 1_000_000,
+                    frequency_hz=frequency_hz,
+                    tracks=[self.valid_track],
+                )
+                supervisor.operator_start_qso()
+                self.assertEqual(supervisor.wsjtx.status.frequency_hz, frequency_hz)
+                self.assertEqual(supervisor.session.state, SessionState.ACTIVE_QSO)
+
+    def test_tracking_below_2m_does_not_spoof_qso_configuration(self) -> None:
+        self.supervisor.begin_session(
+            station_a=self.station_a,
+            station_b=self.station_b,
+            band_mhz=1296.0,
+            frequency_hz=1_296_150_000,
+            tracks=[self.valid_track],
+        )
+        hint = self.supervisor.begin_session(
+            station_a=self.station_a,
+            station_b=self.station_b,
+            band_mhz=50.1,
+            frequency_hz=50_100_000,
+            tracks=[self.valid_track],
+            allow_unconfigured_tracking=True,
+        )
+        self.assertIn("tracking", hint)
+        self.assertEqual(self.supervisor.session.state, SessionState.PLANE_LOCKED)
+        self.assertFalse(self.supervisor.wsjtx.status.configured)
+        self.assertIsNone(self.supervisor.wsjtx.status.frequency_hz)
+        with self.assertRaisesRegex(ValueError, "2 m or higher"):
+            self.supervisor.operator_start_qso()
 
     def test_qso_requires_rotator_lock_then_operator_start(self) -> None:
         single_target_track = track("A1", [102], [18], [250])
@@ -104,11 +142,9 @@ class SupervisorTests(unittest.TestCase):
 
         self.supervisor.operator_start_qso()
         self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
-        self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
 
         self.supervisor.finish_qso()
         self.assertEqual(self.supervisor.session.state, SessionState.COMPLETED)
-        self.assertFalse(self.supervisor.wsjtx.status.ptt_enabled)
 
     def test_start_qso_is_allowed_after_plane_lock(self) -> None:
         self.supervisor.begin_session(
@@ -120,7 +156,6 @@ class SupervisorTests(unittest.TestCase):
         )
         self.supervisor.operator_start_qso()
         self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
-        self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
 
     def test_start_qso_rejects_invalid_session_state(self) -> None:
         with self.assertRaises(ValueError):
@@ -148,7 +183,6 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.session.state, SessionState.PLANE_LOCKED)
         self.supervisor.operator_start_qso()
         self.assertEqual(self.supervisor.session.state, SessionState.ACTIVE_QSO)
-        self.assertTrue(self.supervisor.wsjtx.status.ptt_enabled)
 
     def test_start_qso_rejects_idle_state(self) -> None:
         with self.assertRaises(ValueError):

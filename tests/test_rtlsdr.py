@@ -1,8 +1,11 @@
 import ctypes
 import io
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -243,11 +246,45 @@ class ReceiverTests(unittest.TestCase):
         feed.stop()
 
         process.kill.assert_called_once()
-        self.assertEqual(process.wait.call_args_list, [call(timeout=10), call()])
+        self.assertEqual(process.wait.call_args_list, [call(timeout=10), call(timeout=2)])
         worker.join.assert_called_once_with(timeout=10)
         process.stdout.close.assert_called_once()
         process.stderr.close.assert_called_once()
         job.close.assert_called_once()
+        self.assertIsNone(feed._process)
+        self.assertEqual(feed.snapshot()["state"], "stopped")
+
+    def test_stop_reports_if_killed_helper_is_still_blocked_in_usb(self):
+        process = Mock(stdout=Mock(), stderr=Mock())
+        process.poll.return_value = None
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired("helper", 10),
+            subprocess.TimeoutExpired("helper", 2),
+        ]
+        update, status = Mock(), Mock()
+        feed = LocalRTLSDRFeed(0, update, status)
+        feed._process = process
+
+        with self.assertRaisesRegex(RuntimeError, "still blocked"):
+            feed.stop()
+
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+        self.assertEqual(process.wait.call_args_list, [call(timeout=10), call(timeout=2)])
+        self.assertIs(feed._process, process)
+        process.stdout.close.assert_not_called()
+        self.assertEqual(feed.snapshot()["state"], "error")
+        self.assertIn("USB", feed.snapshot()["message"])
+        update.assert_called_once_with([])
+
+        with self.assertRaisesRegex(RuntimeError, "still blocked"):
+            feed.stop()
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+        self.assertEqual(process.wait.call_args_list, [call(timeout=10), call(timeout=2)])
+
+        process.poll.return_value = -9
+        feed.stop()
         self.assertIsNone(feed._process)
         self.assertEqual(feed.snapshot()["state"], "stopped")
 
@@ -288,6 +325,93 @@ class ReceiverTests(unittest.TestCase):
                 update.assert_called_once_with([])
                 if code is None:
                     feed._process.terminate.assert_called_once()
+
+    def test_report_kills_timed_out_helper_and_reports_usb_failure(self):
+        update, status = Mock(), Mock()
+        feed = LocalRTLSDRFeed(0, update, status)
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("helper", 10), -9]
+        feed._process = process
+        feed._stderr.append("USB read failed")
+        feed._stop.wait = Mock(return_value=False)
+
+        feed._report()
+
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+        self.assertEqual(process.wait.call_args_list, [call(timeout=10), call(timeout=2)])
+        self.assertEqual(feed.snapshot()["state"], "error")
+        self.assertIn("USB read failed", feed.snapshot()["message"])
+        update.assert_called_once_with([])
+
+    def test_report_surfaces_helper_still_blocked_after_kill(self):
+        update, status = Mock(), Mock()
+        feed = LocalRTLSDRFeed(0, update, status)
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired("helper", 10),
+            subprocess.TimeoutExpired("helper", 2),
+        ]
+        feed._process = process
+        feed._stderr.append("USB read failed")
+        feed._stop.wait = Mock(return_value=False)
+
+        feed._report()
+
+        self.assertEqual(feed.snapshot()["state"], "error")
+        self.assertIn("still blocked", feed.snapshot()["message"])
+        self.assertIn("USB read failed", feed.snapshot()["message"])
+        self.assertIs(feed._process, process)
+        update.assert_called_once_with([])
+
+    def test_report_surfaces_failure_to_signal_helper(self):
+        update, status = Mock(), Mock()
+        feed = LocalRTLSDRFeed(0, update, status)
+        process = Mock()
+        process.poll.return_value = None
+        process.terminate.side_effect = PermissionError("signal rejected")
+        feed._process = process
+        feed._stderr.append("USB read failed")
+        feed._stop.wait = Mock(return_value=False)
+
+        feed._report()
+
+        self.assertEqual(feed.snapshot()["state"], "error")
+        self.assertIn("signal rejected", feed.snapshot()["message"])
+        self.assertIn("USB read failed", feed.snapshot()["message"])
+        update.assert_called_once_with([])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal handling required")
+    def test_report_kills_real_helper_ignoring_termination(self):
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c",
+             "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+             "print('ready', flush=True); time.sleep(30)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            assert process.stdout is not None
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            update = Mock()
+            feed = LocalRTLSDRFeed(0, update, Mock())
+            feed._process = process
+            feed._stderr.append("USB read failed")
+            feed._stop.wait = Mock(return_value=False)
+            with patch("airwsjtx.rtlsdr._TERMINATE_TIMEOUT_S", 0.1):
+                feed._report()
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+            self.assertEqual(feed.snapshot()["state"], "error")
+            update.assert_called_once_with([])
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
 
     def test_posix_helper_has_no_windows_job_or_flags(self):
         process = Mock(stdout=io.StringIO(), stderr=io.StringIO())

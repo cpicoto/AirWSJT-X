@@ -21,9 +21,16 @@ MSG_HEARTBEAT = 0
 MSG_STATUS = 1
 MSG_DECODE = 2
 MSG_CLEAR = 3
+MSG_REPLY = 4
 MSG_QSO_LOGGED = 5
 MSG_CLOSE = 6
+MSG_REPLAY = 7
 MSG_HALT_TX = 8
+MSG_CONFIGURE = 15
+# Not in upstream WSJT-X; added by the cpicoto/wsjtx fork. Older versions ignore it.
+MSG_ENABLE_TX = 17
+MSG_START_DX_TX = 18
+MSG_START_DX_TX_RESULT = 19
 
 
 # ─── Parsing helpers ──────────────────────────────────────────────────────────
@@ -60,7 +67,10 @@ def _str(d: bytes, o: int) -> tuple[str | None, int]:
     ln, o = _u32(d, o)
     if ln == 0xFFFFFFFF:
         return None, o
-    return d[o : o + ln].decode("utf-8", "replace"), o + ln
+    end = o + ln
+    if end > len(d):
+        raise ValueError("Truncated WSJT-X string")
+    return d[o:end].decode("utf-8", "replace"), end
 
 
 def is_wsjtx_app(app_id: str | None) -> bool:
@@ -101,6 +111,8 @@ class WSJTXStatus:
     freq_tolerance: int
     tr_period: float | None
     config_name: str | None
+    tx_message: str | None = None
+    source_addr: tuple[str, int] | None = None
 
     @property
     def freq_mhz(self) -> float:
@@ -119,6 +131,7 @@ class WSJTXDecode:
     message: str | None
     low_confidence: bool
     off_air: bool
+    source_addr: tuple[str, int] | None = None
 
 
 @dataclass
@@ -130,6 +143,17 @@ class WSJTXQsoLogged:
     mode: str | None
     report_sent: str | None
     report_rcvd: str | None
+    source_addr: tuple[str, int] | None = None
+
+
+@dataclass
+class WSJTXStartDxTxResult:
+    app_id: str
+    request_id: int
+    accepted: bool
+    reason: str
+    tx_message: str
+    source_addr: tuple[str, int] | None = None
 
 
 def _skip_qdatetime(d: bytes, o: int) -> int:
@@ -157,6 +181,28 @@ def parse_qso_logged(d: bytes) -> WSJTXQsoLogged | None:
                               freq_hz=freq_hz, mode=mode, report_sent=rst_sent,
                               report_rcvd=rst_rcvd)
     except Exception:
+        return None
+
+
+def parse_start_dx_tx_result(d: bytes) -> WSJTXStartDxTxResult | None:
+    try:
+        magic, _, msg_type, app_id, o = _parse_header(d)
+        if magic != WSJTX_MAGIC or msg_type != MSG_START_DX_TX_RESULT or not app_id:
+            return None
+        request_id, o = _u32(d, o)
+        accepted, o = _u8(d, o)
+        reason, o = _str(d, o)
+        tx_message, o = _str(d, o)
+        if accepted not in (0, 1):
+            return None
+        reason = reason or ""
+        tx_message = tx_message or ""
+        if (accepted and (reason or not tx_message.strip())) or (
+            not accepted and (not reason.strip() or tx_message)
+        ):
+            return None
+        return WSJTXStartDxTxResult(app_id, request_id, bool(accepted), reason, tx_message)
+    except (IndexError, ValueError, struct.error):
         return None
 
 
@@ -224,6 +270,9 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
         freq_tol, o = _u32(d, o)
         tr_period, o = _i32(d, o)
         config, o = _str(d, o)
+        tx_message = None
+        if o < len(d):
+            tx_message, o = _str(d, o)
         return WSJTXStatus(
             app_id=app_id or "",
             freq_hz=freq,
@@ -246,6 +295,7 @@ def parse_status(d: bytes) -> WSJTXStatus | None:
             freq_tolerance=freq_tol,
             tr_period=_normalize_tr_period(mode, tr_period),
             config_name=config,
+            tx_message=tx_message,
         )
     except Exception:
         return None
@@ -315,6 +365,7 @@ class WSJTXListener:
         socket_timeout_s: float = 2.0,
         rig_name_filter: str | None = None,
         on_error: Callable[[str], None] | None = None,
+        on_start_dx_tx_result: Callable[[WSJTXStartDxTxResult], None] | None = None,
     ) -> None:
         self.port = port
         self.multicast = multicast
@@ -328,6 +379,7 @@ class WSJTXListener:
         self.heartbeat_timeout_s = heartbeat_timeout_s
         self.socket_timeout_s = socket_timeout_s
         self.on_error = on_error
+        self.on_start_dx_tx_result = on_start_dx_tx_result
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
@@ -336,10 +388,12 @@ class WSJTXListener:
         self._error: str | None = None
         self._rig_name_filter = self._normalize_rig_name(rig_name_filter)
         self._active_app_id: str | None = None
+        self._last_active_addr: tuple[str, int] | None = None
         self._sock: socket.socket | None = None
         self._query_sock: socket.socket | None = None
         self._client_addrs: dict[str, dict[tuple, float]] = {}
-        self.client_addr_ttl_s = 10.0
+        # WSJT-X heartbeats are 15 s apart, so a shorter TTL drops live clients.
+        self.client_addr_ttl_s = heartbeat_timeout_s
         self._known_rigs: dict[str, str | None] = {}
 
     def start(self) -> None:
@@ -361,6 +415,7 @@ class WSJTXListener:
         with self._state_lock:
             self._rig_name_filter = self._normalize_rig_name(rig_name)
             self._active_app_id = None
+            self._last_active_addr = None
             was_connected = self._connected
             self._connected = False
             configured_filter = self._rig_name_filter
@@ -375,6 +430,10 @@ class WSJTXListener:
     def get_error(self) -> str | None:
         with self._state_lock:
             return self._error
+
+    def is_connected(self) -> bool:
+        with self._state_lock:
+            return self._connected
 
     def _remember_rig(self, app_id: str, config_name: str | None = None) -> None:
         if not app_id or not is_wsjtx_app(app_id):
@@ -414,10 +473,12 @@ class WSJTXListener:
         expected = rig_name_filter.casefold()
         return any(candidate.casefold() == expected for candidate in candidates if candidate)
 
-    def _mark_connected(self, app_id: str) -> None:
+    def _mark_connected(self, app_id: str, addr: tuple | None = None) -> None:
         with self._state_lock:
             if self._active_app_id is None:
                 self._active_app_id = app_id
+            if addr and len(addr) >= 2 and self._active_app_id == app_id:
+                self._last_active_addr = (str(addr[0]), int(addr[1]))
             was_connected = self._connected
             self._connected = True
         if not was_connected and self.on_connected:
@@ -428,6 +489,7 @@ class WSJTXListener:
             was_connected = self._connected
             self._connected = False
             self._active_app_id = None
+            self._last_active_addr = None
         if was_connected and self.on_disconnected:
             self.on_disconnected()
 
@@ -473,7 +535,13 @@ class WSJTXListener:
             *fields,
         ])
 
-    def _send_command(self, msg_type: int, *fields: bytes) -> bool:
+    def _send_command(
+        self,
+        msg_type: int,
+        *fields: bytes,
+        destination: tuple[str, int] | None = None,
+        expected_app_id: str | None = None,
+    ) -> bool:
         """Send a control message back to the address(es) the active WSJT-X sends from.
 
         WSJT-X is a UDP client bound to an ephemeral port, so commands only arrive when sent to
@@ -487,7 +555,13 @@ class WSJTXListener:
                 addr for addr, seen in self._client_addrs.get(app_id or "", {}).items()
                 if now - seen <= self.client_addr_ttl_s
             ]
-        if not app_id or tx_sock is None or not destinations:
+        if destination is not None:
+            if destination not in destinations:
+                return False
+            destinations = [destination]
+        if not app_id or (expected_app_id is not None and app_id != expected_app_id):
+            return False
+        if tx_sock is None or not destinations:
             return False
         packet = self._build_command(msg_type, app_id, *fields)
         sent = False
@@ -499,12 +573,135 @@ class WSJTXListener:
                 pass
         return sent
 
-    def send_halt_tx(self) -> bool:
-        """Halt Tx (type 8): stop transmitting immediately and disable Tx.
+    def send_halt_tx(
+        self,
+        *,
+        app_id: str | None = None,
+        destination: tuple[str, int] | None = None,
+    ) -> bool:
+        """Halt Tx (type 8): stop transmitting immediately and disable Tx."""
+        return self._send_command(
+            MSG_HALT_TX, struct.pack(">B", 0),
+            destination=destination, expected_app_id=app_id,
+        )
 
-        WSJT-X has no UDP command for Enable Tx, so Tx can only be started from WSJT-X itself.
+    def send_replay(
+        self,
+        *,
+        app_id: str | None = None,
+        destination: tuple[str, int] | None = None,
+    ) -> bool:
+        """Request the selected client's current status and its saved decodes."""
+        if destination is None:
+            with self._state_lock:
+                destination = self._last_active_addr
+        if destination is None:
+            return False
+        return self._send_command(
+            MSG_REPLAY, destination=destination, expected_app_id=app_id,
+        )
+
+    def send_enable_tx(
+        self,
+        *,
+        app_id: str | None = None,
+        destination: tuple[str, int] | None = None,
+    ) -> bool:
+        """Enable Tx (type 17), equivalent to checking "Enable Tx" in WSJT-X.
+
+        Only WSJT-X builds with the EnableTx extension act on it; others ignore it, so callers
+        must confirm the result from a later status message.
         """
-        return self._send_command(MSG_HALT_TX, struct.pack(">B", 0))
+        if destination is None:
+            with self._state_lock:
+                destination = self._last_active_addr
+        if destination is None:
+            return False
+        return self._send_command(
+            MSG_ENABLE_TX, destination=destination, expected_app_id=app_id,
+        )
+
+    def send_start_dx_tx(
+        self,
+        *,
+        request_id: int,
+        app_id: str,
+        destination: tuple[str, int],
+        de_call: str,
+        freq_hz: int,
+        dx_call: str,
+        dx_grid: str,
+        mode: str,
+        sub_mode: str,
+        tr_period: int,
+    ) -> bool:
+        """Request atomic Tx1 selection and Tx enable from a supporting WSJT-X fork."""
+        if not (0 < request_id <= 0xFFFFFFFF and 0 < freq_hz <= 0xFFFFFFFFFFFFFFFF):
+            return False
+        if not (de_call and dx_call and mode and 0 <= tr_period <= 0xFFFFFFFF):
+            return False
+        return self._send_command(
+            MSG_START_DX_TX,
+            struct.pack(">I", request_id),
+            self._pack_str(de_call),
+            struct.pack(">Q", freq_hz),
+            self._pack_str(dx_call),
+            self._pack_str(dx_grid),
+            self._pack_str(mode),
+            self._pack_str(sub_mode),
+            struct.pack(">I", tr_period),
+            destination=destination,
+            expected_app_id=app_id,
+        )
+
+    def send_configure(
+        self,
+        *,
+        dx_call: str,
+        dx_grid: str | None,
+        app_id: str | None = None,
+        destination: tuple[str, int] | None = None,
+    ) -> bool:
+        """Select the app's supported Q65-15 setup and DX station in WSJT-X."""
+        if destination is None:
+            with self._state_lock:
+                destination = self._last_active_addr
+        if destination is None:
+            return False
+        return self._send_command(
+            MSG_CONFIGURE,
+            self._pack_str("Q65"),
+            struct.pack(">I", 0xFFFFFFFF),  # Keep the current frequency tolerance.
+            self._pack_str(""),  # Keep the current Q65 submode.
+            struct.pack(">B", 0),  # Standard, non-fast operation.
+            struct.pack(">I", 15),
+            struct.pack(">I", 0xFFFFFFFF),  # Keep the current receive audio frequency.
+            self._pack_str(dx_call),
+            self._pack_str(dx_grid or ""),
+            struct.pack(">B", 1),  # Generate standard QSO messages.
+            destination=destination,
+            expected_app_id=app_id,
+        )
+
+    def send_reply(self, decode: WSJTXDecode) -> bool:
+        """Ask WSJT-X to act on a previously decoded CQ, as if it were double-clicked."""
+        with self._state_lock:
+            app_id = self._active_app_id
+        if decode.app_id != app_id or decode.source_addr is None:
+            return False
+        fields = (
+            struct.pack(">I", decode.time_ms),
+            struct.pack(">i", decode.snr),
+            struct.pack(">d", decode.delta_time_s),
+            struct.pack(">I", decode.delta_freq_hz),
+            self._pack_str(decode.mode or ""),
+            self._pack_str(decode.message or ""),
+            struct.pack(">B", int(decode.low_confidence)),
+            struct.pack(">B", 0),  # No keyboard modifiers.
+        )
+        return self._send_command(
+            MSG_REPLY, *fields, destination=decode.source_addr, expected_app_id=decode.app_id,
+        )
 
     def _build_heartbeat(self) -> bytes:
         return b"".join(
@@ -545,8 +742,10 @@ class WSJTXListener:
             if st:
                 self._remember_rig(st.app_id, st.config_name)
             if st and self._matches_source(st.app_id, st):
+                if addr and len(addr) >= 2:
+                    st.source_addr = (str(addr[0]), int(addr[1]))
                 self._last_packet = time.monotonic()
-                self._mark_connected(st.app_id)
+                self._mark_connected(st.app_id, addr)
                 if self.on_status:
                     self.on_status(st)
                 return True
@@ -555,8 +754,10 @@ class WSJTXListener:
             if dec:
                 self._remember_rig(dec.app_id)
             if dec and self._matches_source(dec.app_id):
+                if addr and len(addr) >= 2:
+                    dec.source_addr = (str(addr[0]), int(addr[1]))
                 self._last_packet = time.monotonic()
-                self._mark_connected(dec.app_id)
+                self._mark_connected(dec.app_id, addr)
                 if self.on_decode:
                     self.on_decode(dec)
                 return True
@@ -565,10 +766,22 @@ class WSJTXListener:
             if qso:
                 self._remember_rig(qso.app_id)
             if qso and self._matches_source(qso.app_id):
+                if addr and len(addr) >= 2:
+                    qso.source_addr = (str(addr[0]), int(addr[1]))
                 self._last_packet = time.monotonic()
-                self._mark_connected(qso.app_id)
+                self._mark_connected(qso.app_id, addr)
                 if self.on_qso_logged:
                     self.on_qso_logged(qso)
+                return True
+        elif msg_type == MSG_START_DX_TX_RESULT:
+            result = parse_start_dx_tx_result(data)
+            if result and self._matches_source(result.app_id):
+                if addr and len(addr) >= 2:
+                    result.source_addr = (str(addr[0]), int(addr[1]))
+                self._last_packet = time.monotonic()
+                self._mark_connected(result.app_id, addr)
+                if self.on_start_dx_tx_result:
+                    self.on_start_dx_tx_result(result)
                 return True
         elif msg_type == MSG_CLOSE and self._matches_source(app_id or ""):
             self._mark_disconnected()
@@ -579,7 +792,7 @@ class WSJTXListener:
                 self._remember_rig(hb.app_id)
             if self._matches_source(app_id or ""):
                 self._last_packet = time.monotonic()
-                self._mark_connected(app_id or "WSJT-X")
+                self._mark_connected(app_id or "WSJT-X", addr)
                 return True
         return False
 
