@@ -36,7 +36,7 @@ from airwsjtx.hamlib_rotator import HamlibRotator, RotatorPosition
 from airwsjtx.satpc32_dde import SatPC32DDE
 from airwsjtx.adsb import AIRCRAFT_RETENTION_S, POSITION_RETENTION_S
 from airwsjtx.models import AircraftSample, AircraftTrack, Station
-from airwsjtx.ranking import RANKING_METHODS, rank_geometry, ranking_key
+from airwsjtx.ranking import RANKING_METHODS, rank_geometry, ranking_key, within_qso_window
 from airwsjtx.supervisor import AirWSJTXSupervisor
 from airwsjtx.tracking import build_track, select_best_aircraft
 from airwsjtx.wsjtx_udp import WSJTXDecode, WSJTXListener, WSJTXQsoLogged, WSJTXStatus
@@ -242,7 +242,6 @@ _rotator: HamlibRotator | None = None
 _auto_lock_enabled: bool = True
 _locked_aircraft_id: str | None = None
 _lock_score: float = 0.0
-_local_lock_waiting_for_window: bool = False
 _manual_aircraft_lock = False
 _manual_lock_source: str | None = None
 _manual_lock_last_seen = 0.0
@@ -1335,7 +1334,7 @@ def _locked_aircraft_info(ac: Aircraft, geo: dict) -> dict:
 
 def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
     """Lock onto a specific aircraft (by icao24). Returns lock info or None."""
-    global _locked_aircraft_id, _lock_score, _local_lock_waiting_for_window, supervisor
+    global _locked_aircraft_id, _lock_score, supervisor
     global _manual_aircraft_lock, _manual_lock_source, _manual_lock_last_seen
     if not _station_a_locator or not _station_b_locator:
         return None
@@ -1353,6 +1352,8 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
 
     # Compute scatter score
     geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore
+    if not within_qso_window(geo, distinct_stations=(lat_a, lon_a) != (lat_b, lon_b)):
+        raise ValueError("Selected aircraft is outside the current mutual QSO window")
 
     # Build track (current pos + projections)
     track = build_track(ac, lat_a, lon_a, n_samples=6, sample_interval_s=15.0, station_alt_m=_station_a_alt_m)
@@ -1406,8 +1407,6 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
 
     _locked_aircraft_id = icao24
     _lock_score = geo["scatter_score"]
-    # A manually selected local aircraft may not have entered the path yet.
-    _local_lock_waiting_for_window = _active_source == "rtlsdr" and _lock_score < 0.05
     _manual_aircraft_lock = manual
     _manual_lock_source = _active_source
     _manual_lock_last_seen = time.monotonic()
@@ -1422,11 +1421,10 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
 
 
 def _do_unlock() -> None:
-    global _locked_aircraft_id, _lock_score, _local_lock_waiting_for_window
+    global _locked_aircraft_id, _lock_score
     global _manual_aircraft_lock, _manual_lock_source
     _locked_aircraft_id = None
     _lock_score = 0.0
-    _local_lock_waiting_for_window = False
     _manual_aircraft_lock = False
     _manual_lock_source = None
     if _satpc32_dde:
@@ -1457,7 +1455,11 @@ def _select_auto_lock_candidate(aircraft: list[Aircraft], *, filters: dict | Non
     for ac in aircraft:
         if not ac.has_position or not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b, filters=filters):
             continue
+        if filters.get("priority_flight") and not _matches_priority_flight(ac, filters=filters):
+            continue
         geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
+        if not within_qso_window(geo, distinct_stations=(lat_a, lon_a) != (lat_b, lon_b)):
+            continue
         score = float(geo.get("scatter_score", 0.0))
         rank = rank_geometry(ac, (lat_a, lon_a, _station_a_alt_m),
                              (lat_b, lon_b, _station_b_alt_m), method, score, now)
@@ -1486,7 +1488,6 @@ def _try_auto_lock(aircraft: list[Aircraft], *, filters: dict | None = None) -> 
 
 def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
     """After a lock, track the locked aircraft's updated position with the rotator."""
-    global _local_lock_waiting_for_window
     if not _locked_aircraft_id or not _station_a_locator:
         return
     ac = next((a for a in aircraft if a.icao24 == _locked_aircraft_id), None)
@@ -1500,19 +1501,12 @@ def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
     except Exception:
         return
 
-    # Point rotator at new position (unless manual pointing mode)
-    _publish_hamlib_target(ac, geo)
-
-    waiting_for_window = _active_source == "rtlsdr" and _local_lock_waiting_for_window
-    if geo["scatter_score"] >= 0.05:
-        _local_lock_waiting_for_window = False
-    # A pre-window local selection has not left a window it never entered.
-    if (geo["scatter_score"] < 0.05 and not _manual_aircraft_lock
-            and not waiting_for_window and not _matches_priority_flight(ac)):
+    if not within_qso_window(geo, distinct_stations=(lat_a, lon_a) != (lat_b, lon_b)):
         _emit({"event": "plane_out_of_window", "data": {"icao24": _locked_aircraft_id}})
         _do_unlock()
         return
 
+    _publish_hamlib_target(ac, geo)
     _publish_dde_target(ac, geo)
     _emit({"event": "plane_tracking", "data": {
         **_locked_aircraft_info(ac, geo),
@@ -1595,6 +1589,10 @@ def _prime_dde_target() -> None:
     lat_b, lon_b = locator_to_latlon(_station_b_locator or _station_a_locator)
     geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon,
                            ac.altitude_m, _station_a_alt_m, _station_b_alt_m)
+    if not within_qso_window(geo, distinct_stations=(lat_a, lon_a) != (lat_b, lon_b)):
+        if _satpc32_dde:
+            _satpc32_dde.clear()
+        return
     _publish_dde_target(ac, geo)
 
 
@@ -1866,32 +1864,36 @@ def _emit_aircraft_update(*, try_auto_lock: bool = True) -> None:
         if _manual_aircraft_lock:
             if active_source != _manual_lock_source or (locked_record and locked_record.on_ground):
                 _do_unlock()
+                if try_auto_lock:
+                    _try_auto_lock(snapshot, filters=filters)
                 return
             if locked_record is not None:
                 _manual_lock_last_seen = max(_manual_lock_last_seen, locked_record.last_seen)
             retention = AIRCRAFT_RETENTION_S if active_source == "rtlsdr" else _aircraft_cache_expire_after_s
             if time.monotonic() - _manual_lock_last_seen > retention:
                 _do_unlock()
+                if try_auto_lock:
+                    _try_auto_lock(snapshot, filters=filters)
                 return
             if locked_record is None or not locked_record.has_position:
                 if _satpc32_dde:
                     _satpc32_dde.clear()
             else:
                 _update_rotator_for_locked(snapshot)
+            if not _locked_aircraft_id and try_auto_lock:
+                _try_auto_lock(snapshot, filters=filters)
             return
         local_position_gap = (active_source == "rtlsdr" and locked_record is not None
                               and not locked_record.on_ground and not locked_record.has_position)
-        local_pre_window = (active_source == "rtlsdr" and _local_lock_waiting_for_window
-                            and locked_record is not None and not locked_record.on_ground)
         if local_position_gap:
             # Keep selection, but never refresh pointing with an expired CPR fix.
             if _satpc32_dde:
                 _satpc32_dde.clear()
-        elif local_pre_window or any(ac["icao24"] == _locked_aircraft_id for ac in aircraft):
+        elif any(ac["icao24"] == _locked_aircraft_id for ac in aircraft):
             _update_rotator_for_locked(snapshot)
         else:
             _do_unlock()
-    elif try_auto_lock:
+    if not _locked_aircraft_id and try_auto_lock:
         _try_auto_lock(snapshot, filters=filters)
 
 

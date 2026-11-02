@@ -224,9 +224,8 @@ This user-selected two-minute tolerance retains an old coordinate: it is not a
 live or predicted position, and no extrapolation is applied. Other aircraft's
 messages and receiver/cache freshness never refresh that coordinate's timestamp.
 Fresh position messages resume output.
-Manual selection on any feed is retained through candidate-filter and score
-changes; the manual selection policy is described below. Automatic selection
-still uses the scatter window.
+Manual selection on any feed is retained through candidate-filter and ranking
+changes only while it remains in the current mutual QSO window; see below.
 
 ### Windows: PST Rotator via SatPC32 DDE
 
@@ -295,13 +294,24 @@ record is retained rather than guessing a shorter format.
 
 Manual aircraft selection is separate from auto-lock ranking for all sources.
 A manually selected aircraft is not released just because it falls outside
-candidate filters or its scatter score drops. A temporary missing aircraft or
+candidate filters or another viable aircraft ranks higher. All selected aircraft,
+including manual and priority flights, are released when they leave the current
+mutual QSO window: above both radio horizons and within the inward 90-degree
+bearings of both path endpoints (the same gates as the usable-time display).
+Future entry is not predicted or held. Viability is checked before publishing
+Hamlib or DDE targets, so there is no final command toward an out-of-window plane.
+With Auto-Lock on, a released selection is replaced in the same aircraft update
+by the highest-ranked eligible candidate; the existing 5% acquisition score
+minimum and candidate filters still apply. With Auto-Lock off it simply releases.
+A configured priority flight constrains automatic selection to that flight;
+an invalid priority does not silently hand over to unrelated traffic.
+A temporary missing aircraft or
 position stops DDE/rotator updates, but retains selection for up to 180 seconds
 for local RTL-SDR (120 seconds for network sources)
 without another observed aircraft record. Fresh data for the same aircraft
 resumes output without selecting it again. Explicit unlock, changing active
-source, an on-ground report, or that timeout releases it. Auto-lock retains
-its candidate/window release behavior. A selected identity is not proof of
+source, an on-ground report, or that timeout releases it. Automatic selections
+also release when no longer eligible under candidate filters. A selected identity is not proof of
 a fresh coordinate or an antenna alignment.
 
 The single **Rotator output** selector chooses **Off**, **Hamlib (rotctld)**, or

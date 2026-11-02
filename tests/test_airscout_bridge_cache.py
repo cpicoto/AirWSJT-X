@@ -207,7 +207,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     self.assertEqual(airwsjtx_bridge._lock_score, 0.0)
                     self.assertEqual(emit.call_args.args[0]["event"], "plane_unlocked")
                     track.assert_not_called()
-                    auto_lock.assert_not_called()
+                    auto_lock.assert_called_once_with(aircraft, filters=airwsjtx_bridge._aircraft_filters)
 
     def test_scatter_payload_preserves_due_north_heading_for_course_prediction(self) -> None:
         aircraft = Aircraft(
@@ -235,7 +235,6 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     airwsjtx_bridge, _active_source=source, _locked_aircraft_id="40621d",
                     _station_a_locator="CN87", _station_b_locator="CN89",
                     _aircraft_cache=decoder.snapshot(now=now), _aircraft_last_update_monotonic=None,
-                    _local_lock_waiting_for_window=False,
                 ), patch.object(airwsjtx_bridge, "_emit"), \
                         patch.object(airwsjtx_bridge, "_do_unlock") as unlock, \
                         patch.object(airwsjtx_bridge, "_update_rotator_for_locked") as track:
@@ -243,29 +242,22 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     self.assertEqual(unlock.call_count, int(not retained))
                     track.assert_not_called()
 
-    def test_local_pre_window_selection_releases_only_after_entering_window(self) -> None:
+    def test_local_pre_window_selection_releases_outside_current_window(self) -> None:
         ac = Aircraft("abc123", "TEST1", 47.5, -122.4, 10000, 200, 0, 0, False)
         geo = {"az_a": 1, "el_a": 5, "az_b": 2, "el_b": 6,
                "scatter_score": 0.0, "off_path_deg": 90, "range_a_km": 10}
         with patch.multiple(
             airwsjtx_bridge, _active_source="rtlsdr", _locked_aircraft_id=ac.icao24,
-            _local_lock_waiting_for_window=True, _station_a_locator="CN87",
+            _station_a_locator="CN87",
             _station_b_locator="CN89", _rotator=None,
         ), patch.object(airwsjtx_bridge, "scatter_geometry", return_value=geo), \
                 patch.object(airwsjtx_bridge, "_emit") as emit, \
                 patch.object(airwsjtx_bridge, "_do_unlock") as unlock:
             airwsjtx_bridge._update_rotator_for_locked([ac])
-            unlock.assert_not_called()
-            self.assertEqual(emit.call_args.args[0]["event"], "plane_tracking")
-            geo["scatter_score"] = 0.5
-            airwsjtx_bridge._update_rotator_for_locked([ac])
-            self.assertFalse(airwsjtx_bridge._local_lock_waiting_for_window)
-            geo["scatter_score"] = 0.0
-            airwsjtx_bridge._update_rotator_for_locked([ac])
             unlock.assert_called_once()
             self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
 
-    def test_selecting_low_score_local_aircraft_arms_pre_window_hold_only_locally(self) -> None:
+    def test_selecting_outside_window_aircraft_is_rejected_on_every_source(self) -> None:
         from airwsjtx.state_machine import SessionState
 
         ac = Aircraft("abc123", "TEST1", 47.5, -122.4, 10000, 200, 0, 0, False)
@@ -276,7 +268,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
             supervisor.session.state = SessionState.IDLE
             with self.subTest(source=source), patch.multiple(
                 airwsjtx_bridge, _active_source=source, _locked_aircraft_id=None,
-                _local_lock_waiting_for_window=False, _lock_score=0, _aircraft_cache=[ac],
+                _lock_score=0, _aircraft_cache=[ac],
                 _station_a_locator="CN87", _station_b_locator="CN89", _rotator=None,
                 supervisor=supervisor,
             ), patch.object(airwsjtx_bridge, "scatter_geometry", return_value=geo), \
@@ -284,10 +276,9 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     patch("airwsjtx.supervisor.AirWSJTXSupervisor", return_value=supervisor), \
                     patch.object(airwsjtx_bridge, "_locked_aircraft_info", return_value={}), \
                     patch.object(airwsjtx_bridge, "_emit"):
-                self.assertIsNotNone(airwsjtx_bridge._do_lock(ac.icao24))
-                self.assertEqual(airwsjtx_bridge._local_lock_waiting_for_window, source == "rtlsdr")
-                airwsjtx_bridge._do_unlock()
-                self.assertFalse(airwsjtx_bridge._local_lock_waiting_for_window)
+                with self.assertRaisesRegex(ValueError, "outside the current mutual QSO window"):
+                    airwsjtx_bridge._do_lock(ac.icao24)
+                self.assertIsNone(airwsjtx_bridge._locked_aircraft_id)
 
     def test_local_position_recovery_tracks_again_but_ground_and_source_switch_release(self) -> None:
         ac = Aircraft("abc123", "TEST1", 47.5, -122.4, 10000, 200, 0, 0, False)
@@ -301,7 +292,6 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                 airwsjtx_bridge, _active_source=source, _locked_aircraft_id=ac.icao24,
                 _aircraft_cache=[ac], _aircraft_last_update_monotonic=None,
                 _station_a_locator="CN87", _station_b_locator="CN89",
-                _local_lock_waiting_for_window=False,
             ), patch.object(ac, "lat", 47.5 if positioned else None), \
                     patch.object(ac, "on_ground", ground), \
                     patch.object(airwsjtx_bridge, "_aircraft_matches_filters", return_value=True), \
@@ -719,7 +709,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     airwsjtx_bridge._update_rotator_for_locked([ac])
                     self.assertEqual(emit.call_args.args[0]["data"]["position_updated_epoch_s"], 1000)
 
-    def test_priority_flight_remains_locked_outside_scatter_window(self) -> None:
+    def test_priority_flight_releases_outside_qso_window(self) -> None:
         ac = Aircraft(
             icao24="abc123", callsign=" UAL123 ", lat=47.5, lon=-122.4,
             altitude_m=10000, velocity_ms=200, heading_deg=270,
@@ -727,11 +717,11 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
         )
         geo = {"az_a": 270, "el_a": 5, "az_b": 234, "el_b": 6,
                "scatter_score": 0.0, "off_path_deg": 180, "range_a_km": 125.6}
-        for flight, exclusive, retained in [
-            ("ual123", False, True),
-            ("UAL123", True, True),
-            ("OTHER", False, False),
-            ("", True, False),
+        for flight, exclusive in [
+            ("ual123", False),
+            ("UAL123", True),
+            ("OTHER", False),
+            ("", True),
         ]:
             with self.subTest(flight=flight, exclusive=exclusive):
                 with patch.multiple(
@@ -746,15 +736,8 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                     airwsjtx_bridge, "_do_unlock",
                 ) as unlock:
                     airwsjtx_bridge._update_rotator_for_locked([ac])
-                    if retained:
-                        unlock.assert_not_called()
-                        event = emit.call_args.args[0]
-                        self.assertEqual(event["event"], "plane_tracking")
-                        self.assertEqual(event["data"]["scatter_score"], 0.0)
-                        self.assertEqual(airwsjtx_bridge._locked_aircraft_id, "abc123")
-                    else:
-                        unlock.assert_called_once_with()
-                        self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
+                    unlock.assert_called_once_with()
+                    self.assertEqual(emit.call_args.args[0]["event"], "plane_out_of_window")
 
     def setUp(self) -> None:
         manual = patch.multiple(airwsjtx_bridge, _manual_aircraft_lock=False,
