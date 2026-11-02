@@ -33,6 +33,7 @@ interface WsjtxLive {
   de_grid: string | null;
   dx_call: string | null;
   dx_grid: string | null;
+  tx_enabled: boolean;
   transmitting: boolean;
   decoding: boolean;
   tr_period: number | null;
@@ -46,6 +47,11 @@ interface WsjtxDecodeEntry {
   delta_freq_hz: number;
   mode: string | null;
   ts: string;
+}
+interface WsjtxQsoProgress {
+  stage: string;
+  message: string;
+  dx_call: string;
 }
 const WSJTX_DAY_MS = 24 * 60 * 60 * 1000;
 function formatWsjtxDecodeTime(value: unknown): string {
@@ -408,10 +414,13 @@ export default function App() {
   const [wsjtxLive, setWsjtxLive] = useState<WsjtxLive>({
     connected: false, app_id: "", freq_mhz: null, mode: null,
     sub_mode: null, de_call: null, de_grid: null, dx_call: null, dx_grid: null,
-    transmitting: false, decoding: false, tr_period: null,
+    tx_enabled: false, transmitting: false, decoding: false, tr_period: null,
     rx_df: null, tx_df: null, config_name: null,
   });
   const [decodes, setDecodes] = useState<WsjtxDecodeEntry[]>([]);
+  const [qsoProgress, setQsoProgress] = useState<WsjtxQsoProgress>({
+    stage: "idle", message: "No QSO armed", dx_call: "",
+  });
   const [airscout, setAirscout] = useState<AirscoutUpdate | null>(null);
   const [sourceStatus, setSourceStatus] = useState<AirscoutSourceState | null>(null);
   const [dump1090Activity, setDump1090Activity] = useState<Dump1090Activity | null>(null);
@@ -598,6 +607,25 @@ export default function App() {
 
   // Wire sidecar messages — handles both RPC responses and push events
   useEffect(() => {
+    let active = true;
+    let statusRequestPending = false;
+    let statusRequestAgain = false;
+    const requestWsjtxStatus = () => {
+      if (statusRequestPending) {
+        statusRequestAgain = true;
+        return;
+      }
+      statusRequestPending = true;
+      void rpc("wsjtx_request_status")
+        .catch(error => { if (active) addLog(`WSJT-X status request: ${error}`); })
+        .finally(() => {
+          statusRequestPending = false;
+          if (active && statusRequestAgain) {
+            statusRequestAgain = false;
+            requestWsjtxStatus();
+          }
+        });
+    };
     const unlisten = listen<string>("sidecar-message", (ev) => {
       try {
         const data = JSON.parse(ev.payload) as Record<string, unknown>;
@@ -610,14 +638,15 @@ export default function App() {
           if (evt === "wsjtx_connected") {
             addLog(`WSJT-X connected: ${evtData.app_id}`);
             setWsjtxError(null);
-            setWsjtxLive(w => ({ ...w, connected: true, app_id: evtData.app_id as string }));
+            setWsjtxLive(w => ({ ...w, connected: true, app_id: evtData.app_id as string, freq_mhz: null, tx_enabled: false, transmitting: false }));
+            requestWsjtxStatus();
           } else if (evt === "wsjtx_disconnected") {
             addLog("WSJT-X disconnected");
-            setWsjtxLive(w => ({ ...w, connected: false }));
+            setWsjtxLive(w => ({ ...w, connected: false, freq_mhz: null, tx_enabled: false, transmitting: false }));
           } else if (evt === "wsjtx_error") {
             addLog(`WSJT-X error: ${evtData.message}`);
             setWsjtxError(evtData.message as string);
-            setWsjtxLive(w => ({ ...w, connected: false }));
+            setWsjtxLive(w => ({ ...w, connected: false, freq_mhz: null, tx_enabled: false, transmitting: false }));
           } else if (evt === "wsjtx_status") {
             setWsjtxError(null);
             setWsjtxLive(w => ({
@@ -630,6 +659,7 @@ export default function App() {
               de_grid: evtData.de_grid as string | null,
               dx_call: evtData.dx_call as string | null,
               dx_grid: evtData.dx_grid as string | null,
+              tx_enabled: evtData.tx_enabled as boolean,
               transmitting: evtData.transmitting as boolean,
               decoding: evtData.decoding as boolean,
               tr_period: evtData.tr_period as number | null,
@@ -641,6 +671,13 @@ export default function App() {
             const q = evtData as { dx_call?: string | null; mode?: string | null; report_sent?: string | null; report_rcvd?: string | null; state?: string; session_completed?: boolean };
             addLog(`WSJT-X logged QSO with ${q.dx_call ?? "?"}${q.mode ? ` (${q.mode})` : ""} ${q.report_sent ?? ""}/${q.report_rcvd ?? ""}${q.session_completed ? " — session completed" : ""}`.replace(/\s+/g, " ").trim());
             if (q.state) setStatus((s) => s ? { ...s, state: q.state as string } : s);
+          } else if (evt === "qso_progress") {
+            if (typeof evtData.stage === "string" && typeof evtData.message === "string"
+              && typeof evtData.dx_call === "string") {
+              setQsoProgress({ stage: evtData.stage, message: evtData.message, dx_call: evtData.dx_call });
+            } else {
+              addLog("Invalid WSJT-X QSO progress update");
+            }
           } else if (evt === "wsjtx_decode") {
             const entry: WsjtxDecodeEntry = {
               message: evtData.message as string | null,
@@ -740,7 +777,13 @@ export default function App() {
 
       } catch { /* ignore */ }
     });
-    return () => { unlisten.then((f) => f()); };
+    void unlisten.then(() => {
+      if (active) requestWsjtxStatus();
+    }).catch(error => { if (active) addLog(`WSJT-X event listener: ${error}`); });
+    return () => {
+      active = false;
+      void unlisten.then((f) => f(), error => addLog(`WSJT-X event listener cleanup: ${error}`));
+    };
   }, [addLog]);
 
   // Poll status every 2 s once sidecar is ready
@@ -916,9 +959,10 @@ export default function App() {
 
   async function startQso() {
     try {
-      const r = await rpc("start_qso") as { state: string };
+      const r = await rpc("start_qso", { dx_call: dxCall, dx_grid: selectedDxGrid }) as { state: string; qso: WsjtxQsoProgress };
       setStatus((s) => s ? { ...s, state: r.state } : s);
-      addLog("QSO marked started — press Enable Tx in WSJT-X (it cannot be enabled remotely)");
+      setQsoProgress(r.qso);
+      addLog(`QSO armed for ${r.qso.dx_call}; waiting for WSJT-X settings confirmation`);
     } catch (e) { addLog(`Error: ${e}`); }
   }
 
@@ -926,6 +970,11 @@ export default function App() {
     try {
       const r = await rpc("finish_qso", { abort, control_wsjtx: controlWsjtx }) as { state: string; wsjtx_tx_sent?: boolean | null };
       setStatus((s) => s ? { ...s, state: r.state } : s);
+      setQsoProgress({
+        stage: abort ? "aborted" : "finished",
+        message: abort ? "QSO aborted" : "QSO marked finished",
+        dx_call: qsoProgress.dx_call,
+      });
       if (!controlWsjtx) addLog(abort ? "QSO marked aborted (use Halt Tx in WSJT-X to stop transmitting)" : "QSO marked complete (WSJT-X logs the contact itself)");
       else addLog(`${abort ? "QSO aborted" : "QSO completed"} — ${r.wsjtx_tx_sent ? "Halt Tx sent to WSJT-X" : "could not reach WSJT-X, use Halt Tx there"}`);
     } catch (e) { addLog(`Error: ${e}`); }
@@ -980,18 +1029,15 @@ export default function App() {
   const skyDomeAircraft = aircraft.filter((ac, index) => index < 20 || ac.icao24 === lockedPlane?.icao24);
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
   const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
-  const txIndicatorTitle = wsjtxLive.transmitting
+  const txIndicatorTitle = !wsjtxLive.connected || wsjtxLive.freq_mhz === null
+    ? "WSJT-X Tx state is unknown until a status is received."
+    : wsjtxLive.transmitting
     ? `Red TX means transmitting (PTT ON).${txOffset}`
-    : `TX○ means idle (not transmitting).${txOffset}`;
-  const wsjtxReady = wsjtxLive.connected &&
-    wsjtxLive.mode === "Q65" &&
-    wsjtxLive.tr_period === 15 &&
-    (wsjtxLive.freq_mhz == null || wsjtxLive.freq_mhz >= 1240);
-  const canStartQso = wsjtxReady && (
-    displayState === "ready" ||
-    state === "ready" ||
-    (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking"))
-  );
+    : wsjtxLive.tx_enabled
+    ? `Tx is enabled, but WSJT-X is not transmitting right now.${txOffset}`
+    : `Tx is disabled; WSJT-X is not transmitting.${txOffset}`;
+  const wsjtxOnSupportedBand = wsjtxLive.connected &&
+    wsjtxLive.freq_mhz !== null && wsjtxLive.freq_mhz >= 144;
   const activeSource = sourceStatus?.active_source ?? airscout?.active_source ?? null;
   const configuredPollInterval = activeSource ? sourceStatus?.poll_intervals_s?.[activeSource] : undefined;
   const activePollIntervalS = typeof configuredPollInterval === "number"
@@ -1107,6 +1153,31 @@ export default function App() {
   const selectedDxGrid = dxLocal ? (dxGrid ?? lookupGrid(dxCall))
     : isValidLocator(wsjtxDxGrid) ? wsjtxDxGrid
     : !wsjtxLive.dx_call ? (dxGrid ?? lookupGrid(dxCall)) : lookupGrid(dxCall);
+  const qsoCanArm = ["idle", "suspended", "aborted", "finished", "logged"].includes(qsoProgress.stage);
+  const canStartQso = wsjtxOnSupportedBand && !!dxCall && !wsjtxLive.tx_enabled &&
+    !wsjtxLive.transmitting && (
+    qsoCanArm && (
+      displayState === "ready" ||
+      state === "ready" ||
+      (!autoLock && !!lockedPlane && (state === "plane_locked" || state === "tracking")) ||
+      (state === "active_qso" && qsoProgress.stage === "suspended")
+    )
+  );
+  const startQsoTitle = !wsjtxLive.connected
+    ? "Connect WSJT-X before starting a QSO."
+    : wsjtxLive.freq_mhz === null
+    ? "Wait for WSJT-X status before starting a QSO."
+    : !wsjtxOnSupportedBand
+    ? "Tune WSJT-X to 2 m (144 MHz) or higher to start a QSO."
+    : wsjtxLive.tx_enabled || wsjtxLive.transmitting
+    ? "Disable WSJT-X Tx before preparing the DX."
+    : !dxCall
+    ? "Select a DX callsign before starting a QSO."
+    : !qsoCanArm
+    ? "A QSO is already armed."
+    : !canStartQso
+    ? "Lock a viable aircraft before starting a QSO."
+    : "Prepare the selected DX and request an atomic direct call. Requires a WSJT-X build with StartDxTx support; check Tx even/1st before starting.";
   useEffect(() => {
     if (!dxCall) return;
     try {
@@ -2440,9 +2511,14 @@ export default function App() {
           Begin Session
         </button>
         <button className="btn-success" onClick={startQso} disabled={!canStartQso}
-          title="Mark the QSO as started in the app. This does not transmit; enable Tx in WSJT-X.">
+          title={startQsoTitle}>
           ▶ Start QSO
         </button>
+        {canStartQso && (
+          <span role="note" style={{ fontSize: 10, color: "var(--yellow)" }}>
+            Check WSJT-X Tx even/1st
+          </span>
+        )}
         <button className="btn-danger" onClick={() => finishQso(true)}
           title={controlWsjtx
             ? "Mark the QSO as aborted and send Halt Tx to WSJT-X to stop transmitting."
@@ -2456,6 +2532,16 @@ export default function App() {
             : "Mark the QSO as done in the app only. WSJT-X also completes it automatically when it logs the contact."}>
           ✓ Finish QSO
         </button>
+        {qsoProgress.stage !== "idle" && (
+          <span
+            role="status"
+            title={qsoProgress.message}
+            style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              color: qsoProgress.stage === "suspended" ? "var(--yellow)" : "var(--text-muted)", fontSize: 10 }}
+          >
+            QSO · {qsoProgress.message}
+          </span>
+        )}
         <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
         <button
           style={{
@@ -2468,7 +2554,7 @@ export default function App() {
           {autoLock ? "🔒 Auto-lock" : "🔓 Manual"}
         </button>
         <label style={{ fontSize: 11, color: controlWsjtx ? "var(--yellow)" : "var(--text-muted)", display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
-          title="When on, Abort and Finish send Halt Tx to WSJT-X. WSJT-X must have 'Accept UDP requests' ticked (Settings > Reporting). Enable Tx cannot be sent remotely.">
+          title="When on, Abort and Finish send Halt Tx to WSJT-X. WSJT-X must have 'Accept UDP requests' ticked (Settings > Reporting). Losing aircraft tracking does not automatically halt Tx.">
           <input type="checkbox" checked={controlWsjtx} onChange={(e) => setControlWsjtx(e.target.checked)} />
           Halt WSJT-X Tx on Abort/Finish
         </label>

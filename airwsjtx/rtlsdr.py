@@ -18,6 +18,9 @@ from typing import Callable
 from airwsjtx.adsb import ADSBDecoder, crc_ok
 from airwsjtx.airscout import Aircraft
 
+_TERMINATE_TIMEOUT_S = 10
+_KILL_TIMEOUT_S = 2
+
 
 def tools_directory() -> Path:
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1] / "sidecar"))
@@ -232,7 +235,9 @@ class LocalRTLSDRFeed:
         self.supported_gains_db = list(gains) if isinstance(gains, list) else []
         self.decoder = ADSBDecoder()
         self._lock = threading.Lock()
+        self._process_lock = threading.Lock()
         self._stop = threading.Event()
+        self._termination_pending = False
         self._process: subprocess.Popen[str] | None = None
         self._job: _ReceiverJob | None = None
         self._threads: list[threading.Thread] = []
@@ -302,19 +307,48 @@ class LocalRTLSDRFeed:
             self._threads.append(thread)
             thread.start()
 
+    def _terminate_process(self, process: subprocess.Popen[str]) -> int | None:
+        with self._process_lock:
+            code = process.poll()
+            if code is not None:
+                self._termination_pending = False
+                return code
+            if self._termination_pending:
+                return None
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                return process.wait(timeout=_TERMINATE_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    return process.wait(timeout=_KILL_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    self._termination_pending = True
+                    return None
+
     def stop(self) -> None:
         self._stop.set()
         process = self._process
         if process is not None:
-            if process.poll() is None:
-                # Windows closes this process's USB handles on termination; on POSIX SIGTERM lets
-                # the helper cancel and close the device itself. No other PID is touched.
-                process.terminate()
             try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                code = self._terminate_process(process)
+            except OSError as error:
+                message = f"Cannot stop the RTL-SDR receiver: {error}. Check the USB connection."
+                self._status("error", message)
+                self.on_update([])
+                raise RuntimeError(message) from error
+            if code is None:
+                message = ("RTL-SDR receiver is still blocked in USB I/O after termination. "
+                           "Disconnect and reconnect the dongle, then stop the receiver again.")
+                self._status("error", message)
+                self.on_update([])
+                raise RuntimeError(message)
         for thread in self._threads:
             if thread is not threading.current_thread():
                 thread.join(timeout=10)
@@ -372,25 +406,38 @@ class LocalRTLSDRFeed:
                     self._stderr.append(line.strip())
 
     def _report(self) -> None:
-        assert self._process is not None
+        process = self._process
+        assert process is not None
         while not self._stop.wait(1):
-            code = self._process.poll()
+            code = process.poll()
             with self._lock:
                 diagnostics = " ".join(self._stderr)
             failed = any(word in diagnostics.lower() for word in ("failed", "error", "no supported devices"))
             if code is not None or failed:
+                termination_error = None
                 if code is None:
-                    self._process.terminate()
-                    code = self._process.wait(timeout=10)
-                # Readers finish before exposing the final native diagnostic.
-                for thread in self._threads[:2]:
-                    thread.join(timeout=2)
+                    try:
+                        code = self._terminate_process(process)
+                    except OSError as error:
+                        termination_error = str(error)
+                if self._stop.is_set():
+                    return
+                if code is not None:
+                    # Readers finish before exposing the final native diagnostic.
+                    for thread in self._threads[:2]:
+                        thread.join(timeout=2)
                 with self._lock:
                     diagnostics = " ".join(self._stderr)
                 hint = ("Check WinUSB for Bulk-In Interface 0, unplugged hardware, or another app using the dongle."
                         if sys.platform == "win32" else
-                        "Check for unplugged hardware or another app using the dongle.")
-                self._status("error", f"RTL-SDR exited ({code}). {diagnostics} {hint}")
+                        "Check the USB connection or another app using the dongle.")
+                if termination_error:
+                    message = f"Could not stop the RTL-SDR receiver: {termination_error}. {diagnostics} {hint}"
+                elif code is None:
+                    message = f"RTL-SDR receiver is still blocked in USB I/O after termination. {diagnostics} {hint}"
+                else:
+                    message = f"RTL-SDR exited ({code}). {diagnostics} {hint}"
+                self._status("error", message)
                 self.on_update([])
                 return
             with self._lock:

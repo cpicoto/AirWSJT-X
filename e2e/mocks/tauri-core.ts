@@ -105,6 +105,14 @@ const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown
     },
   }),
   wsjtx_set_rig_name_filter: () => null,
+  wsjtx_request_status: () => ({ requested: false }),
+  start_qso: params => {
+    Object.assign(window, { __mockState: "active_qso" });
+    return {
+      state: "active_qso",
+      qso: { stage: "preparing", message: `Waiting for WSJT-X to confirm ${params.dx_call}`, dx_call: params.dx_call },
+    };
+  },
   lock_aircraft: params => {
     Object.assign(window, { __mockLockRequest: params.icao24 });
     return null;

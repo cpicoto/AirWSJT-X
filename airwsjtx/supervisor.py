@@ -42,12 +42,15 @@ class AirWSJTXSupervisor:
         band_mhz: float,
         frequency_hz: int,
         tracks: list[AircraftTrack],
+        allow_unconfigured_tracking: bool = False,
     ) -> str:
-        if not self.wsjtx.supports_band(band_mhz):
-            raise ValueError("Band below 23cm automation threshold.")
+        qso_band_supported = self.wsjtx.supports_band(band_mhz)
+        if not qso_band_supported and not allow_unconfigured_tracking:
+            raise ValueError("QSO control requires 2 m (144 MHz) or higher.")
 
         self.session.set_stations(station_a, station_b)
         self.rotator.reset()
+        self.wsjtx.clear_configuration()
         ranked = self.tracker.rank_candidates(tracks)
         if not ranked:
             raise ValueError("No viable aircraft candidates.")
@@ -61,12 +64,14 @@ class AirWSJTXSupervisor:
         self._selected_track = selected
         self._track_cursor = 0
         self.session.lock_aircraft(best.aircraft_id)
-        self.wsjtx.configure_q65_15s(
-            band_mhz=band_mhz,
-            frequency_hz=frequency_hz,
-            psk_reporter_enabled=True,
-        )
-        return self.profile.discoverability_hint(band_mhz)
+        if qso_band_supported:
+            self.wsjtx.configure_q65_15s(
+                band_mhz=band_mhz,
+                frequency_hz=frequency_hz,
+                psk_reporter_enabled=True,
+            )
+            return self.profile.discoverability_hint(band_mhz)
+        return "Aircraft tracking is available; tune WSJT-X to 2 m or higher to prepare a QSO."
 
     def update_tracking(self, current_azimuth_deg: float, current_elevation_deg: float) -> RotatorCommand:
         if self._selected_track is None:
@@ -87,19 +92,15 @@ class AirWSJTXSupervisor:
 
     def operator_start_qso(self) -> None:
         if not self.wsjtx.is_ready_for_qso():
-            raise ValueError("WSJT-X must be configured for Q65-15s on a supported 23cm+ band before starting a QSO.")
+            raise ValueError("WSJT-X must be configured for Q65-15s on 2 m or higher before starting a QSO.")
         self.session.start_qso()
-        self.wsjtx.set_ptt(True)
 
     def finish_qso(self, abort: bool = False) -> None:
         if abort:
             if self.session.state in (SessionState.COMPLETED, SessionState.ABORTED):
                 raise ValueError("Cannot abort a terminal session.")
-            if self.session.state == SessionState.ACTIVE_QSO:
-                self.wsjtx.set_ptt(False)
             self.session.abort()
         else:
             if self.session.state != SessionState.ACTIVE_QSO:
                 raise ValueError("Cannot complete QSO before it starts.")
-            self.wsjtx.set_ptt(False)
             self.session.complete()

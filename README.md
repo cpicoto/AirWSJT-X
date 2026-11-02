@@ -51,11 +51,17 @@ All platforms are built from CI on every tagged release.
 
 ### Desktop Mode
 
-The desktop app coordinates WSJT-X, your rotator, and aircraft tracking into an automated scatter workflow. Q65-15s operation requires two configured stations, a locked aircraft, stable rotator lock, a supported 23 cm+ band, and explicit operator start.
+The desktop app coordinates WSJT-X, your rotator, and aircraft tracking into an assisted scatter workflow. The current QSO control supports Q65-15s on 2 m (144 MHz) and higher; it prepares and verifies the selected DX, requests an atomic direct call, and tracks the exchange.
 
 When multiple WSJT-X instances are on the network, the **Rig** dropdown selects a discovered instance by ID or config name. **Any rig** accepts the first source.
 
-**Start QSO** marks the app's session as active; it does not enable transmission. Press **Enable Tx** in WSJT-X to transmit. By default, **Abort** and **Finish QSO** only update the app's session. The optional **Halt WSJT-X Tx on Abort/Finish** checkbox also sends Halt Tx to the selected WSJT-X instance; enable **Accept UDP requests** in WSJT-X's **Settings > Reporting** to use it. If delivery fails, use **Halt Tx** in WSJT-X itself. A QSO Logged message from the selected instance automatically completes an active app session.
+To start, select a DX callsign/grid, lock a viable aircraft, disable Tx in WSJT-X, then click **Start QSO**. AirWSJT-X requests Q65-15 and the selected DX, asks WSJT-X to replay its status, and waits for a subsequent matching status from that same WSJT-X address before proceeding. The replay is needed even when the settings already match; it can also repopulate older decodes. Matching status confirms the observed settings, not that the configuration command was accepted.
+
+After verification AirWSJT-X sends one **StartDxTx** request (UDP message type 18). This requires a WSJT-X build with the atomic StartDxTx extension; upstream WSJT-X and builds with only the older type-17 EnableTx extension ignore it. The compatible WSJT-X build validates the station, frequency, mode and DX, generates and checks the direct-call Tx1 message, selects it, enables Tx and returns a result. It rejects the request if Tx1 cannot safely address the selected stations; it does not fall back to Tx2. It leaves the operator's **Tx even/1st** setting unchanged, so check that setting before starting.
+
+The QSO indicator confirms the direct call only after a matching successful result from the selected WSJT-X instance. A timeout is **unconfirmed**, not proof that Tx is off: the request might have succeeded and its result been lost. Check WSJT-X and stop Tx if needed before re-arming. AirWSJT-X does not automatically retry with EnableTx or Reply. Enable **Accept UDP requests** in **Settings > Reporting** to allow configuration, StartDxTx, and optional Halt Tx commands.
+
+The QSO indicator follows WSJT-X's observed transmit state and matching decoded exchange after the direct call is accepted, and reports when the selected rig logs the selected DX. An observed final exchange is not considered complete until WSJT-X sends the matching **QSO Logged** event. WSJT-X turning Tx off after the final exchange does not suspend the QSO. A disconnect, a change to the verified operating context, loss of the tracked aircraft, or Tx being turned off before the exchange stops QSO assistance; check the rig before re-arming. Losing the aircraft does not automatically halt WSJT-X Tx. By default, **Abort** and **Finish QSO** only update the app's session. The optional **Halt WSJT-X Tx on Abort/Finish** checkbox also sends Halt Tx to the selected WSJT-X instance; if delivery fails, use **Halt Tx** in WSJT-X itself.
 
 The compass outer ring marks the DX station's bearing and callsign. Candidate aircraft use the legacy geometry ranking by default; **Best-path ranking** also offers range-product and window-weighted alternatives. See [Plane scoring](docs/plane-scoring.md) for the criteria and limitations. The [User guide](docs/user-guide.md) covers the Stations panel and DX favorites list. **Auto** mode follows the locked aircraft; **Manual** mode accepts operator pointing commands instead. **Sync** in Manual mode aligns the displayed target with the reported rotator position without moving it. Turning rotor control off blocks new movement commands; **Stop** remains available to stop an existing move.
 
@@ -87,7 +93,7 @@ AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/D
 
 ### WSJT-X Setup
 
-1. In WSJT-X **Settings > Reporting**, set the UDP server to `224.0.0.1` and port `2237`
+1. In WSJT-X **Settings > Reporting**, set the UDP server to `224.0.0.1` and port `2237`. Enable **Accept UDP requests** for DX configuration, the atomic StartDxTx request and optional Halt Tx. Starting a direct call requires a WSJT-X build with the StartDxTx extension; confirm the **Tx even/1st** setting in WSJT-X
 2. In AirWSJT-X, select your rig from the **Rig** dropdown (or **Any rig**)
 3. Configure **MY callsign** and **MY grid** in the Stations panel (or let WSJT-X provide them)
 4. On Windows, allow AirWSJT-X and its Python sidecar through Windows Firewall
@@ -108,8 +114,8 @@ AirWSJT-X continues listening on `2237`. Keep Log4OM running for this route:
 Alternatively, use the same multicast group and port in every receiver, but only
 if all installed applications support multicast. Do not assume an older logger
 supports it. Receiving status and decodes does not require enabling **Accept UDP
-requests**; leave that option unchanged unless you need the optional Halt Tx
-control described above. A one-way proxy does not establish that Halt Tx works.
+requests**. A one-way proxy does not establish that configuration, Reply, or Halt
+Tx commands work.
 
 ### Aircraft Data Sources
 
@@ -150,6 +156,11 @@ retrying**. Blacklisting alone does not unload an already-loaded driver.
 Blacklisting affects other receivers using that driver and prevents normal DVB-TV
 use; only do it if that tradeoff is intended. AirWSJT-X makes none of these host
 permission or driver changes itself.
+
+If a USB error leaves the receiver helper blocked, the app reports the failure
+instead of claiming the device was released. Reconnect the dongle, stop the
+receiver, then use **Discover USB receivers** and **Start local ADS-B** to retry.
+Linux may reattach the DVB driver when the dongle is reconnected.
 
 #### Validated RTL-SDR receivers
 

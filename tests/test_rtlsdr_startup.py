@@ -95,6 +95,22 @@ class ReceiverStartupTests(unittest.TestCase):
             bridge._auto_start_rtlsdr()
             discover.assert_not_called()
 
+    def test_blocked_receiver_reports_error_without_starting_another_source(self):
+        bridge._rtlsdr_startup_attempted = True
+        bridge._rtlsdr_startup_network_priority = ["opensky"]
+        bridge._active_source = "rtlsdr"
+        bridge._source_priority = ["rtlsdr", "opensky"]
+        bridge._rtlsdr_feed = Mock()
+        bridge._rtlsdr_feed.snapshot.return_value = {"state": "error", "message": "USB removed"}
+        with patch.object(bridge, "_stop_source", side_effect=RuntimeError("USB still blocked")), \
+                patch.object(bridge, "_set_source_status") as status, \
+                patch.object(bridge, "_start_configured_airscout_feed") as network:
+            bridge._recover_startup_receiver_failure()
+            status.assert_called_once_with("rtlsdr", "error", "USB still blocked")
+            network.assert_not_called()
+            self.assertEqual(bridge._active_source, "rtlsdr")
+            self.assertIsNotNone(bridge._rtlsdr_feed)
+
     def test_manual_start_before_automatic_attempt_is_not_restarted(self):
         bridge._rtlsdr_feed = Mock()
         with patch.object(bridge, "discover_devices") as discover:

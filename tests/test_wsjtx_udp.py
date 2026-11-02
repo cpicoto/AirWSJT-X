@@ -9,9 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from airwsjtx.wsjtx_udp import (
-    MSG_DECODE, MSG_HALT_TX, MSG_HEARTBEAT, MSG_QSO_LOGGED, MSG_STATUS, WSJTX_MAGIC,
-    WSJTXDecode, WSJTXListener, WSJTXQsoLogged, WSJTXStatus, parse_decode,
-    parse_qso_logged, parse_status,
+    MSG_CONFIGURE, MSG_DECODE, MSG_HALT_TX, MSG_HEARTBEAT, MSG_QSO_LOGGED, MSG_REPLAY, MSG_REPLY,
+    MSG_START_DX_TX, MSG_START_DX_TX_RESULT, MSG_STATUS, WSJTX_MAGIC, WSJTXDecode, WSJTXListener,
+    WSJTXQsoLogged, WSJTXStartDxTxResult, WSJTXStatus, parse_decode, parse_qso_logged,
+    parse_start_dx_tx_result, parse_status,
 )
 
 
@@ -53,14 +54,14 @@ def _build_status_packet(mode: str | None, tr_period: int) -> bytes:
     )
 
 
-def _build_decode_packet(time_ms: int) -> bytes:
+def _build_decode_packet(time_ms: int, mode: str = "FT8", message: str = "CQ K7MDL CN87") -> bytes:
     return b"".join(
         [
             struct.pack(">III", WSJTX_MAGIC, 2, MSG_DECODE),
             _enc_str("WSJT-X"),
             struct.pack(">BIidI", 1, time_ms, -10, 0.2, 1000),
-            _enc_str("FT8"),
-            _enc_str("CQ K7MDL CN87"),
+            _enc_str(mode),
+            _enc_str(message),
             b"\x00\x00",
         ]
     )
@@ -93,6 +94,20 @@ def _make_status(app_id: str, config_name: str | None = None) -> WSJTXStatus:
 
 
 class WSJTXStatusParsingTests(unittest.TestCase):
+    def test_status_parses_optional_last_tx_message(self) -> None:
+        st = parse_status(_build_status_packet("Q65", 15) + _enc_str("CQ K7MDL CN87"))
+        self.assertIsNotNone(st)
+        assert st is not None
+        self.assertEqual(st.tx_message, "CQ K7MDL CN87")
+        older = parse_status(_build_status_packet("Q65", 15))
+        self.assertIsNotNone(older)
+        assert older is not None
+        self.assertIsNone(older.tx_message)
+
+    def test_status_rejects_truncated_optional_tx_message(self) -> None:
+        packet = _build_status_packet("Q65", 15) + struct.pack(">I", 12) + b"CQ"
+        self.assertIsNone(parse_status(packet))
+
     def test_status_maps_fixed_modes_unset_period_to_default(self) -> None:
         for unset in (-1, 0):
             for mode, expected in (("FT8", 15.0), ("FT4", 7.5), ("FT2", 2.5), ("JT65", 60.0)):
@@ -192,6 +207,72 @@ class WSJTXQsoLoggedTests(unittest.TestCase):
         logged.assert_called_once_with(parse_qso_logged(self._packet("WSJT-X - Rig-A")))
 
 
+class WSJTXStartDxTxResultTests(unittest.TestCase):
+    @staticmethod
+    def _packet(
+        *, app_id: str = "WSJT-X", request_id: int = 42, accepted: int = 1,
+        reason: str | None = "", tx_message: str | None = "W7PUA K7MDL CN87",
+    ) -> bytes:
+        return b"".join([
+            struct.pack(">III", WSJTX_MAGIC, 2, MSG_START_DX_TX_RESULT),
+            _enc_str(app_id),
+            struct.pack(">IB", request_id, accepted),
+            _enc_str(reason),
+            _enc_str(tx_message),
+        ])
+
+    def test_parses_accepted_and_rejected_results(self) -> None:
+        self.assertEqual(
+            parse_start_dx_tx_result(self._packet()),
+            WSJTXStartDxTxResult("WSJT-X", 42, True, "", "W7PUA K7MDL CN87"),
+        )
+        self.assertEqual(
+            parse_start_dx_tx_result(self._packet(
+                accepted=0, reason="dx_call_mismatch", tx_message="",
+            )),
+            WSJTXStartDxTxResult("WSJT-X", 42, False, "dx_call_mismatch", ""),
+        )
+
+    def test_parses_qt_null_empty_result_fields(self) -> None:
+        self.assertEqual(
+            parse_start_dx_tx_result(self._packet(reason=None)),
+            WSJTXStartDxTxResult("WSJT-X", 42, True, "", "W7PUA K7MDL CN87"),
+        )
+        self.assertEqual(
+            parse_start_dx_tx_result(self._packet(
+                accepted=0, reason="tx1_unavailable", tx_message=None,
+            )),
+            WSJTXStartDxTxResult("WSJT-X", 42, False, "tx1_unavailable", ""),
+        )
+
+    def test_rejects_malformed_or_contradictory_results(self) -> None:
+        packets = (
+            self._packet()[:-1],
+            self._packet(accepted=2),
+            self._packet(accepted=1, tx_message=""),
+            self._packet(accepted=1, reason="rejected"),
+            self._packet(accepted=0, reason="", tx_message=""),
+            self._packet(accepted=0, reason="rejected", tx_message="CQ"),
+            self._packet(accepted=1, tx_message=None),
+            self._packet(accepted=0, reason=None, tx_message=None),
+        )
+        for packet in packets:
+            with self.subTest(packet=packet):
+                self.assertIsNone(parse_start_dx_tx_result(packet))
+
+    def test_dispatches_the_result_with_its_source_address(self) -> None:
+        callback = Mock()
+        listener = WSJTXListener(on_start_dx_tx_result=callback)
+        listener._active_app_id = "WSJT-X"
+        source = ("127.0.0.1", 50123)
+        self.assertTrue(listener._handle_datagram(self._packet(), source))
+        callback.assert_called_once_with(WSJTXStartDxTxResult(
+            "WSJT-X", 42, True, "", "W7PUA K7MDL CN87", source,
+        ))
+        self.assertFalse(listener._handle_datagram(self._packet(app_id="WSJT-X - Other"), source))
+        callback.assert_called_once()
+
+
 class WSJTXListenerFilterTests(unittest.TestCase):
     def test_without_filter_accepts_any_source(self) -> None:
         listener = WSJTXListener()
@@ -236,7 +317,6 @@ class WSJTXListenerFilterTests(unittest.TestCase):
             on_decode=on_decode,
             on_connected=lambda app: connected.append(app),
         )
-        # ACLog heartbeat should be completely ignored
         aclog_hb = (
             struct.pack(">III", WSJTX_MAGIC, 2, MSG_HEARTBEAT)
             + _enc_str("ACLog") + struct.pack(">I", 3)
@@ -247,7 +327,6 @@ class WSJTXListenerFilterTests(unittest.TestCase):
         self.assertFalse(listener._connected)
         self.assertEqual(connected, [])
 
-        # Third-party utilities (JTAlert, GridTracker, Log4OM, N1MM) should also be ignored
         for companion in ("JTAlert", "GridTracker", "Log4OM", "N1MM"):
             pkt = (
                 struct.pack(">III", WSJTX_MAGIC, 2, MSG_HEARTBEAT)
@@ -257,7 +336,6 @@ class WSJTXListenerFilterTests(unittest.TestCase):
             self.assertFalse(listener._handle_datagram(pkt))
             self.assertEqual(listener.get_known_rigs(), [])
 
-        # Legitimate WSJT-X heartbeat connects and is remembered
         wsjtx_hb = (
             struct.pack(">III", WSJTX_MAGIC, 2, MSG_HEARTBEAT)
             + _enc_str("WSJT-X") + struct.pack(">I", 3)
@@ -267,6 +345,104 @@ class WSJTXListenerFilterTests(unittest.TestCase):
         self.assertEqual(listener.get_known_rigs(), [{"app_id": "WSJT-X", "config_name": None}])
         self.assertTrue(listener._connected)
         self.assertEqual(connected, ["WSJT-X"])
+
+
+def _read_str(data: bytes, offset: int) -> tuple[str | None, int]:
+    length = struct.unpack_from(">I", data, offset)[0]
+    offset += 4
+    if length == 0xFFFFFFFF:
+        return None, offset
+    return data[offset:offset + length].decode(), offset + length
+
+
+class WSJTXControlMessageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.listener = WSJTXListener()
+        self.socket = Mock()
+        self.listener._query_sock = self.socket
+        self.listener._active_app_id = "WSJT-X"
+        destination = ("127.0.0.1", 2240)
+        self.listener._last_active_addr = destination
+        self.listener._client_addrs = {"WSJT-X": {destination: time.monotonic()}}
+
+    def test_configure_sends_q65_dx_and_standard_message_generation(self) -> None:
+        self.assertTrue(self.listener.send_configure(dx_call="W7PUA", dx_grid="CN84"))
+        packet = self.socket.sendto.call_args.args[0]
+        self.assertEqual(struct.unpack_from(">III", packet), (WSJTX_MAGIC, 2, MSG_CONFIGURE))
+        offset = 12
+        app_id, offset = _read_str(packet, offset)
+        mode, offset = _read_str(packet, offset)
+        self.assertEqual((app_id, mode), ("WSJT-X", "Q65"))
+        self.assertEqual(struct.unpack_from(">I", packet, offset)[0], 0xFFFFFFFF)
+        offset += 4
+        submode, offset = _read_str(packet, offset)
+        self.assertEqual(submode, "")
+        self.assertEqual(packet[offset], 0)
+        offset += 1
+        self.assertEqual(struct.unpack_from(">I", packet, offset)[0], 15)
+        offset += 4 + 4
+        dx_call, offset = _read_str(packet, offset)
+        dx_grid, offset = _read_str(packet, offset)
+        self.assertEqual((dx_call, dx_grid, packet[offset]), ("W7PUA", "CN84", 1))
+
+    def test_reply_uses_the_matching_decode_fields(self) -> None:
+        decode = WSJTXDecode(
+            app_id="WSJT-X",
+            is_new=True,
+            time_ms=1234,
+            snr=-12,
+            delta_time_s=0.25,
+            delta_freq_hz=1500,
+            mode=":",
+            message="CQ W7PUA CN84",
+            low_confidence=False,
+            off_air=False,
+            source_addr=("127.0.0.1", 2240),
+        )
+        self.assertTrue(self.listener.send_reply(decode))
+        packet = self.socket.sendto.call_args.args[0]
+        self.assertEqual(struct.unpack_from(">III", packet), (WSJTX_MAGIC, 2, MSG_REPLY))
+        offset = 12
+        _, offset = _read_str(packet, offset)
+        self.assertEqual(struct.unpack_from(">IidI", packet, offset), (1234, -12, 0.25, 1500))
+        offset += 20
+        mode, offset = _read_str(packet, offset)
+        message, offset = _read_str(packet, offset)
+        self.assertEqual((mode, message, packet[offset], packet[offset + 1]), (":", "CQ W7PUA CN84", 0, 0))
+
+    def test_wire_q65_decode_reaches_bridge_without_sending_reply(self) -> None:
+        from dataclasses import replace
+
+        from airwsjtx.wsjtx_qso import WSJTXQsoAssistant
+        from sidecar import airwsjtx_bridge as bridge
+
+        assistant = WSJTXQsoAssistant()
+        assistant.arm(
+            dx_call="W7PUA", dx_grid="CN84", my_call="K7MDL", app_id="WSJT-X",
+            source_addr=("127.0.0.1", 2240),
+        )
+        assistant.configuration_requested(0.0)
+        assistant.observe_status(replace(
+            _make_status("WSJT-X"), dx_call="W7PUA", dx_grid="CN84", de_call="K7MDL",
+            source_addr=("127.0.0.1", 2240),
+        ))
+        assistant.mark_start_requested(42)
+        assistant.observe_start_result(WSJTXStartDxTxResult(
+            "WSJT-X", 42, True, "", "W7PUA K7MDL CN87", ("127.0.0.1", 2240),
+        ))
+        packet = _build_decode_packet(1234, ":", "K7MDL W7PUA -10")
+        self.listener.on_decode = bridge._on_wsjtx_decode
+        with (
+            patch.object(bridge, "_qso_assistant", assistant),
+            patch.object(bridge, "_wsjtx_listener", self.listener),
+            patch.object(bridge, "_qso_tracking_viable_locked", return_value=True),
+            patch.object(bridge, "_emit"),
+            patch("sidecar.airwsjtx_bridge.threading.Timer"),
+        ):
+            self.assertTrue(self.listener._handle_datagram(packet, ("127.0.0.1", 2240)))
+
+        self.socket.sendto.assert_not_called()
+        self.assertEqual(assistant.snapshot().stage, "exchange")
 
 
 
@@ -721,6 +897,115 @@ class WSJTXListenerCommandTests(unittest.TestCase):
         self.assertTrue(listener.send_halt_tx())
         expected = self._header(8, "WSJT-X") + b"\x00"
         sock.sendto.assert_called_once_with(expected, ("127.0.0.1", 50123))
+
+    def test_halt_tx_can_target_one_specific_wsjtx_instance(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        target = ("127.0.0.1", 50123)
+        other = ("127.0.0.1", 50124)
+        listener._client_addrs["WSJT-X"] = {target: time.monotonic(), other: time.monotonic()}
+        self.assertTrue(listener.send_halt_tx(app_id="WSJT-X", destination=target))
+        sock.sendto.assert_called_once_with(self._header(8, "WSJT-X") + b"\x00", target)
+
+    def test_replay_requests_status_only_from_the_selected_address(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        target = ("127.0.0.1", 50123)
+        other = ("127.0.0.1", 50124)
+        listener._client_addrs["WSJT-X"] = {target: time.monotonic(), other: time.monotonic()}
+        listener._last_active_addr = target
+        self.assertTrue(listener.send_replay(app_id="WSJT-X"))
+        self.assertFalse(listener.send_replay(app_id="WSJT-X - Other", destination=target))
+        self.assertFalse(listener.send_replay(app_id="WSJT-X", destination=("127.0.0.1", 50125)))
+        sock.sendto.assert_called_once_with(self._header(MSG_REPLAY, "WSJT-X"), target)
+
+    def test_connected_callback_can_request_replay_immediately(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        listener.on_connected = lambda app_id: listener.send_replay(app_id=app_id)
+        heartbeat = struct.pack(">I", 2) + struct.pack(">I", 0xFFFFFFFF) * 2
+        target = ("127.0.0.1", 50123)
+        self.assertTrue(listener._handle_datagram(self._header(0, "WSJT-X") + heartbeat, target))
+        sock.sendto.assert_called_once_with(self._header(MSG_REPLAY, "WSJT-X"), target)
+
+    def test_enable_tx_is_type_17_with_only_the_id_and_targets_the_active_address(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        heartbeat = struct.pack(">I", 2) + struct.pack(">I", 0xFFFFFFFF) * 2
+        listener._handle_datagram(self._header(0, "WSJT-X") + heartbeat, ("127.0.0.1", 50123))
+        listener._client_addrs["WSJT-X"][("127.0.0.1", 50124)] = time.monotonic() - 1
+        self.assertTrue(listener.send_enable_tx())
+        sock.sendto.assert_called_once_with(self._header(17, "WSJT-X"), ("127.0.0.1", 50123))
+
+    def test_enable_tx_needs_a_connected_instance(self) -> None:
+        listener, sock = self._listener_with_socket(None)
+        self.assertFalse(listener.send_enable_tx())
+        sock.sendto.assert_not_called()
+
+    def test_enable_tx_never_broadcasts_when_active_address_is_missing(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        listener._client_addrs["WSJT-X"] = {
+            ("127.0.0.1", 50123): time.monotonic(),
+            ("127.0.0.1", 50124): time.monotonic(),
+        }
+        self.assertFalse(listener.send_enable_tx())
+        sock.sendto.assert_not_called()
+
+    def test_enable_tx_requires_the_expected_instance_and_exact_address(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        target = ("127.0.0.1", 50123)
+        other = ("127.0.0.1", 50124)
+        listener._client_addrs["WSJT-X"] = {target: time.monotonic(), other: time.monotonic()}
+        listener._last_active_addr = other
+        self.assertFalse(listener.send_enable_tx(app_id="WSJT-X - Other", destination=target))
+        self.assertFalse(listener.send_enable_tx(app_id="WSJT-X", destination=("127.0.0.1", 50125)))
+        sock.sendto.assert_not_called()
+        self.assertTrue(listener.send_enable_tx(app_id="WSJT-X", destination=target))
+        sock.sendto.assert_called_once_with(self._header(17, "WSJT-X"), target)
+
+    def test_start_dx_tx_uses_the_exact_contract_and_single_destination(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        target = ("127.0.0.1", 50123)
+        other = ("127.0.0.1", 50124)
+        listener._client_addrs["WSJT-X"] = {target: time.monotonic(), other: time.monotonic()}
+        fields = {
+            "request_id": 42, "app_id": "WSJT-X", "destination": target,
+            "de_call": "K7MDL", "freq_hz": 1_296_150_000, "dx_call": "W7PUA",
+            "dx_grid": "CN84AB", "mode": "Q65", "sub_mode": "C", "tr_period": 15,
+        }
+        self.assertTrue(listener.send_start_dx_tx(**fields))
+        packet, destination = sock.sendto.call_args.args
+        self.assertEqual(destination, target)
+        expected = b"".join([
+            self._header(MSG_START_DX_TX, "WSJT-X"),
+            struct.pack(">I", 42),
+            _enc_str("K7MDL"),
+            struct.pack(">Q", 1_296_150_000),
+            _enc_str("W7PUA"), _enc_str("CN84AB"), _enc_str("Q65"), _enc_str("C"),
+            struct.pack(">I", 15),
+        ])
+        self.assertEqual(packet, expected)
+        self.assertFalse(listener.send_start_dx_tx(**{**fields, "app_id": "WSJT-X - Other"}))
+        self.assertFalse(listener.send_start_dx_tx(**{**fields, "destination": ("127.0.0.1", 50125)}))
+        self.assertFalse(listener.send_start_dx_tx(**{**fields, "request_id": 0}))
+        sock.sendto.assert_called_once()
+
+    def test_command_address_survives_the_normal_wsjtx_heartbeat_interval(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        target = ("127.0.0.1", 50123)
+        listener._client_addrs["WSJT-X"] = {target: 88.0}
+        listener._last_active_addr = target
+        with patch("airwsjtx.wsjtx_udp.time.monotonic", return_value=100.0):
+            self.assertTrue(listener.send_configure(dx_call="W7PUA", dx_grid="CN84"))
+        self.assertEqual(sock.sendto.call_args.args[1], target)
+
+    def test_reply_targets_only_the_source_of_the_matching_decode(self) -> None:
+        listener, sock = self._listener_with_socket("WSJT-X")
+        on_decode = Mock()
+        listener.on_decode = on_decode
+        listener._handle_datagram(_build_decode_packet(1234), ("127.0.0.1", 50123))
+        decode = on_decode.call_args.args[0]
+        listener._client_addrs["WSJT-X"][("127.0.0.1", 50124)] = time.monotonic()
+
+        self.assertTrue(listener.send_reply(decode))
+        self.assertEqual(sock.sendto.call_count, 1)
+        self.assertEqual(sock.sendto.call_args.args[1], ("127.0.0.1", 50123))
 
     def test_halt_tx_needs_a_known_wsjtx_address(self) -> None:
         listener, sock = self._listener_with_socket("WSJT-X")
