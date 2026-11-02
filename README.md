@@ -413,6 +413,15 @@ C Runtime, so Windows bundles exclude `ucrtbase.dll` and `api-ms-win-crt-*.dll`
 while retaining the Python and Visual C++ runtimes. UPX compression and stripping
 are disabled to preserve the collected DLLs.
 
+Pull requests also run the `linux-arm64-desktop` job on a native
+`ubuntu-24.04-arm` GitHub runner. It builds the RTL-SDR runtime and frozen Python
+sidecar, runs Python/native I/Q replay and Rust tests, builds ARM64
+AppImage/DEB/RPM packages, and checks the app, sidecar, and embedded receiver ELF
+architectures. The frozen backend must answer `get_status` and `rtlsdr_status`
+from outside the checkout. Download the `linux-arm64-desktop` workflow artifact
+for installation testing. This does not validate graphical startup, audio, or
+live USB reception; those still need an ARM64 Linux desktop with a real receiver.
+
 Windows uses an installed-directory runtime rather than extracting Python DLLs
 to temporary `_MEI...` paths. Stage the output and include the Windows desktop
 configuration when packaging (for ARM64, use the dedicated commands below):
