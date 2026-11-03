@@ -150,7 +150,8 @@ class PiperSpeechTests(unittest.TestCase):
         import tempfile
         gate, stop_server = threading.Event(), threading.Event()
         positions, disconnects, errors, commands = [], [], [], []
-        with socket.socket() as server, tempfile.TemporaryDirectory() as directory:
+        with socket.socket() as server, tempfile.TemporaryDirectory() as directory, \
+                patch("airwsjtx.speech.sys.platform", "linux"):
             server.bind(("127.0.0.1", 0))
             server.listen(1)
             server.settimeout(2)
