@@ -1,6 +1,8 @@
 import { formatRanking, type RankingMethod } from "./lib/aircraftRanking";
+import AircraftIcon from "./AircraftIcon";
+import { aircraftBadges, aircraftOpacity, aircraftSourceLabel, aircraftTooltip, type AircraftMetadata } from "./lib/aircraftMetadata";
 
-interface LockState {
+export interface LockState extends AircraftMetadata {
   icao24: string;
   callsign: string;
   altitude_ft: number;
@@ -18,6 +20,7 @@ interface LockState {
   position_updated_epoch_s?: number | null;
   position_source?: string | null;
   position_max_age_s?: number;
+  heading_deg?: number | null;
 }
 
 interface PlaneLockPanelProps {
@@ -27,13 +30,14 @@ interface PlaneLockPanelProps {
   onAutoLockToggle: (v: boolean) => void;
   onUnlock: () => void;
   onLockAircraft: (icao24: string) => void;
-  aircraft: {
+  aircraft: (AircraftMetadata & {
     icao24: string; callsign: string; altitude_ft: number;
     scatter_score: number; az_a: number; el_a: number;
     az_b: number; el_b: number; off_path_deg: number;
     ranking_value?: number | null; ranking_reason?: string; range_gain_db?: number | null;
     ranking_window_s?: number | null; ranking_window_capped?: boolean;
-  }[];
+    heading_deg?: number | null;
+  })[];
   rankingMethod?: RankingMethod;
   sourceStatusText?: string;
   priorityFlight?: string;
@@ -179,7 +183,7 @@ export default function PlaneLockPanel({
 
       {/* Locked aircraft card */}
       {locked ? (
-        <div className="locked-plane" style={{
+        <div className="locked-plane" title={aircraftTooltip(locked)} style={{
           padding: "6px 8px", borderRadius: 8,
           border: `2px solid ${sessionState === "ready" ? "#3fb950" : "#58a6ff"}44`,
           background: sessionState === "ready"
@@ -191,6 +195,7 @@ export default function PlaneLockPanel({
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <span title={locked.callsign} style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#58a6ff",
                   flex: 1, minWidth: 0, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <AircraftIcon aircraft={locked} size={20} color="var(--accent)" />
                   {locked.callsign}
                 </span>
                 <button
@@ -263,6 +268,7 @@ export default function PlaneLockPanel({
                 <div
                   key={ac.icao24}
                   className="plane-candidate"
+                  title={aircraftTooltip(ac)}
                   data-priority-flight={isPriorityFlight || undefined}
                   onClick={() => onLockAircraft(ac.icao24)}
                   style={{
@@ -273,13 +279,15 @@ export default function PlaneLockPanel({
                     border: `1px solid ${isLocked ? "#58a6ff" : "#30363d"}`,
                     background: isLocked ? "rgba(88,166,255,0.08)" : "transparent",
                     fontSize: 12,
+                    opacity: aircraftOpacity(ac, nowEpochS),
                   }}
                 >
-                  <span style={{ color: "#8b949e", textAlign: "center" }}>{i + 1}</span>
+                  <span style={{ color: "var(--text-muted)", textAlign: "center" }}>{i + 1}</span>
                   <span title={ac.callsign} style={{ fontFamily: "monospace", fontWeight: isLocked ? 700 : 400,
                     textDecoration: isPriorityFlight ? "underline" : undefined,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     color: isLocked ? "#58a6ff" : "#c9d1d9" }}>
+                    <AircraftIcon aircraft={ac} size={18} color={scoreColor} />
                     {ac.callsign}
                   </span>
                   <span title="Altitude in feet" style={{ color: "#8b949e", textAlign: "center", whiteSpace: "nowrap" }}>
@@ -308,6 +316,11 @@ export default function PlaneLockPanel({
                     title="Off-path angle">
                     {ac.off_path_deg.toFixed(0)}°
                   </span>
+                  {(ac.position_source || aircraftBadges(ac).length > 0) && (
+                    <span style={{ gridColumn: "2 / 5", fontSize: 9, color: "var(--text-muted)" }}>
+                      {[aircraftSourceLabel(ac.position_source), ...aircraftBadges(ac)].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
                 </div>
               );
             })}

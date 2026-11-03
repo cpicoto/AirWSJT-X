@@ -1,4 +1,6 @@
-export interface Aircraft {
+import { networkMetadata, type AircraftMetadata } from "./aircraftMetadata";
+
+export interface Aircraft extends AircraftMetadata {
   icao24: string;
   callsign: string | null;
   lat: number | null;
@@ -26,6 +28,8 @@ function parseOpenSky(states: unknown[][]): Aircraft[] {
       altitude_m: geoAlt ?? baroAlt, velocity_ms: s[9] as number | null,
       heading_deg: s[10] as number | null, vertical_rate_ms: s[11] as number | null,
       on_ground: Boolean(s[8]), last_seen: now,
+      position_source: "opensky",
+      last_seen_epoch_s: typeof s[4] === "number" ? s[4] : null,
       position_updated_epoch_s: typeof s[3] === "number" ? s[3] : null,
     };
   });
@@ -72,6 +76,7 @@ export async function fetchNativeAircraft(
     const speed = number(ac.gs);
     const rate = number(ac.geom_rate) ?? number(ac.baro_rate);
     return {
+      ...networkMetadata(ac),
       icao24: ac.hex.toLowerCase(),
       callsign: typeof ac.flight === "string" ? ac.flight.trim() || null : null,
       lat: number(ac.lat), lon: number(ac.lon),
@@ -80,6 +85,10 @@ export async function fetchNativeAircraft(
       heading_deg: number(ac.track),
       vertical_rate_ms: rate === null ? null : rate * 0.00508,
       on_ground: ac.alt_baro === "ground", last_seen: Date.now(),
+      position_source: "adsbexchange",
+      last_seen_epoch_s: typeof data.now === "number" && Number.isFinite(data.now)
+        && typeof ac.seen === "number" && Number.isFinite(ac.seen) && ac.seen >= 0
+        ? data.now / 1000 - ac.seen : null,
       position_updated_epoch_s: typeof data.now === "number" && Number.isFinite(data.now)
         && typeof ac.seen_pos === "number" && Number.isFinite(ac.seen_pos) && ac.seen_pos >= 0
         ? data.now / 1000 - ac.seen_pos : null,
@@ -88,11 +97,15 @@ export async function fetchNativeAircraft(
 }
 
 export async function fetchDump1090Aircraft(host: string): Promise<Aircraft[]> {
-  const data = await invoke<{ aircraft?: (Omit<Aircraft, "last_seen"> & { position_age_s?: number | null })[] }>("fetch_mobile_dump1090", { host });
+  const data = await invoke<{ aircraft?: (Omit<Aircraft, "last_seen"> & {
+    position_age_s?: number | null; last_seen_age_s?: number | null;
+  })[] }>("fetch_mobile_dump1090", { host });
   if (!Array.isArray(data.aircraft)) throw new Error("Invalid dump1090 aircraft data");
   const now = Date.now();
   return data.aircraft.map(ac => ({
-    ...ac, last_seen: now,
+    ...ac, last_seen: now, position_source: ac.position_source ?? "dump1090",
+    last_seen_epoch_s: typeof ac.last_seen_age_s === "number" && Number.isFinite(ac.last_seen_age_s) && ac.last_seen_age_s >= 0
+      ? now / 1000 - ac.last_seen_age_s : null,
     position_updated_epoch_s: typeof ac.position_age_s === "number" && Number.isFinite(ac.position_age_s) && ac.position_age_s >= 0
       ? now / 1000 - ac.position_age_s : null,
   }));

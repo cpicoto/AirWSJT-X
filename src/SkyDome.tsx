@@ -1,8 +1,10 @@
 import { useId, useMemo, type ReactNode } from "react";
 import { isValidLocator, locatorToLatlon } from "./lib/geo";
 import { predictSkyCourse, type SkyCourseAircraft } from "./lib/skyCourse";
+import AircraftIcon from "./AircraftIcon";
+import { aircraftOpacity, aircraftTooltip, type AircraftMetadata } from "./lib/aircraftMetadata";
 
-export interface SkyDomeAircraft extends SkyCourseAircraft {
+export interface SkyDomeAircraft extends SkyCourseAircraft, AircraftMetadata {
   icao24: string;
   callsign: string;
   az_a: number;
@@ -10,6 +12,8 @@ export interface SkyDomeAircraft extends SkyCourseAircraft {
   scatter_score: number;
   range_a_km: number;
   off_path_deg: number;
+  /** False when shown for context but excluded by the candidate filters. */
+  candidate?: boolean;
 }
 
 interface SkyDomeProps {
@@ -364,17 +368,22 @@ export default function SkyDome({
           );
         })()}
 
-        {/* Aircraft dots */}
+        {/* Aircraft silhouettes and reported ground-track direction */}
         {aircraft.map((ac) => {
           const pos = project(ac.az_a, ac.el_a);
           const color = scoreColor(ac.scatter_score);
           const glow = scoreGlow(ac.scatter_score);
           const locked = ac.icao24 === selectedAircraftId;
-          const r = locked ? 8 : ac.scatter_score > 0.4 ? 6 : 4;
+          const iconSize = locked ? 36 : 32;
+          const r = iconSize / 2;
+          const heading = ac.heading_deg;
+          const hasHeading = heading != null && Number.isFinite(heading);
           return (
             <g
               key={`ac-${ac.icao24}`}
               data-aircraft-id={ac.icao24}
+              data-candidate={ac.candidate === false ? "false" : undefined}
+              opacity={aircraftOpacity(ac, Date.now() / 1000) * (ac.candidate === false ? 0.5 : 1)}
               style={{ cursor: onClickAircraft ? "pointer" : "default" }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -388,6 +397,7 @@ export default function SkyDome({
                 }
               }}
             >
+              <title>{`${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}${ac.candidate === false ? " · Outside candidate filters" : ""}`}</title>
               {/* Glow ring for high-score aircraft */}
               {glow !== "none" && (
                 <circle cx={pos.x} cy={pos.y} r={r + 4} fill={glow} />
@@ -397,17 +407,17 @@ export default function SkyDome({
                 <circle cx={pos.x} cy={pos.y} r={r + 3}
                   fill="none" stroke="#f0883e" strokeWidth={2} />
               )}
-              {/* Aircraft dot */}
-              <circle cx={pos.x} cy={pos.y} r={r} fill={color} />
-              {/* Heading indicator */}
-              {ac.heading_deg !== null && !(locked && course && !course.unavailableReason) && (
-                <line
-                  x1={pos.x} y1={pos.y}
-                  x2={pos.x + (r + 4) * Math.cos(((ac.heading_deg - 90) * Math.PI) / 180)}
-                  y2={pos.y + (r + 4) * Math.sin(((ac.heading_deg - 90) * Math.PI) / 180)}
-                  stroke={color} strokeWidth={1.5} opacity={0.7}
-                />
+              {hasHeading && (
+                <g data-aircraft-heading={ac.icao24}
+                  transform={`translate(${pos.x}, ${pos.y}) rotate(${heading})`}
+                  aria-label={`Reported heading ${Math.round(heading) % 360} degrees`}>
+                  <path d={`M0 ${-r + 2} V${-r - 13} M-4 ${-r - 8} L0 ${-r - 13} L4 ${-r - 8}`}
+                    fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+                </g>
               )}
+              <g transform={`translate(${pos.x - r}, ${pos.y - r})`}>
+                <AircraftIcon aircraft={ac} size={iconSize} color={color} />
+              </g>
               {/* Label */}
               <text
                 x={pos.x + r + 4} y={pos.y - r - 2}

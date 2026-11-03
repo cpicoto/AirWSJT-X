@@ -378,6 +378,20 @@ static void interrupted(int number)
     FLAG_SET(exiting);
 }
 
+/* A wedged USB device can block librtlsdr setup or teardown indefinitely, so
+ * the main loop's owner check alone cannot guarantee an orphan releases the
+ * dongle. Process exit always releases USB, whatever call is blocked. */
+static pid_t watchdog_owner;
+static void *owner_watchdog(void *unused)
+{
+    (void)unused;
+    while (getppid() == watchdog_owner) usleep(200000);
+    LOG("Owning bridge exited; releasing receiver.\n");
+    _exit(1);
+}
+#endif
+
+#if !defined(_WIN32) && !defined(AIRWSJTX_LIBRARY)
 /* Load only the librtlsdr shipped beside this executable; never search other paths. */
 static void *load_bundled_library(const char *name)
 {
@@ -569,6 +583,14 @@ int main(int argc, char **argv)
     if (rate != 2400000 || index < 0 || duration < 0) {
         fprintf(stderr, "dump1090-fa demodulation requires 2400000 S/s and a valid index/duration\n"); return 2;
     }
+#ifndef _WIN32
+    watchdog_owner = getppid();
+    pthread_t watchdog;
+    if (pthread_create(&watchdog, NULL, owner_watchdog, NULL)) {
+        fprintf(stderr, "Failed creating owner watchdog\n"); return 1;
+    }
+    pthread_detach(watchdog);
+#endif
     LOCK_INIT(queue_lock);
     if (!signal_init(&ready)) { fprintf(stderr, "Failed to create receive semaphore\n"); return 1; }
     if (setvbuf(stdout, NULL, _IOFBF, 65536)) {

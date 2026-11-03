@@ -37,7 +37,8 @@ from airwsjtx.hamlib_rotator import HamlibRotator, RotatorPosition
 from airwsjtx.satpc32_dde import SatPC32DDE
 from airwsjtx.adsb import AIRCRAFT_RETENTION_S, POSITION_RETENTION_S
 from airwsjtx.models import AircraftSample, AircraftTrack, Station
-from airwsjtx.ranking import RANKING_METHODS, rank_geometry, ranking_key, within_qso_window
+from airwsjtx.ranking import (RANKING_METHODS, rank_geometry, ranking_key, within_qso_window,
+                             apply_scatter_preferences, scatter_eligible)
 from airwsjtx.supervisor import AirWSJTXSupervisor
 from airwsjtx.tracking import build_track, select_best_aircraft
 from airwsjtx.wsjtx import MIN_QSO_FREQUENCY_HZ
@@ -130,6 +131,7 @@ _satpc32_dde: SatPC32DDE | None = None
 # Aircraft display filters
 _DEFAULT_FILTERS = {
     "ranking_method": "legacy",
+    "scatter_metadata": True,
     "lat_min": None,
     "lat_max": None,
     "lon_min": None,
@@ -188,6 +190,8 @@ def _read_filters() -> dict[str, float | str | bool | None]:
             result = dict(_DEFAULT_FILTERS)
             if data.get("ranking_method") in RANKING_METHODS:
                 result["ranking_method"] = data["ranking_method"]
+            if isinstance(data.get("scatter_metadata"), bool):
+                result["scatter_metadata"] = data["scatter_metadata"]
             for key in ("lat_min", "lat_max", "lon_min", "lon_max", "altitude_min_ft",
                         "heading_tolerance_deg", "position_tolerance_deg"):
                 if key in data:
@@ -201,7 +205,7 @@ def _read_filters() -> dict[str, float | str | bool | None]:
 
 def _write_filters(filters: dict[str, float | str | bool | None]) -> None:
     payload = {
-        key: value if key in ("priority_flight", "priority_flight_exclusive", "ranking_method")
+        key: value if key in ("priority_flight", "priority_flight_exclusive", "ranking_method", "scatter_metadata")
         else (None if value is None else float(value))
         for key, value in filters.items()
     }
@@ -401,7 +405,7 @@ def _qso_tracking_viable_locked(*, require_active: bool = True) -> bool:
         (ac for ac in _current_aircraft_snapshot() if ac.icao24 == _locked_aircraft_id),
         None,
     )
-    if aircraft is None or not aircraft.has_position or _position_valid_for_s(aircraft) <= 0:
+    if aircraft is None or not aircraft.has_position or not scatter_eligible(aircraft) or _position_valid_for_s(aircraft) <= 0:
         return False
     try:
         lat_a, lon_a = locator_to_latlon(_station_a_locator)
@@ -871,6 +875,11 @@ def handle(msg: dict) -> None:
                 _err(id_, "Unknown aircraft ranking method")
                 return
             next_filters["ranking_method"] = ranking_method
+            scatter_metadata = raw_filters.get("scatter_metadata", True)
+            if not isinstance(scatter_metadata, bool):
+                _err(id_, "scatter_metadata must be a boolean")
+                return
+            next_filters["scatter_metadata"] = scatter_metadata
             for key in ("lat_min", "lat_max", "lon_min", "lon_max", "altitude_min_ft",
                         "heading_tolerance_deg", "position_tolerance_deg"):
                 if key in raw_filters:
@@ -1533,8 +1542,17 @@ def _start_opensky_feed() -> None:
 
 # ─── Auto-lock / tracking helpers ────────────────────────────────────────────
 
+def _aircraft_metadata(ac: Aircraft) -> dict:
+    return {key: getattr(ac, key) for key in (
+        "category", "type_code", "registration", "description", "squawk", "emergency",
+        "db_flags", "vertical_rate_ms", "on_ground", "position_updated_epoch_s",
+        "last_seen_epoch_s",
+    )} | {"position_source": ac.position_source or _active_source, "heading_deg": ac.heading_deg}
+
+
 def _locked_aircraft_info(ac: Aircraft, geo: dict) -> dict:
     return {
+        **_aircraft_metadata(ac),
         "icao24": ac.icao24,
         "callsign": ac.callsign or ac.icao24,
         "altitude_ft": round((ac.altitude_m or 0) * 3.28084),
@@ -1575,6 +1593,8 @@ def _do_lock(icao24: str, *, manual: bool = True) -> dict | None:
         ac = next((a for a in _aircraft_cache if a.icao24 == icao24), None)
     if ac is None or not ac.has_position:
         return None
+    if not scatter_eligible(ac):
+        raise ValueError("Ground or surface targets cannot be selected for air scatter")
 
     # Compute scatter score
     geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, altitude_a, altitude_b)  # type: ignore
@@ -1676,7 +1696,7 @@ def _select_auto_lock_candidate(aircraft: list[Aircraft], *, filters: dict | Non
     method = filters.get("ranking_method", "legacy")
     now = time.time()
     for ac in aircraft:
-        if not ac.has_position or not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b, filters=filters):
+        if not ac.has_position or not scatter_eligible(ac) or not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b, filters=filters):
             continue
         if filters.get("priority_flight") and not _matches_priority_flight(ac, filters=filters):
             continue
@@ -1686,8 +1706,10 @@ def _select_auto_lock_candidate(aircraft: list[Aircraft], *, filters: dict | Non
         score = float(geo.get("scatter_score", 0.0))
         rank = rank_geometry(ac, (lat_a, lon_a, _station_a_alt_m),
                              (lat_b, lon_b, _station_b_alt_m), method, score, now)
+        rank = apply_scatter_preferences(rank, ac, now, method, enabled=filters.get("scatter_metadata", True))
         key = ranking_key(score, rank, method)
-        if score >= 0.05 and (best_key is None or key > best_key):
+        if score >= 0.05 and (best_key is None or key > best_key
+                             or (key == best_key and best_ac is not None and ac.icao24 < best_ac.icao24)):
             best_key = key
             best_ac = ac
 
@@ -1714,7 +1736,13 @@ def _update_rotator_for_locked(aircraft: list[Aircraft]) -> None:
     if not _locked_aircraft_id or not _station_a_locator:
         return
     ac = next((a for a in aircraft if a.icao24 == _locked_aircraft_id), None)
-    if ac is None or not ac.has_position:
+    if ac is None:
+        return
+    if not scatter_eligible(ac):
+        _emit({"event": "plane_out_of_window", "data": {"icao24": _locked_aircraft_id}})
+        _do_unlock()
+        return
+    if not ac.has_position:
         return
 
     try:
@@ -1793,7 +1821,7 @@ def _set_output_mode(mode: str) -> None:
 def _publish_hamlib_target(ac: Aircraft, geo: dict) -> None:
     with _output_lock:
         if (_output_mode != "hamlib" or _manual_pointing or
-                not _rotator or not _rotator.connected or _position_valid_for_s(ac) <= 0):
+                not _rotator or not _rotator.connected or not scatter_eligible(ac) or _position_valid_for_s(ac) <= 0):
             return
         az, el = float(geo["az_a"]), float(geo["el_a"])
         if math.isfinite(az) and math.isfinite(el) and 0 <= el <= 90:
@@ -1806,7 +1834,7 @@ def _prime_dde_target() -> None:
         return
     ac = next((ac for ac in _current_aircraft_snapshot()
                if ac.icao24 == _locked_aircraft_id), None)
-    if ac is None or not ac.has_position:
+    if ac is None or not ac.has_position or not scatter_eligible(ac):
         return
     lat_a, lon_a = locator_to_latlon(_station_a_locator)
     lat_b, lon_b = locator_to_latlon(_station_b_locator or _station_a_locator)
@@ -1827,7 +1855,7 @@ def _publish_dde_target(ac: Aircraft, geo: dict) -> None:
 def _publish_dde_target_locked(ac: Aircraft, geo: dict) -> None:
     if not _satpc32_dde:
         return
-    if _output_mode != "dde" or not _rotator_control_enabled or _manual_pointing or not ac.has_position:
+    if _output_mode != "dde" or not _rotator_control_enabled or _manual_pointing or not ac.has_position or not scatter_eligible(ac):
         _satpc32_dde.clear()
         return
     remaining = _position_valid_for_s(ac)
@@ -1982,7 +2010,7 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
         if max(deviations) > abs(position_tol):
             return False
 
-    if ac.heading_deg is not None and ac.velocity_ms not in (None, 0):
+    if not path_unset and ac.heading_deg is not None and ac.velocity_ms not in (None, 0):
         tolerance = filters.get("heading_tolerance_deg")
         tolerance = 30.0 if tolerance is None else float(tolerance)
         if not all(heading_within_tolerance(bearing, ac.heading_deg, tolerance) for bearing in path_bearings):
@@ -2022,13 +2050,14 @@ def _get_scatter_aircraft_with_total(*, apply_filters: bool = True, filters: dic
     results = []
     total = 0
     for ac in snapshot:
-        if not ac.has_position:
+        if not ac.has_position or not scatter_eligible(ac):
             continue
         total += 1
         geo = scatter_geometry(lat_a, lon_a, lat_b, lon_b, ac.lat, ac.lon, ac.altitude_m, _station_a_alt_m, _station_b_alt_m)  # type: ignore[arg-type]
         if apply_filters and not _aircraft_matches_filters(ac, lat_a, lon_a, lat_b, lon_b, filters=filters):
             continue
         results.append({
+            **_aircraft_metadata(ac),
             "icao24": ac.icao24,
             "callsign": ac.callsign or ac.icao24,
             "lat": round(ac.lat, 4),
@@ -2038,10 +2067,13 @@ def _get_scatter_aircraft_with_total(*, apply_filters: bool = True, filters: dic
             "velocity_kts": round(ac.velocity_ms * 1.94384) if ac.velocity_ms else None,
             "heading_deg": round(ac.heading_deg) if ac.heading_deg is not None else None,
             **geo,
-            **rank_geometry(ac, (lat_a, lon_a, _station_a_alt_m),
-                            (lat_b, lon_b, _station_b_alt_m), method, geo["scatter_score"], now),
+            **apply_scatter_preferences(
+                rank_geometry(ac, (lat_a, lon_a, _station_a_alt_m),
+                              (lat_b, lon_b, _station_b_alt_m), method, geo["scatter_score"], now),
+                ac, now, method, enabled=filters.get("scatter_metadata", True)),
         })
 
+    results.sort(key=lambda row: row["icao24"])
     results.sort(key=lambda row: ranking_key(row["scatter_score"], row, method), reverse=True)
     return results, total
 

@@ -16,6 +16,11 @@ _AVR = re.compile(r"\*([0-9A-Fa-f]{28});")
 _CHARACTERS = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ#####_###############0123456789######"
 POSITION_RETENTION_S = 120.0
 AIRCRAFT_RETENTION_S = 180.0
+# Sparse receivers may hear a velocity message only every tens of seconds; keep the reported
+# track and ground speed long enough for display and filtering, but treat vertical rate as
+# short-lived because it drives scatter preferences.
+VELOCITY_RETENTION_S = 60.0
+VERTICAL_RATE_RETENTION_S = 15.0
 
 
 def crc_ok(frame: bytes) -> bool:
@@ -105,6 +110,7 @@ class ADSBDecoder:
             self.tracks[address] = track
         aircraft = track.aircraft
         aircraft.last_seen = now
+        aircraft.last_seen_epoch_s = epoch
         value = int.from_bytes(frame, "big")
 
         def bits(start: int, length: int) -> int:
@@ -112,6 +118,9 @@ class ADSBDecoder:
 
         tc = bits(33, 5)
         if 1 <= tc <= 4:
+            # TC4=A, TC3=B, TC2=C; TC1 and CA0 carry no category information.
+            ca = bits(38, 3)
+            aircraft.category = f"{'CBA'[tc - 2]}{ca}" if tc >= 2 and ca else None
             aircraft.callsign = "".join(
                 _CHARACTERS[bits(start, 6)] for start in range(41, 89, 6)
             ).replace("_", " ").replace("#", "").strip() or None
@@ -170,8 +179,11 @@ class ADSBDecoder:
             if track.position_at is None or now - track.position_at >= POSITION_RETENTION_S:
                 aircraft.lat = aircraft.lon = aircraft.altitude_m = None
                 aircraft.position_updated_epoch_s = None
-            if track.velocity_at is None or now - track.velocity_at > 15:
-                aircraft.velocity_ms = aircraft.heading_deg = aircraft.vertical_rate_ms = None
+            velocity_age = None if track.velocity_at is None else now - track.velocity_at
+            if velocity_age is None or velocity_age > VELOCITY_RETENTION_S:
+                aircraft.velocity_ms = aircraft.heading_deg = None
+            if velocity_age is None or velocity_age > VERTICAL_RATE_RETENTION_S:
+                aircraft.vertical_rate_ms = None
             result.append(aircraft)
         return result
 

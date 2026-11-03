@@ -45,10 +45,7 @@ test.describe("Speech callouts — mobile app", () => {
   test("speech checkbox is checked when speechEnabled is true", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const checkbox = page.locator('input[type="checkbox"]').filter({ hasText: "" }).first();
-    // The speech checkbox should be checked
-    const speechLabel = page.getByText("Speech callouts").locator("..");
-    const cb = speechLabel.locator('input[type="checkbox"]');
+    const cb = page.getByRole("checkbox", { name: "Speech callouts", exact: true });
     await expect(cb).toBeChecked();
   });
 
@@ -196,8 +193,7 @@ test.describe("Speech callouts — graceful degradation", () => {
     });
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const speechLabel = page.getByText("Speech callouts").locator("..");
-    const cb = speechLabel.locator('input[type="checkbox"]');
+    const cb = page.getByRole("checkbox", { name: "Speech callouts (unavailable)", exact: true });
     await expect(cb).toBeDisabled();
   });
 });

@@ -52,6 +52,24 @@ class ADSBExchangeFeedTests(unittest.TestCase):
         self.assertEqual(aircraft[2].altitude_m, 3048)
         self.assertAlmostEqual(aircraft[2].vertical_rate_ms, -5.08)
 
+    def test_optional_readsb_json_metadata(self):
+        _, aircraft, _ = self.fetch({"now": 1000000, "ac": [{
+            "hex": "abc123", "category": " a5 ", "t": "B77W", "r": "N123",
+            "desc": "Boeing 777", "squawk": "7700", "emergency": "general", "dbFlags": 15, "seen": 10,
+        }, {"hex": "unknown", "category": "A0"}, {"hex": "future", "category": "D1"}]})
+        ac = aircraft[0]
+        self.assertEqual((ac.category, ac.type_code, ac.registration, ac.description),
+                         ("A5", "B77W", "N123", "Boeing 777"))
+        self.assertEqual((ac.squawk, ac.emergency, ac.db_flags), ("7700", "general", 15))
+        self.assertEqual(ac.position_source, "adsbexchange")
+        self.assertEqual(ac.last_seen_epoch_s, 990)
+        self.assertIsNone(aircraft[1].category)
+        self.assertIsNone(aircraft[2].category)
+        for field, value in (("t", 12), ("r", {}), ("desc", []), ("squawk", 7700),
+                             ("emergency", True), ("dbFlags", -1), ("dbFlags", True)):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.fetch({"ac": [{"hex": "abc", field: value}]})
+
     def test_rejects_bad_payloads_instead_of_returning_empty_success(self) -> None:
         for data in ({}, {"ac": {}}, {"ac": [None]}, {"ac": [{"hex": "a", "lat": "NaN"}]}):
             with self.subTest(data=data), self.assertRaises(ValueError):

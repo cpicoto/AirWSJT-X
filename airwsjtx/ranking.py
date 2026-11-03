@@ -4,10 +4,49 @@ from __future__ import annotations
 import math
 
 from .airscout import Aircraft
+from .aircraft_metadata import normalize_category
 from .geo import bearing_deg, elevation_deg, haversine_km, heading_delta_deg, slant_range_km
 
 RANKING_METHODS = ("legacy", "range-product", "window-product")
 StationPosition = tuple[float, float, float]
+
+# Keep these small relative to geometry; TS parity tests enforce the same policy.
+SCATTER_CATEGORY_DB = {"A1": 0.0, "A2": 0.2, "A3": 0.4, "A4": 0.5, "A5": 0.6,
+                       "A6": 0.0, "A7": -3.0}
+LOW_VALUE_DB = -3.0
+CLIMB_THRESHOLD_MS = 2.0
+CLIMB_PENALTY_DB = 0.2
+STALE_AFTER_S = 45.0
+STALE_PENALTY_DB = 0.6
+
+
+def scatter_eligible(ac: Aircraft) -> bool:
+    category = normalize_category(ac.category)
+    return not ac.on_ground and not (category and category.startswith("C"))
+
+
+def apply_scatter_preferences(rank: dict, ac: Aircraft, now: float, method: str,
+                              *, enabled: bool = True) -> dict:
+    """Optional metadata modifies selection, never geometry gates or displayed ranges."""
+    category = normalize_category(ac.category)
+    adjustment = 0.0
+    if enabled:
+        adjustment = SCATTER_CATEGORY_DB.get(category, LOW_VALUE_DB if category and category.startswith("B") else 0.0)
+        if ac.vertical_rate_ms is not None and math.isfinite(ac.vertical_rate_ms):
+            if abs(ac.vertical_rate_ms) > CLIMB_THRESHOLD_MS:
+                adjustment -= CLIMB_PENALTY_DB
+        timestamp = ac.position_updated_epoch_s
+        if timestamp is not None and math.isfinite(timestamp) and math.isfinite(now):
+            if now - timestamp > STALE_AFTER_S:
+                adjustment -= STALE_PENALTY_DB
+    result = {**rank, "scatter_adjustment_db": adjustment, "scatter_eligible": scatter_eligible(ac)}
+    if rank["ranking_value"] is not None:
+        result["ranking_value"] = (
+            rank["ranking_value"] * 10 ** (adjustment / 10) if method == "legacy"
+            else rank["ranking_value"] + adjustment)
+    if adjustment:
+        result["ranking_reason"] += f"; scatter metadata {adjustment:+.1f} dB preference (not measured reflectivity)"
+    return result
 
 
 def _destination(lat: float, lon: float, heading: float, distance_km: float) -> tuple[float, float]:
@@ -112,9 +151,10 @@ def rank_geometry(
 
 
 def ranking_key(score: float, ranking: dict, method: str) -> tuple:
+    eligible = ranking.get("scatter_eligible", True)
     if method == "legacy":
-        return (score,)
+        return (eligible, ranking.get("ranking_value", score))
     gain, value = ranking["range_gain_db"], ranking["ranking_value"]
-    return (score > 0, value is not None,
-            value if value is not None else (gain if gain is not None else -1e300),
+    return (eligible, score > 0, value is not None,
+            value if value is not None else (gain + ranking.get("scatter_adjustment_db", 0) if gain is not None else -1e300),
             gain if gain is not None else -1e300)

@@ -134,6 +134,68 @@ async function openSky(page: Page) {
   await expect(page.getByRole("button", { name: "Rig", exact: true })).toBeVisible();
 }
 
+for (const floating of [false, true]) {
+  test(`aircraft icons stay icon-sized and leave the selected course visible in the ${floating ? "native" : "in-app"} dome`, async ({ page }) => {
+    await page.setViewportSize({ width: 520, height: 600 });
+    const aircraft = { ...skyAircraft("abc123", 135), category: "A5" };
+    if (floating) {
+      await page.goto("/?view=skydome");
+      await expect(page.locator("html")).toHaveClass(/float-view/);
+      await page.evaluate(aircraft => {
+        window.__tauriMockEmit("airwsjtx-float-state", {
+          aircraft: [aircraft], selectedAircraftId: aircraft.icao24,
+          stationLocator: "JJ00aa", stationAltitudeM: 100,
+          rotatorAz: null, rotatorEl: 0, targetAz: null, targetEl: null,
+          pathBearing: null, dxLabel: null, myLabel: null,
+          readoutAz: 0, readoutEl: 0, readoutInvalid: false,
+        });
+      }, aircraft);
+    } else {
+      await openSky(page);
+      await skyFeed(page, [aircraft]);
+      await skyEvent(page, "plane_locked", { ...aircraft, state: "tracking" });
+    }
+    const dome = page.locator(".skydome-container");
+    const icon = dome.locator('[data-aircraft-icon="heavy"]');
+    await expect(icon).toHaveAttribute("width", "36");
+    await expect(icon).toHaveAttribute("height", "36");
+    await expect(icon.locator("path").first()).toHaveAttribute("transform", "rotate(135)");
+    await expect(dome.locator('[data-aircraft-heading="abc123"]')).toHaveAttribute("transform", /rotate\(135\)/);
+    const projection = await dome.locator(":scope > svg").boundingBox();
+    const bounds = await icon.boundingBox();
+    // Rotated silhouettes can extend beyond their viewport, but must remain small markers.
+    expect(bounds!.width / projection!.width).toBeLessThan(0.1);
+    expect(bounds!.height / projection!.height).toBeLessThan(0.12);
+    expect(bounds!.width / projection!.width).toBeGreaterThan(0.03);
+    const course = dome.locator('[data-aircraft-course="abc123"]');
+    await expect(course).toBeVisible();
+    await expect(course.locator('polyline[aria-label="Predicted future course"]')).toHaveCSS("stroke", "rgb(88, 166, 255)");
+    for (let minute = 1; minute <= 5; minute++) {
+      await expect(course.getByText(`+${minute}m`, { exact: true })).toBeVisible();
+    }
+    await dome.screenshot({ path: test.info().outputPath("heading-and-selected-course.png") });
+  });
+}
+
+test("aircraft excluded by candidate filters stay on the dome dimmed instead of blinking out", async ({ page }) => {
+  await openSky(page);
+  const candidate = skyAircraft("abc123");
+  const filtered = skyAircraft("def456", 45, skyLat - 0.2, skyLon);
+  await skyEvent(page, "airscout_update", {
+    aircraft: [candidate], flight_data: [candidate, filtered], total: 2,
+    station_a: skyStationLocator, station_b: "JJ11",
+    data_freshness: "fresh", last_update_epoch_s: Math.floor(Date.now() / 1000),
+  });
+  const dome = page.locator(".skydome-container");
+  await expect(dome.locator('[data-aircraft-id="abc123"]')).not.toHaveAttribute("data-candidate", /.*/);
+  const dimmed = dome.locator('[data-aircraft-id="def456"]');
+  await expect(dimmed).toHaveAttribute("data-candidate", "false");
+  await expect(dimmed.locator('[data-aircraft-heading="def456"]')).toHaveAttribute("transform", /rotate\(45\)/);
+  await expect(dimmed.locator("title")).toContainText("Outside candidate filters");
+  await skyEvent(page, "plane_locked", { ...filtered, state: "tracking" });
+  await expect(dome.locator('[data-aircraft-course="def456"]')).toBeVisible();
+});
+
 test("Sky Dome retains the DX dot without a reciprocal MY dot", async ({ page }) => {
   await openSky(page);
   await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
@@ -193,8 +255,8 @@ test("selecting an aircraft shows one course that updates, switches and clears o
   expect(current[0]).toBeCloseTo(Number(await dot.getAttribute("cx")), 0);
   expect(current[1]).toBeCloseTo(Number(await dot.getAttribute("cy")), 0);
   await page.setViewportSize({ width: 900, height: 600 });
-  const bounds = await dome.locator("svg").boundingBox();
-  await dome.locator("svg").click({ position: {
+  const bounds = await dome.getByRole("img", { name: "Sky Dome polar projection" }).boundingBox();
+  await dome.getByRole("img", { name: "Sky Dome polar projection" }).click({ position: {
     x: bounds!.width * (0.5 + 96 / 540), y: bounds!.height * 0.5,
   } });
   await expectSkyPointing(page, 90, 45);

@@ -43,6 +43,20 @@ class ADSBTests(unittest.TestCase):
         self.assertEqual(aircraft.callsign, "KLM1023")
         self.assertFalse(aircraft.has_position)
 
+    def test_all_emitter_categories_and_unknown_identification(self):
+        for tc in range(1, 5):
+            for ca in range(8):
+                with self.subTest(tc=tc, ca=ca):
+                    decoder = ADSBDecoder()
+                    frame = change_bits(change_bits(IDENTITY, 33, 5, tc), 38, 3, ca)
+                    decoder.consume(avr(frame), now=1)
+                    ac = decoder.snapshot(now=1)[0]
+                    expected = f"{'CBA'[tc - 2]}{ca}" if tc >= 2 and ca else None
+                    self.assertEqual(ac.category, expected)
+                    self.assertEqual(ac.callsign, "KLM1023")
+                    decoder.consume(avr(change_bits(EVEN, 9, 24, 0x4840D6)), now=2)
+                    self.assertEqual(decoder.snapshot(now=2)[0].category, expected)
+
     def test_published_airborne_pair_newest_even(self):
         decoder = ADSBDecoder()
         decoder.consume(avr(ODD), now=0, epoch=1000)
@@ -98,7 +112,13 @@ class ADSBTests(unittest.TestCase):
         self.assertAlmostEqual(aircraft.velocity_ms / 0.514444, 159.201, places=3)
         self.assertAlmostEqual(aircraft.heading_deg, 182.88, places=2)
         self.assertAlmostEqual(aircraft.vertical_rate_ms, -832 * 0.00508)
-        self.assertIsNone(decoder.snapshot(now=16)[0].velocity_ms)
+        held = decoder.snapshot(now=16)[0]
+        self.assertAlmostEqual(held.heading_deg, 182.88, places=2)
+        self.assertIsNotNone(held.velocity_ms)
+        self.assertIsNone(held.vertical_rate_ms)
+        expired = decoder.snapshot(now=61)[0]
+        self.assertIsNone(expired.velocity_ms)
+        self.assertIsNone(expired.heading_deg)
 
     def test_invalid_missing_velocity_and_df18(self):
         decoder = ADSBDecoder()

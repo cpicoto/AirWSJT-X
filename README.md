@@ -199,7 +199,7 @@ the old helper's unvalidated-candidate counts. Raw DF17 payloads, zero CRC
 syndromes and 12 MHz sample-clock timestamps (at the end of bit 56) are retained
 in a bounded last-32 list, visible in the panel even after Stop. This allows
 subsequent payload checks; it does not by itself prove a message's RF origin.
-Aircraft identification and ground velocity are decoded directly; positioned
+Aircraft identification, emitter category and ground velocity are decoded directly; positioned
 aircraft require an airborne even/odd global CPR pair within 10 seconds and
 supported Q=1 barometric altitude (converted from feet to metres, not geometric
 altitude). Local positions remain visible for less than 120 seconds; velocities expire after 15

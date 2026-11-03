@@ -1,6 +1,7 @@
 import { haversineKm, slantRangeKm } from "./geo";
 import { predictUsableTime } from "./usableTime";
 import type { SkyCourseAircraft, SkyCourseStation } from "./skyCourse";
+import { scatterAdjustment, scatterEligible, type AircraftMetadata } from "./aircraftMetadata";
 
 export const RANKING_OPTIONS = [
   { value: "legacy", label: "Legacy geometry (default)" },
@@ -16,6 +17,21 @@ export interface AircraftRanking {
   range_gain_db: number | null;
   ranking_window_s: number | null;
   ranking_window_capped: boolean;
+  scatter_adjustment_db?: number;
+  scatter_eligible?: boolean;
+}
+
+export function applyScatterPreferences(
+  rank: AircraftRanking, ac: AircraftMetadata, nowEpochS: number, method: RankingMethod, enabled = true,
+): AircraftRanking {
+  const adjustment = enabled ? scatterAdjustment(ac, nowEpochS) : 0;
+  return {
+    ...rank, scatter_adjustment_db: adjustment, scatter_eligible: scatterEligible(ac),
+    ranking_value: rank.ranking_value === null ? null : method === "legacy"
+      ? rank.ranking_value * 10 ** (adjustment / 10) : rank.ranking_value + adjustment,
+    ranking_reason: rank.ranking_reason + (adjustment
+      ? `; scatter metadata ${adjustment > 0 ? "+" : ""}${adjustment.toFixed(1)} dB preference (not measured reflectivity)` : ""),
+  };
 }
 
 export function rankGeometry(
@@ -70,10 +86,12 @@ export function compareRanking(
   a: AircraftRanking & { scatter_score: number }, b: AircraftRanking & { scatter_score: number },
   method: RankingMethod,
 ): number {
-  if (method === "legacy") return b.scatter_score - a.scatter_score;
+  const eligible = Number(b.scatter_eligible !== false) - Number(a.scatter_eligible !== false);
+  if (eligible) return eligible;
+  if (method === "legacy") return (b.ranking_value ?? b.scatter_score) - (a.ranking_value ?? a.scatter_score);
   const key = (ac: typeof a) => [
     Number(ac.scatter_score > 0), Number(ac.ranking_value !== null),
-    ac.ranking_value ?? ac.range_gain_db ?? -1e300, ac.range_gain_db ?? -1e300,
+    ac.ranking_value ?? (ac.range_gain_db === null ? -1e300 : ac.range_gain_db + (ac.scatter_adjustment_db ?? 0)), ac.range_gain_db ?? -1e300,
   ];
   const ka = key(a), kb = key(b);
   for (let i = 0; i < ka.length; i++) {

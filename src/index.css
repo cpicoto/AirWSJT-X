@@ -221,7 +221,7 @@ html.float-view .float-skydome {
   height: 100vh; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; padding: 6px;
   display: flex; flex-direction: column; justify-content: center;
 }
-html.float-view .float-skydome .skydome-container svg {
+html.float-view .float-skydome .skydome-container > svg {
   width: min(calc(100vw - 12px), calc((100vh - 64px) * 540 / 430));
   height: auto;
   aspect-ratio: 540 / 430;
@@ -264,7 +264,7 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
 .skydome-float .skydome-drag { cursor: move; touch-action: none; margin: 0 0 4px; }
 .skydome-float .skydome-container { flex: 1; min-height: 0; justify-content: center; }
 /* Fit the dome's aspect ratio (540:430 viewBox) inside the panel, leaving room for header, legend and note. */
-.skydome-float .skydome-container svg {
+.skydome-float .skydome-container > svg {
   width: min(calc(100cqw - 22px), calc((100cqh - 100px) * 540 / 430));
   height: auto;
   aspect-ratio: 540 / 430;
@@ -491,6 +491,6 @@ html.float-view .float-readout-wrap, html.float-view .float-skydome { position: 
 /* ── Sky Dome (experimental) ─────────────────────────────────────────── */
 .skydome-container { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
 /* Reserve the course note's 12px line and 6px gap within the dome height budget. */
-.skydome-container svg { display: block; width: min(100%, calc(40vh - 18px), 460px); height: auto; }
+.skydome-container > svg { display: block; width: min(100%, calc(40vh - 18px), 460px); height: auto; }
 .skydome-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; font-size: 9px; color: var(--text-muted); font-family: monospace; }
 .skydome-course-note { max-width: 100%; font-size: 10px; line-height: 12px; color: var(--text-muted); text-align: center; }
