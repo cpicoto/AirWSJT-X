@@ -2010,7 +2010,7 @@ def _aircraft_matches_filters(ac: Aircraft, lat_a: float, lon_a: float, lat_b: f
         if max(deviations) > abs(position_tol):
             return False
 
-    if ac.heading_deg is not None and ac.velocity_ms not in (None, 0):
+    if not path_unset and ac.heading_deg is not None and ac.velocity_ms not in (None, 0):
         tolerance = filters.get("heading_tolerance_deg")
         tolerance = 30.0 if tolerance is None else float(tolerance)
         if not all(heading_within_tolerance(bearing, ac.heading_deg, tolerance) for bearing in path_bearings):

@@ -12,6 +12,8 @@ export interface SkyDomeAircraft extends SkyCourseAircraft, AircraftMetadata {
   scatter_score: number;
   range_a_km: number;
   off_path_deg: number;
+  /** False when shown for context but excluded by the candidate filters. */
+  candidate?: boolean;
 }
 
 interface SkyDomeProps {
@@ -380,7 +382,8 @@ export default function SkyDome({
             <g
               key={`ac-${ac.icao24}`}
               data-aircraft-id={ac.icao24}
-              opacity={aircraftOpacity(ac, Date.now() / 1000)}
+              data-candidate={ac.candidate === false ? "false" : undefined}
+              opacity={aircraftOpacity(ac, Date.now() / 1000) * (ac.candidate === false ? 0.5 : 1)}
               style={{ cursor: onClickAircraft ? "pointer" : "default" }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -394,7 +397,7 @@ export default function SkyDome({
                 }
               }}
             >
-              <title>{`${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}`}</title>
+              <title>{`${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}${ac.candidate === false ? " · Outside candidate filters" : ""}`}</title>
               {/* Glow ring for high-score aircraft */}
               {glow !== "none" && (
                 <circle cx={pos.x} cy={pos.y} r={r + 4} fill={glow} />

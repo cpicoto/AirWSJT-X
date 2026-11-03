@@ -1041,7 +1041,20 @@ export default function App() {
     return new Map(flightData.map(ac => [ac.icao24, predictUsableTime(ac, a, b)]));
   }, [flightData, airscout?.station_a, airscout?.station_b, airscout?.station_a_alt_m, airscout?.station_b_alt_m]);
   const savedFlights = new Set(favoriteFlights.map(favorite => favorite.flight.trim().toUpperCase()));
-  const skyDomeAircraft = aircraft.filter((ac, index) => index < 20 || ac.icao24 === lockedPlane?.icao24);
+  // Candidate filters (heading, position, area) change as sparse feeds report new velocity data,
+  // so the sky view also draws the remaining aircraft dimmed instead of letting icons blink out.
+  const skyDomeAircraft = useMemo(() => {
+    const candidates = aircraft.filter((ac, index) => index < 20 || ac.icao24 === lockedPlane?.icao24);
+    const shown = new Set(candidates.map(ac => ac.icao24));
+    const others = flightData
+      .filter(ac => !shown.has(ac.icao24) && (ac.icao24 === lockedPlane?.icao24 || ac.el_a >= 0))
+      .slice(0, Math.max(0, 20 - candidates.length))
+      .map(ac => ({ ...ac, candidate: false }));
+    const locked = lockedPlane && !shown.has(lockedPlane.icao24)
+      && !others.some(ac => ac.icao24 === lockedPlane.icao24)
+      ? flightData.find(ac => ac.icao24 === lockedPlane.icao24) : undefined;
+    return [...candidates, ...others, ...(locked ? [{ ...locked, candidate: false }] : [])];
+  }, [aircraft, flightData, lockedPlane?.icao24]);
   const txOffsetTitle = wsjtxLive.tx_df != null ? `TX frequency offset: ${wsjtxLive.tx_df}Hz.` : null;
   const txOffset = txOffsetTitle ? ` ${txOffsetTitle}` : "";
   const txIndicatorTitle = !wsjtxLive.connected || wsjtxLive.freq_mhz === null

@@ -112,7 +112,13 @@ class ADSBTests(unittest.TestCase):
         self.assertAlmostEqual(aircraft.velocity_ms / 0.514444, 159.201, places=3)
         self.assertAlmostEqual(aircraft.heading_deg, 182.88, places=2)
         self.assertAlmostEqual(aircraft.vertical_rate_ms, -832 * 0.00508)
-        self.assertIsNone(decoder.snapshot(now=16)[0].velocity_ms)
+        held = decoder.snapshot(now=16)[0]
+        self.assertAlmostEqual(held.heading_deg, 182.88, places=2)
+        self.assertIsNotNone(held.velocity_ms)
+        self.assertIsNone(held.vertical_rate_ms)
+        expired = decoder.snapshot(now=61)[0]
+        self.assertIsNone(expired.velocity_ms)
+        self.assertIsNone(expired.heading_deg)
 
     def test_invalid_missing_velocity_and_df18(self):
         decoder = ADSBDecoder()

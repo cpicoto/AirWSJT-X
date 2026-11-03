@@ -414,6 +414,17 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
                         {**airwsjtx_bridge._DEFAULT_FILTERS, "heading_tolerance_deg": 0}, clear=True):
             self.assertFalse(airwsjtx_bridge._aircraft_matches_filters(ac, 0, 0, 0, 1))
 
+    def test_heading_filter_needs_a_dx_path(self) -> None:
+        ac = Aircraft(
+            icao24="crossing", callsign="CROSS", lat=47.2, lon=-120.9, altitude_m=5400,
+            velocity_ms=150, heading_deg=96, vertical_rate_ms=0, on_ground=False,
+        )
+        with patch.dict(airwsjtx_bridge._aircraft_filters,
+                        airwsjtx_bridge._DEFAULT_FILTERS, clear=True):
+            self.assertTrue(airwsjtx_bridge._aircraft_matches_filters(ac, 47.19, -120.96, 47.19, -120.96))
+            # A north-south path still rejects an eastbound aircraft.
+            self.assertFalse(airwsjtx_bridge._aircraft_matches_filters(ac, 47.19, -120.96, 49.0, -120.96))
+
     def test_station_swap_preserves_candidates_ranking_auto_lock_and_opensky_box(self) -> None:
         planes = [
             Aircraft(icao24=icao, callsign=icao, lat=lat, lon=lon, altitude_m=11000,

@@ -177,6 +177,25 @@ for (const floating of [false, true]) {
   });
 }
 
+test("aircraft excluded by candidate filters stay on the dome dimmed instead of blinking out", async ({ page }) => {
+  await openSky(page);
+  const candidate = skyAircraft("abc123");
+  const filtered = skyAircraft("def456", 45, skyLat - 0.2, skyLon);
+  await skyEvent(page, "airscout_update", {
+    aircraft: [candidate], flight_data: [candidate, filtered], total: 2,
+    station_a: skyStationLocator, station_b: "JJ11",
+    data_freshness: "fresh", last_update_epoch_s: Math.floor(Date.now() / 1000),
+  });
+  const dome = page.locator(".skydome-container");
+  await expect(dome.locator('[data-aircraft-id="abc123"]')).not.toHaveAttribute("data-candidate", /.*/);
+  const dimmed = dome.locator('[data-aircraft-id="def456"]');
+  await expect(dimmed).toHaveAttribute("data-candidate", "false");
+  await expect(dimmed.locator('[data-aircraft-heading="def456"]')).toHaveAttribute("transform", /rotate\(45\)/);
+  await expect(dimmed.locator("title")).toContainText("Outside candidate filters");
+  await skyEvent(page, "plane_locked", { ...filtered, state: "tracking" });
+  await expect(dome.locator('[data-aircraft-course="def456"]')).toBeVisible();
+});
+
 test("Sky Dome retains the DX dot without a reciprocal MY dot", async ({ page }) => {
   await openSky(page);
   await page.getByRole("textbox", { name: "MY callsign", exact: true }).fill("K7MDL");
