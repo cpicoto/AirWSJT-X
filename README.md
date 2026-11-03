@@ -555,6 +555,34 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ## License
 
+### Acknowledgments and third-party ADS-B licenses
+
+The local ADS-B receiver uses adapted code from
+[FlightAware dump1090](https://github.com/flightaware/dump1090), revision
+`465e06330372ab0586a6a5063c66b60a8750f2b6`. We credit **Oliver Jowett** and
+**FlightAware LLC**, and acknowledge its lineage through
+[dump1090-mutability](https://github.com/mutability/dump1090) by Oliver Jowett
+and [original dump1090](https://github.com/antirez/dump1090) by
+**Salvatore Sanfilippo (antirez)**.
+
+The adapted demodulation, ICAO filter and Mode S scoring are
+**GPL-2.0-or-later**, used under GPL v3 in the AirWSJT-X combined work.
+Incorporated original work also carries a **two-clause BSD notice**.
+Full copyrights, BSD terms, upstream revision and local modifications are in
+[`scripts/dump1090-fa/UPSTREAM.txt`](scripts/dump1090-fa/UPSTREAM.txt);
+the upstream GPL v2 text is in
+[`scripts/dump1090-fa/COPYING`](scripts/dump1090-fa/COPYING).
+Original source headers remain intact.
+
+**Open-source notices** in the desktop top bar and mobile Settings/About area
+include these full texts and the AirWSJT-X GPL v3 text offline, even on platforms
+without a local receiver. The dialog links to a corresponding-source archive
+at the build's Git commit, including our adaptations and build instructions,
+not just upstream dump1090 or the latest `main` branch. Desktop receiver
+packages also retain the adapted sources and notices alongside the helper.
+Distributors must publish the matching source before distributing binaries;
+see [release licensing requirements](CONTRIBUTING.md#release-licensing-requirements).
+
 Copyright (C) 2026 Carlos Picoto (AD7NP)
 
 GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.

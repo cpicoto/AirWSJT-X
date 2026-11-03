@@ -66,6 +66,8 @@ AirWSJT-X's existing aircraft decoder; other accepted Mode S formats are
 diagnostic counts, not ADS-B aircraft. Per-frame CRC/timestamp evidence is
 emitted as diagnostics. Windows capture, queue and lifecycle are app-owned.
 
-GPL-2.0-or-later upstream code is combined under GPL-3.0-or-later, consistent
-with AirWSJT-X. COPYING contains upstream GPLv2; COPYING-AirWSJT-X beside the
-executable contains GPLv3. All adapted source and build files are shipped.
+GPL-2.0-or-later upstream code is used under GPLv3 in the AirWSJT-X combined
+work. COPYING contains upstream GPLv2; COPYING-AirWSJT-X beside the executable
+contains GPLv3. All adapted receiver source and build files are shipped beside
+the desktop helper. The app's Open-source notices also embed this notice and
+both license texts offline on every platform, with a matching-build source link.

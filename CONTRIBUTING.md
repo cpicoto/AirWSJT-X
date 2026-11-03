@@ -143,6 +143,40 @@ It does not validate Apple receipts or Keychain restoration.
 Keep MAS packaging changes confined to the TestFlight workflow and MAS config;
 ordinary desktop releases and mobile use different packaging paths.
 
+### Release licensing requirements
+
+The shared frontend embeds `LICENSE`, `scripts/dump1090-fa/COPYING` and
+`scripts/dump1090-fa/UPSTREAM.txt` verbatim in **Open-source notices**. This
+ships full GPL v3, GPL v2, copyright and BSD terms in desktop, APK/AAB and iOS
+frontend assets without changing native bundle layouts or signing. Keep this
+entry accessible in the desktop top bar and mobile Settings/About area.
+Do not replace the full BSD notice with only a credit or a web link.
+
+Build from a committed, publicly published revision. Vite records `git rev-parse
+HEAD` and the dialog links to that exact revision's source archive. Publish and
+retain that revision before distributing binaries (including TestFlight);
+verify the archive is accessible without authentication. Keep release-specific
+version/build-number transformations reproducible via the included workflows.
+Any other local source changes must be committed and published before building.
+The archive must contain the adapted C sources, headers, frontend, Rust and
+Python code, build scripts and configuration, not merely pristine upstream code.
+Keep the pinned dependency source archives and modifications staged by
+`scripts/install_rtlsdr.py` with their distributions as already required.
+For GPL v3 User Products, also provide any necessary Installation Information
+required by section 6; a GitHub link alone does not satisfy that requirement.
+
+Check a built frontend contains the complete notices and revision link, and
+inspect final installed packages on each platform to confirm they remain
+readable offline. Desktop helper packaging must still include the adapted
+sources, build script, `COPYING-AirWSJT-X` and the complete `dump1090-fa` directory.
+
+Credits and license texts alone do not establish full distribution compliance.
+Before app-store/TestFlight distribution, review store terms, DRM and signing/
+installation restrictions against GPL v3 sections 6, 10 and 12. Do not assume
+an accepted upload satisfies the GPL or that source availability cures conflicting
+restrictions; obtain an appropriate licensing review and do not distribute
+through a channel whose requirements cannot be reconciled with the license.
+
 #### Diagnosing simultaneous WSJT-X and NET disconnection
 
 Check native stderr and whether the sidecar starts before changing network

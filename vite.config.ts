@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { execFileSync } from "node:child_process";
+
+export const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 export default defineConfig(async () => ({
   plugins: [react()],
+  define: { __AIRWSJTX_SOURCE_REVISION__: JSON.stringify(sourceRevision) },
   clearScreen: false,
   server: {
     port: 1420,

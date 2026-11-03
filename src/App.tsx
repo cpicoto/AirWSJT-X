@@ -9,6 +9,7 @@ import AircraftAccounts from "./AircraftAccounts";
 import AzElReadout from "./AzElReadout";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
 import LocalReceiver from "./LocalReceiver";
+import OpenSourceNotices from "./OpenSourceNotices";
 import { rpc } from "./lib/sidecarRpc";
 import {
   FLOAT_ACTION_EVENT, FLOAT_CLOSED_EVENT, FLOAT_READY_EVENT, FLOAT_STATE_EVENT,
@@ -1504,6 +1505,7 @@ export default function App() {
       {/* ── Top bar ── */}
       <header className="topbar">
         <h1>AirWSJT-X</h1>
+        <OpenSourceNotices />
         <span className="badge" style={{ background: stateColor + "22", color: stateColor }}>
           {displayState.replace(/_/g, " ")}
         </span>

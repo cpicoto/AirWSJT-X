@@ -12,6 +12,7 @@ import {
 import { Aircraft, OpenSkyPoller, fetchDump1090Aircraft, fetchNativeAircraft } from "./lib/opensky";
 import { invoke } from "@tauri-apps/api/core";
 import AircraftAccounts from "./AircraftAccounts";
+import OpenSourceNotices from "./OpenSourceNotices";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
 import { version as appVersion } from "../package.json";
 import { AndroidRtlSdrSource, isAndroidRtlSdrSupported } from "./lib/androidRtlSdr";
@@ -688,6 +689,7 @@ export default function MobileApp() {
               Aircraft scatter assistant for WSJT-X
             </div>
             <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 12 }}>Version {appVersion}</div>
+            <OpenSourceNotices />
             <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.6 }}>
               Created by Carlos Picoto, AD7NP<br />
               Contributions by Mike, K7MDL2
