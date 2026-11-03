@@ -99,6 +99,10 @@ test("desktop ranking selection is persisted and sent to backend; backend order 
     const requests = Reflect.get(window, "__mockRpcRequests") as { method: string; params: { filters?: { ranking_method?: string } } }[];
     return requests.filter(request => request.method === "airscout_apply_filters").at(-1)?.params.filters?.ranking_method;
   })).toBe("range-product");
+  // Filters persist only after the backend confirms them; wait before reloading.
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage)
+    .filter(key => key.startsWith("airwsjtx.aircraftFilters."))
+    .map(key => JSON.parse(localStorage.getItem(key) ?? "{}").ranking_method))).toContain("range-product");
   await page.reload();
   await expect(select).toHaveText("Range product");
   await page.evaluate(() => {
