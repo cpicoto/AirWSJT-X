@@ -5,11 +5,13 @@ that the supervisor can consume, including forward projections.
 from __future__ import annotations
 
 import math
+import time
 from datetime import datetime, timedelta, timezone
 
 from .airscout import Aircraft
 from .geo import scatter_geometry, locator_to_latlon
 from .models import AircraftSample, AircraftTrack
+from .ranking import apply_scatter_preferences, rank_geometry, ranking_key, scatter_eligible
 
 
 # ─── Position projection ──────────────────────────────────────────────────────
@@ -91,9 +93,11 @@ def select_best_aircraft(
     """
     best: Aircraft | None = None
     best_score = 0.0
+    best_key: tuple | None = None
+    now = time.time()
 
     for ac in aircraft:
-        if not ac.has_position:
+        if not ac.has_position or not scatter_eligible(ac):
             continue
         geo = scatter_geometry(
             lat_a, lon_a, lat_b, lon_b,
@@ -101,7 +105,13 @@ def select_best_aircraft(
             station_a_alt_m,
         )
         score = geo["scatter_score"]
-        if score > best_score and score >= min_score:
+        rank = apply_scatter_preferences(
+            rank_geometry(ac, (lat_a, lon_a, station_a_alt_m), (lat_b, lon_b, 0),
+                          "legacy", score, now), ac, now, "legacy")
+        key = ranking_key(score, rank, "legacy")
+        if score >= min_score and (best_key is None or key > best_key
+                                  or (key == best_key and best is not None and ac.icao24 < best.icao24)):
+            best_key = key
             best_score = score
             best = ac
 

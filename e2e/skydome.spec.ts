@@ -193,8 +193,8 @@ test("selecting an aircraft shows one course that updates, switches and clears o
   expect(current[0]).toBeCloseTo(Number(await dot.getAttribute("cx")), 0);
   expect(current[1]).toBeCloseTo(Number(await dot.getAttribute("cy")), 0);
   await page.setViewportSize({ width: 900, height: 600 });
-  const bounds = await dome.locator("svg").boundingBox();
-  await dome.locator("svg").click({ position: {
+  const bounds = await dome.getByRole("img", { name: "Sky Dome polar projection" }).boundingBox();
+  await dome.getByRole("img", { name: "Sky Dome polar projection" }).click({ position: {
     x: bounds!.width * (0.5 + 96 / 540), y: bounds!.height * 0.5,
   } });
   await expectSkyPointing(page, 90, 45);

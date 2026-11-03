@@ -131,6 +131,7 @@ export interface ScatterResult {
   dist_ab_km: number;
   off_path_deg: number;
   scatter_score: number;
+  qso_viable: boolean;
 }
 
 export function scatterGeometry(
@@ -155,8 +156,9 @@ export function scatterGeometry(
   const offPathB = headingDeltaDeg(azB, bearingDeg(latB, lonB, latA, lonA));
   const offPath = Math.max(offPathA, offPathB);
 
+  const qsoViable = elA > 0 && elB > 0 && (dAB === 0 || offPath < 90);
   let score: number;
-  if (elA <= 0 || elB <= 0 || (dAB > 0 && offPath >= 90)) {
+  if (!qsoViable) {
     score = 0;
   } else {
     const elScore = (el: number) => {
@@ -183,5 +185,6 @@ export function scatterGeometry(
     dist_ab_km: Math.round(dAB * 10) / 10,
     off_path_deg: Math.round(offPath * 10) / 10,
     scatter_score: Math.round(score * 1000) / 1000,
+    qso_viable: qsoViable,
   };
 }

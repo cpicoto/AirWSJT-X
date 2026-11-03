@@ -1,5 +1,6 @@
 import { bearingDeg, destinationLatlon, elevationDeg, haversineKm, headingDeltaDeg } from "./geo";
 import type { SkyCourseAircraft, SkyCourseStation } from "./skyCourse";
+import { scatterEligible, type AircraftMetadata } from "./aircraftMetadata";
 
 export interface UsableTime {
   seconds: number | null;
@@ -11,10 +12,13 @@ const LIMIT_SECONDS = 1800;
 const STEP_SECONDS = 5;
 
 export function predictUsableTime(
-  aircraft: SkyCourseAircraft,
+  aircraft: SkyCourseAircraft & AircraftMetadata,
   stationA: SkyCourseStation | null,
   stationB: SkyCourseStation | null,
 ): UsableTime {
+  if (!scatterEligible(aircraft)) {
+    return { seconds: 0, capped: false, reason: "Ground or surface target is not an air-scatter candidate" };
+  }
   const validStation = (station: SkyCourseStation | null): station is SkyCourseStation =>
     station !== null && Number.isFinite(station.lat) && Math.abs(station.lat) <= 90
     && Number.isFinite(station.lon) && Math.abs(station.lon) <= 180

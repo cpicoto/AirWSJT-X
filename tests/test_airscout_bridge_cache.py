@@ -503,7 +503,7 @@ class AirscoutBridgeCacheTests(unittest.TestCase):
 
         self.assertEqual(total, 2)
         self.assertEqual(exclusive_total, 2)
-        self.assertEqual([ac["icao24"] for ac in additive], ["priority", "normal"])
+        self.assertEqual([ac["icao24"] for ac in additive], ["normal", "priority"])
         self.assertEqual([ac["scatter_score"] for ac in additive], [0.73, 0.73])
         self.assertEqual([ac["icao24"] for ac in exclusive], ["priority"])
         self.assertEqual(exclusive[0]["scatter_score"], 0.73)

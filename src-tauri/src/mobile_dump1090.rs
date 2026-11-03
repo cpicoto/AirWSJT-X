@@ -185,6 +185,7 @@ fn snapshot(shared: &Shared, now: Instant) -> serde_json::Value {
         "altitude_m": track.altitude_m, "velocity_ms": track.velocity_ms,
         "heading_deg": track.heading_deg, "vertical_rate_ms": track.vertical_rate_ms,
         "on_ground": track.on_ground,
+        "last_seen_age_s": track.last_seen.map(|seen| now.saturating_duration_since(seen).as_secs_f64()),
         "position_age_s": track.last_position.map(|seen| now.saturating_duration_since(seen).as_secs_f64()),
     })).collect();
     serde_json::json!({ "aircraft": list })

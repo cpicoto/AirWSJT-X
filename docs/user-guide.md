@@ -64,6 +64,25 @@ Drag the bottom-right corner grip of the Flight Data scroll area or Log card to 
 
 - The rotor on/off button (green when on and connected, red otherwise) blocks all new movement commands when off.
 - The blue current-position lines on the Az and El compasses turn grey when the rotator is not connected, and return to blue once there is valid position data.
+## Aircraft category icons and scatter preferences
+
+Sky Dome, candidate rows and the mobile list use heading-oriented aircraft silhouettes.
+Known categories distinguish light, medium and heavy aircraft, helicopters, gliders,
+balloons and drones; unknown categories keep a generic aircraft. Hover for category,
+type code, registration, description, vertical rate, emergency/flags and source.
+Climb/descent arrows show vertical rates above 2 m/s in magnitude; emergency reports
+or squawks 7500/7600/7700 add a red outline. Older reports fade rather than appearing
+equally fresh. Ground and surface targets are hidden from scatter candidates.
+
+**Aircraft scatter preferences** in desktop **Filters** or mobile **Settings** adds
+modest size, vertical-rate and freshness preferences to selection. The displayed
+Score and mutual geometry gates are unchanged; missing data is neutral. Turning
+this off restores geometry-only ordering, without replacing a viable active lock.
+For two-station operation, use matching sources and settings and confirm the
+selected ICAO at both ends: differing feeds do not guarantee identical choices.
+See [Plane scoring](plane-scoring.md#aircraft-category-and-status-preferences)
+for weights, source limitations and coordination details. No airline logos are used.
+
 ## Stations panel
 
 The Stations panel sets the two ends of the path: **MY** (your station) and **DX**.

@@ -1,8 +1,10 @@
 import { useId, useMemo, type ReactNode } from "react";
 import { isValidLocator, locatorToLatlon } from "./lib/geo";
 import { predictSkyCourse, type SkyCourseAircraft } from "./lib/skyCourse";
+import AircraftIcon from "./AircraftIcon";
+import { aircraftOpacity, aircraftTooltip, type AircraftMetadata } from "./lib/aircraftMetadata";
 
-export interface SkyDomeAircraft extends SkyCourseAircraft {
+export interface SkyDomeAircraft extends SkyCourseAircraft, AircraftMetadata {
   icao24: string;
   callsign: string;
   az_a: number;
@@ -370,11 +372,12 @@ export default function SkyDome({
           const color = scoreColor(ac.scatter_score);
           const glow = scoreGlow(ac.scatter_score);
           const locked = ac.icao24 === selectedAircraftId;
-          const r = locked ? 8 : ac.scatter_score > 0.4 ? 6 : 4;
+          const r = locked ? 12 : 10;
           return (
             <g
               key={`ac-${ac.icao24}`}
               data-aircraft-id={ac.icao24}
+              opacity={aircraftOpacity(ac, Date.now() / 1000)}
               style={{ cursor: onClickAircraft ? "pointer" : "default" }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -388,6 +391,7 @@ export default function SkyDome({
                 }
               }}
             >
+              <title>{`${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}`}</title>
               {/* Glow ring for high-score aircraft */}
               {glow !== "none" && (
                 <circle cx={pos.x} cy={pos.y} r={r + 4} fill={glow} />
@@ -397,17 +401,9 @@ export default function SkyDome({
                 <circle cx={pos.x} cy={pos.y} r={r + 3}
                   fill="none" stroke="#f0883e" strokeWidth={2} />
               )}
-              {/* Aircraft dot */}
-              <circle cx={pos.x} cy={pos.y} r={r} fill={color} />
-              {/* Heading indicator */}
-              {ac.heading_deg !== null && !(locked && course && !course.unavailableReason) && (
-                <line
-                  x1={pos.x} y1={pos.y}
-                  x2={pos.x + (r + 4) * Math.cos(((ac.heading_deg - 90) * Math.PI) / 180)}
-                  y2={pos.y + (r + 4) * Math.sin(((ac.heading_deg - 90) * Math.PI) / 180)}
-                  stroke={color} strokeWidth={1.5} opacity={0.7}
-                />
-              )}
+              <g transform={`translate(${pos.x - 12}, ${pos.y - 12})`}>
+                <AircraftIcon aircraft={ac} color={color} />
+              </g>
               {/* Label */}
               <text
                 x={pos.x + r + 4} y={pos.y - r - 2}

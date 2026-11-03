@@ -105,6 +105,7 @@ class ADSBDecoder:
             self.tracks[address] = track
         aircraft = track.aircraft
         aircraft.last_seen = now
+        aircraft.last_seen_epoch_s = epoch
         value = int.from_bytes(frame, "big")
 
         def bits(start: int, length: int) -> int:
@@ -112,6 +113,9 @@ class ADSBDecoder:
 
         tc = bits(33, 5)
         if 1 <= tc <= 4:
+            # TC4=A, TC3=B, TC2=C; TC1 and CA0 carry no category information.
+            ca = bits(38, 3)
+            aircraft.category = f"{'CBA'[tc - 2]}{ca}" if tc >= 2 and ca else None
             aircraft.callsign = "".join(
                 _CHARACTERS[bits(start, 6)] for start in range(41, 89, 6)
             ).replace("_", " ").replace("#", "").strip() or None

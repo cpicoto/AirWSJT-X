@@ -71,6 +71,7 @@ pub fn global_cpr(even: Cpr, odd: Cpr) -> Option<(f64, f64)> {
 #[derive(Default, Clone)]
 struct Track {
     callsign: Option<String>,
+    category: Option<String>,
     lat: Option<f64>,
     lon: Option<f64>,
     altitude_m: Option<f64>,
@@ -129,6 +130,13 @@ impl Decoder {
         track.last_seen = now;
         let tc = bits(33, 5);
         if (1..=4).contains(&tc) {
+            let ca = bits(38, 3);
+            track.category = match (tc, ca) {
+                (4, 1..=7) => Some(format!("A{ca}")),
+                (3, 1..=7) => Some(format!("B{ca}")),
+                (2, 1..=7) => Some(format!("C{ca}")),
+                _ => None,
+            };
             let callsign: String = (0..8).map(|i| CHARACTERS[bits(41 + i * 6, 6) as usize] as char).collect();
             let callsign = callsign.replace('_', " ").replace('#', "").trim().to_string();
             track.callsign = (!callsign.is_empty()).then_some(callsign);
@@ -194,11 +202,13 @@ impl Decoder {
                 let velocity = |value: Option<f64>| if fresh_velocity { value } else { None };
                 serde_json::json!({
                     "icao24": icao24, "callsign": track.callsign,
+                    "category": track.category, "position_source": "rtlsdr",
                     "lat": position(track.lat), "lon": position(track.lon),
                     "altitude_m": position(track.altitude_m),
                     "velocity_ms": velocity(track.velocity_ms), "heading_deg": velocity(track.heading_deg),
                     "vertical_rate_ms": velocity(track.vertical_rate_ms),
                     "on_ground": track.on_ground,
+                    "last_seen_age_s": (now - track.last_seen).max(0.0),
                     "position_age_s": fresh_position.map(|at| (now - at).max(0.0)),
                 })
             })
@@ -269,6 +279,27 @@ mod tests {
         assert_eq!(aircraft["icao24"], "4840d6");
         assert_eq!(aircraft["callsign"], "KLM1023");
         assert!(aircraft["lat"].is_null());
+    }
+
+    #[test]
+    fn all_identification_categories_match_python_mapping() {
+        for tc in 1..=4 {
+            for ca in 0..=7 {
+                let mut decoder = Decoder::default();
+                let frame = change_bits(&change_bits(IDENTITY, 33, 5, tc), 38, 3, ca);
+                assert!(decoder.consume_hex(&frame, 1.0));
+                let aircraft = first(&mut decoder, 1.0);
+                let expected = match (tc, ca) {
+                    (4, 1..=7) => serde_json::json!(format!("A{ca}")),
+                    (3, 1..=7) => serde_json::json!(format!("B{ca}")),
+                    (2, 1..=7) => serde_json::json!(format!("C{ca}")),
+                    _ => serde_json::Value::Null,
+                };
+                assert_eq!(aircraft["category"], expected);
+                assert_eq!(aircraft["callsign"], "KLM1023");
+                assert_eq!(aircraft["position_source"], "rtlsdr");
+            }
+        }
     }
 
     #[test]

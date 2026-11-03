@@ -18,7 +18,9 @@ import { AndroidRtlSdrSource, isAndroidRtlSdrSupported } from "./lib/androidRtlS
 import { downloadDb, getDbStatus, DbStatus } from "./lib/callsign";
 import { isSpeechSupported, speak } from "./lib/speech";
 import { HeadingSmoother, headingFromOrientation, normalizeDegrees, signedHeadingDelta } from "./lib/compass";
-import { RANKING_OPTIONS, isRankingMethod, rankGeometry, compareRanking, formatRanking, type AircraftRanking, type RankingMethod } from "./lib/aircraftRanking";
+import { RANKING_OPTIONS, isRankingMethod, rankGeometry, applyScatterPreferences, compareRanking, formatRanking, type AircraftRanking, type RankingMethod } from "./lib/aircraftRanking";
+import AircraftIcon from "./AircraftIcon";
+import { aircraftBadges, aircraftOpacity, aircraftSourceLabel, aircraftTooltip, scatterEligible, type AircraftMetadata } from "./lib/aircraftMetadata";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -28,7 +30,7 @@ type OrientationEventWithCompass = DeviceOrientationEvent & {
   webkitCompassHeading?: number;
 };
 
-interface MobileAircraft extends AircraftRanking {
+interface MobileAircraft extends AircraftRanking, AircraftMetadata {
   icao24: string;
   callsign: string;
   lat: number;
@@ -41,6 +43,7 @@ interface MobileAircraft extends AircraftRanking {
   range_km: number;
   distance_km: number;
   scatter_score: number;
+  qso_viable: boolean;
 }
 
 const PATH_TOLERANCE_DEG = 70;
@@ -247,6 +250,7 @@ const SETTINGS_KEY = "airwsjtx.mobile.settings";
 
 interface MobileSettings {
   rankingMethod?: RankingMethod;
+  scatterMetadata?: boolean;
   myCall: string;
   myGrid: string;
   dxCall: string;
@@ -338,7 +342,7 @@ export default function MobileApp() {
     const method = settings.rankingMethod ?? "legacy";
     const now = Date.now() / 1000;
     const mapped: MobileAircraft[] = rawAircraft.filter(
-      a => a.lat != null && a.lon != null && a.altitude_m != null && a.altitude_m > 0 && !a.on_ground,
+      a => a.lat != null && a.lon != null && a.altitude_m != null && a.altitude_m > 0 && scatterEligible(a),
     ).filter(a => !hasPath
       || headingDeltaDeg(bearingDeg(myLat, myLon, a.lat!, a.lon!), pathBearing) <= PATH_TOLERANCE_DEG)
       .map(a => {
@@ -347,13 +351,15 @@ export default function MobileApp() {
         const el = elevationDeg(dist, a.altitude_m!, stationAltRef.current);
         const range = slantRangeKm(dist, a.altitude_m!, stationAltRef.current);
         const scatter = scatterGeometry(myLat, myLon, dxLat, dxLon, a.lat!, a.lon!, a.altitude_m!, stationAltRef.current);
-        const ranking = rankGeometry({
+        const ranking = applyScatterPreferences(rankGeometry({
           lat: a.lat!, lon: a.lon!, altitude_ft: a.altitude_m! / 0.3048,
           heading_deg: a.heading_deg, velocity_kts: a.velocity_ms == null ? null : a.velocity_ms * 3600 / 1852,
           position_updated_epoch_s: a.position_updated_epoch_s,
         }, { lat: myLat, lon: myLon, altitudeM: stationAltRef.current },
-        { lat: dxLat, lon: dxLon, altitudeM: 0 }, method, scatter.scatter_score, now);
+        { lat: dxLat, lon: dxLon, altitudeM: 0 }, method, scatter.scatter_score, now),
+        a, now, method, settings.scatterMetadata !== false);
         return {
+          ...a,
           ...ranking,
           icao24: a.icao24,
           callsign: a.callsign || a.icao24,
@@ -366,12 +372,14 @@ export default function MobileApp() {
           range_km: Math.round(range * 10) / 10,
           distance_km: Math.round(dist * 10) / 10,
           scatter_score: scatter.scatter_score,
+          qso_viable: scatter.qso_viable,
         };
       });
-    mapped.sort((a, b) => compareRanking(a, b, method) || a.distance_km - b.distance_km);
+    mapped.sort((a, b) => compareRanking(a, b, method) || (a.icao24 < b.icao24 ? -1 : a.icao24 > b.icao24 ? 1 : 0));
     return mapped;
-  }, [rawAircraft, path, settings.rankingMethod]);
-  const trackedAc = selectedAc ?? aircraft[0] ?? null;
+  }, [rawAircraft, path, settings.rankingMethod, settings.scatterMetadata]);
+  const eligibleAircraft = aircraft.filter(ac => ac.qso_viable);
+  const trackedAc = eligibleAircraft.find(ac => ac.icao24 === selectedAc?.icao24) ?? eligibleAircraft[0] ?? null;
 
   const enableCompass = useCallback(async () => {
     if (typeof window === "undefined" || typeof window.DeviceOrientationEvent === "undefined") {
@@ -574,7 +582,7 @@ export default function MobileApp() {
   // Update selected aircraft position from latest data
   useEffect(() => {
     if (!selectedAc) return;
-    const updated = aircraft.find((a) => a.icao24 === selectedAc.icao24);
+    const updated = aircraft.find((a) => a.icao24 === selectedAc.icao24 && a.qso_viable);
     if (updated) setSelectedAc(updated);
     else setSelectedAc(null);
   }, [aircraft, selectedAc?.icao24]);
@@ -642,9 +650,16 @@ export default function MobileApp() {
               {RANKING_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
+          <label>
+            <input type="checkbox" checked={settings.scatterMetadata !== false}
+              onChange={e => saveSettings({ ...settings, scatterMetadata: e.target.checked })} />
+            {" "}Aircraft scatter preferences
+          </label>
           <div style={{ fontSize: 12, color: "#8b949e" }}>
-            Legacy Score and tracking remain unchanged. Window ranking assumes constant motion and uses fresh position reports;
+            Legacy Score remains unchanged. A selection hands over when its mutual geometry window closes.
+            {" "}Window ranking assumes constant motion and uses fresh position reports;
             known windows rank first, otherwise range fallback. Not SNR or QSO probability. DX altitude is assumed zero.
+            {" "}Use the same feed and preferences at both stations; disable preferences for geometry-only coordination.
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 10, color: "#c9d1d9", fontSize: 15 }}>
             <input type="checkbox" checked={settings.speechEnabled}
@@ -812,15 +827,22 @@ export default function MobileApp() {
           <div
             key={ac.icao24}
             role="listitem"
-            onClick={() => setSelectedAc(ac)}
+            aria-disabled={!ac.qso_viable}
+            title={aircraftTooltip(ac)}
+            onClick={() => {
+              if (ac.qso_viable) setSelectedAc(ac);
+              else setStatus("Aircraft is outside the current mutual QSO window");
+            }}
             style={{
               ...listItemStyle,
               background: selectedAc?.icao24 === ac.icao24 ? "rgba(88,166,255,0.1)" : "transparent",
               borderLeft: selectedAc?.icao24 === ac.icao24 ? "3px solid #58a6ff" : "3px solid transparent",
+              opacity: aircraftOpacity(ac, Date.now() / 1000),
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontWeight: 600, fontSize: 13, color: "#c9d1d9", fontFamily: "monospace" }}>
+                <AircraftIcon aircraft={ac} size={18} />
                 {ac.callsign}
               </span>
               <span style={{ fontSize: 12, color: "#8b949e" }}>
@@ -835,6 +857,8 @@ export default function MobileApp() {
               <span>EL {ac.el.toFixed(1)}°</span>
               <span>FL{Math.round(ac.altitude_ft / 100)}</span>
               {ac.heading_deg != null && <span>HDG {ac.heading_deg.toFixed(0)}°</span>}
+              <span>{aircraftSourceLabel(ac.position_source)}</span>
+              {aircraftBadges(ac).map(badge => <span key={badge}>{badge}</span>)}
             </div>
           </div>
         ))}

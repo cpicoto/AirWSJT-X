@@ -24,6 +24,7 @@ from email.utils import parsedate_to_datetime
 from http.client import HTTPMessage
 from collections.abc import Mapping
 from typing import Callable, cast
+from .aircraft_metadata import network_metadata
 
 try:
     import certifi
@@ -47,6 +48,14 @@ class Aircraft:
     last_seen: float = field(default_factory=time.monotonic)
     position_updated_epoch_s: float | None = None
     position_source: str | None = None
+    category: str | None = None
+    type_code: str | None = None
+    registration: str | None = None
+    description: str | None = None
+    squawk: str | None = None
+    emergency: str | None = None
+    db_flags: int | None = None
+    last_seen_epoch_s: float | None = None
 
     @property
     def has_position(self) -> bool:
@@ -424,6 +433,7 @@ class ADSBExchangeFeed(OpenSkyFeed):
             if rate is None:
                 rate = self._number(item.get("baro_rate"))
             seen = self._number(item.get("seen_pos"))
+            message_age = self._number(item.get("seen"))
             flight = item.get("flight")
             if flight is not None and not isinstance(flight, str):
                 raise ValueError("Invalid ADS-B Exchange aircraft callsign")
@@ -437,6 +447,10 @@ class ADSBExchangeFeed(OpenSkyFeed):
                 on_ground=ground,
                 position_updated_epoch_s=now / 1000 - max(0, seen)
                 if now is not None and seen is not None else None,
+                position_source="adsbexchange",
+                last_seen_epoch_s=now / 1000 - message_age
+                if now is not None and message_age is not None and message_age >= 0 else None,
+                **network_metadata(item),
             ))
         return aircraft
 

@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DarkSelect from "./DarkSelect";
 import RotatorPanel from "./RotatorPanel";
 import SatPC32DDE, { type OutputMode, type PublishedTarget } from "./SatPC32DDE";
-import PlaneLockPanel from "./PlaneLockPanel";
+import PlaneLockPanel, { type LockState } from "./PlaneLockPanel";
 import AircraftAccounts from "./AircraftAccounts";
+import AircraftIcon from "./AircraftIcon";
+import { aircraftOpacity, aircraftTooltip, type AircraftMetadata } from "./lib/aircraftMetadata";
 import AzElReadout from "./AzElReadout";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
 import LocalReceiver from "./LocalReceiver";
@@ -77,7 +79,7 @@ function isWsjtxRig(value: unknown): value is WsjtxRig {
     && "config_name" in value
     && (value.config_name === null || typeof value.config_name === "string");
 }
-interface AircraftEntry extends Partial<AircraftRanking> {
+interface AircraftEntry extends Partial<AircraftRanking>, AircraftMetadata {
   icao24: string;
   callsign: string;
   lat: number;
@@ -93,6 +95,12 @@ interface AircraftEntry extends Partial<AircraftRanking> {
   range_b_km: number;
   off_path_deg: number;
   scatter_score: number;
+}
+
+function isLockState(value: Record<string, unknown>): value is Record<string, unknown> & LockState {
+  return ["icao24", "callsign", "state"].every(key => typeof value[key] === "string")
+    && ["altitude_ft", "az_a", "el_a", "az_b", "el_b", "scatter_score", "off_path_deg"]
+      .every(key => typeof value[key] === "number" && Number.isFinite(value[key]));
 }
 interface AirscoutUpdate {
   ranking_method?: RankingMethod;
@@ -136,6 +144,7 @@ interface CallsignDbStatus {
 
 interface AircraftFilterSettings {
   ranking_method: RankingMethod;
+  scatter_metadata: boolean;
   lat_min: number | null;
   lat_max: number | null;
   lon_min: number | null;
@@ -158,6 +167,7 @@ type NumericAircraftFilterKey =
 
 const DEFAULT_AIRCRAFT_FILTERS: AircraftFilterSettings = {
   ranking_method: "legacy",
+  scatter_metadata: true,
   lat_min: null,
   lat_max: null,
   lon_min: null,
@@ -188,6 +198,7 @@ function loadAircraftFilters(stationA: string | null | undefined, stationB: stri
     const parsed = JSON.parse(raw) as Partial<AircraftFilterSettings>;
     return {
       ranking_method: isRankingMethod(parsed.ranking_method) ? parsed.ranking_method : "legacy",
+      scatter_metadata: typeof parsed.scatter_metadata === "boolean" ? parsed.scatter_metadata : true,
       lat_min: parsed.lat_min ?? null,
       lat_max: parsed.lat_max ?? null,
       lon_min: parsed.lon_min ?? null,
@@ -547,17 +558,7 @@ export default function App() {
   const activeFlightRef = useRef({ priority_flight: "", priority_flight_exclusive: false });
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
   const [callsignDbBusy, setCallsignDbBusy] = useState(false);
-  const [lockedPlane, setLockedPlane] = useState<{
-    icao24: string; callsign: string; altitude_ft: number;
-    az_a: number; el_a: number; az_b: number; el_b: number;
-    scatter_score: number; off_path_deg: number; state: string;
-    rotator_az?: number | null; rotator_el?: number | null;
-    position_updated_epoch_s?: number | null;
-    position_source?: string | null;
-    position_max_age_s?: number;
-    range_a_km?: number | null;
-    range_b_km?: number | null;
-  } | null>(null);
+  const [lockedPlane, setLockedPlane] = useState<LockState | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number; source: "rotator" | "manual" } | null>(null);
   const [speechRecheck, setSpeechRecheck] = useState(0);
@@ -741,14 +742,28 @@ export default function App() {
             setRotatorConnectionError(String(evtData.message));
             addLog(`Rotator: ${evtData.message}`);
           } else if (evt === "plane_locked") {
-            const d = evtData as typeof lockedPlane;
-            setLockedPlane(d);
+            if (!isLockState(evtData)) {
+              addLog("Invalid aircraft lock event");
+              return;
+            }
+            setLockedPlane(evtData);
             setStatus(s => s ? { ...s, state: (evtData.state as string) } : s);
             addLog(`🔒 Locked: ${evtData.callsign} FL${Math.round((evtData.altitude_ft as number)/100)} score=${((evtData.scatter_score as number)*100).toFixed(0)}%`);
           } else if (evt === "plane_tracking") {
             setLockedPlane(prev => prev && prev.icao24 === evtData.icao24 ? {
               ...prev,
               callsign: typeof evtData.callsign === "string" ? evtData.callsign : prev.callsign,
+              category: typeof evtData.category === "string" ? evtData.category : null,
+              type_code: typeof evtData.type_code === "string" ? evtData.type_code : null,
+              registration: typeof evtData.registration === "string" ? evtData.registration : null,
+              description: typeof evtData.description === "string" ? evtData.description : null,
+              squawk: typeof evtData.squawk === "string" ? evtData.squawk : null,
+              emergency: typeof evtData.emergency === "string" ? evtData.emergency : null,
+              db_flags: typeof evtData.db_flags === "number" ? evtData.db_flags : null,
+              vertical_rate_ms: typeof evtData.vertical_rate_ms === "number" ? evtData.vertical_rate_ms : null,
+              heading_deg: typeof evtData.heading_deg === "number" ? evtData.heading_deg : null,
+              on_ground: evtData.on_ground === true,
+              last_seen_epoch_s: typeof evtData.last_seen_epoch_s === "number" ? evtData.last_seen_epoch_s : null,
               altitude_ft: typeof evtData.altitude_ft === "number" ? evtData.altitude_ft : prev.altitude_ft,
               range_a_km: typeof evtData.range_a_km === "number" ? evtData.range_a_km : null,
               range_b_km: typeof evtData.range_b_km === "number" ? evtData.range_b_km : null,
@@ -1013,7 +1028,7 @@ export default function App() {
   const flightData = useMemo(() => {
     const rows = [...(airscout?.flight_data ?? [])];
     return !airscout?.ranking_method || airscout.ranking_method === "legacy"
-      ? rows.sort((a, b) => b.scatter_score - a.scatter_score) : rows;
+      ? rows.sort((a, b) => (b.ranking_value ?? b.scatter_score) - (a.ranking_value ?? a.scatter_score)) : rows;
   }, [airscout?.flight_data, airscout?.ranking_method]);
   const usableTimes = useMemo(() => {
     const station = (grid: string | null | undefined, altitudeM: number | undefined) => {
@@ -2158,6 +2173,11 @@ export default function App() {
               <details className="aircraft-filters">
                 <summary>Filters</summary>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
+                <label title="Modest size, vertical-rate and position-age preferences. Unknown data is neutral. Use the same policy and feed at both stations; disable for geometry-only coordination.">
+                  <input type="checkbox" checked={aircraftFilters.scatter_metadata}
+                    onChange={e => persistAircraftFilters({ ...aircraftFilters, scatter_metadata: e.target.checked })} />
+                  {" "}Aircraft scatter preferences
+                </label>
                 {[
                   [
                   ["lat_min", "Min lat", "number"],
@@ -2439,10 +2459,13 @@ export default function App() {
                     const usableTime = usableTimes.get(ac.icao24);
                     return (
                       <tr key={ac.icao24} className={isLocked ? "locked-row" : ""}
-                        style={{ cursor: "pointer", background: isFavorite ? "#30363d" : undefined }}
+                        title={aircraftTooltip(ac)}
+                        style={{ cursor: "pointer", background: isFavorite ? "#30363d" : undefined,
+                          opacity: aircraftOpacity(ac, Date.now() / 1000) }}
                         data-flight-favorite={isFavorite || undefined}
                         onClick={() => rpc("lock_aircraft", { icao24: ac.icao24 }).catch(e => addLog(`Lock: ${e}`))}>
                         <td style={{ color: isLocked ? "var(--accent)" : "var(--text)", fontWeight: isLocked ? 700 : 400 }}>
+                          <AircraftIcon aircraft={ac} size={18} />
                           {ac.callsign}
                         </td>
                         <td>{Math.round(ac.altitude_ft / 100)}</td>
