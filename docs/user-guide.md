@@ -67,6 +67,8 @@ Drag the bottom-right corner grip of the Flight Data scroll area or Log card to 
 ## Aircraft category icons and scatter preferences
 
 Sky Dome, candidate rows and the mobile list use heading-oriented aircraft silhouettes.
+Sky Dome also shows a forward arrow for a finite reported ground-track heading;
+missing heading leaves the icon unrotated without a direction arrow.
 Known categories distinguish light, medium and heavy aircraft, helicopters, gliders,
 balloons and drones; unknown categories keep a generic aircraft. Hover for category,
 type code, registration, description, vertical rate, emergency/flags and source.

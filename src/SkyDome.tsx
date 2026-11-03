@@ -366,13 +366,16 @@ export default function SkyDome({
           );
         })()}
 
-        {/* Aircraft dots */}
+        {/* Aircraft silhouettes and reported ground-track direction */}
         {aircraft.map((ac) => {
           const pos = project(ac.az_a, ac.el_a);
           const color = scoreColor(ac.scatter_score);
           const glow = scoreGlow(ac.scatter_score);
           const locked = ac.icao24 === selectedAircraftId;
-          const r = locked ? 12 : 10;
+          const iconSize = locked ? 36 : 32;
+          const r = iconSize / 2;
+          const heading = ac.heading_deg;
+          const hasHeading = heading != null && Number.isFinite(heading);
           return (
             <g
               key={`ac-${ac.icao24}`}
@@ -401,8 +404,16 @@ export default function SkyDome({
                 <circle cx={pos.x} cy={pos.y} r={r + 3}
                   fill="none" stroke="#f0883e" strokeWidth={2} />
               )}
-              <g transform={`translate(${pos.x - 12}, ${pos.y - 12})`}>
-                <AircraftIcon aircraft={ac} color={color} />
+              {hasHeading && (
+                <g data-aircraft-heading={ac.icao24}
+                  transform={`translate(${pos.x}, ${pos.y}) rotate(${heading})`}
+                  aria-label={`Reported heading ${Math.round(heading) % 360} degrees`}>
+                  <path d={`M0 ${-r + 2} V${-r - 13} M-4 ${-r - 8} L0 ${-r - 13} L4 ${-r - 8}`}
+                    fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+              )}
+              <g transform={`translate(${pos.x - r}, ${pos.y - r})`}>
+                <AircraftIcon aircraft={ac} size={iconSize} color={color} />
               </g>
               {/* Label */}
               <text

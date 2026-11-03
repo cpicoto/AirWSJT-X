@@ -110,6 +110,8 @@ test("Sky Dome renders heading-oriented silhouettes, emergency and vertical over
   });
   const marker = page.locator('.skydome-container [data-aircraft-id="abc123"]');
   await expect(marker.locator('[data-aircraft-icon="heavy"] > path').first()).toHaveAttribute("transform", "rotate(135)");
+  await expect(marker.locator('[data-aircraft-icon="heavy"]')).toHaveAttribute("width", "32");
+  await expect(marker.locator('[data-aircraft-heading="abc123"]')).toHaveAttribute("transform", /rotate\(135\)/);
   await expect(marker.locator('[data-aircraft-icon="heavy"] > path').first()).toHaveAttribute("stroke", "var(--red)");
   await expect(marker.locator('[data-vertical-direction="descent"]')).toHaveCount(1);
   await expect(marker.locator("title")).toContainText("B77W · N123 · Boeing 777");
@@ -118,6 +120,16 @@ test("Sky Dome renders heading-oriented silhouettes, emergency and vertical over
   await marker.getByRole("button", { name: "Lock HEAVY1" }).click();
   await expect.poll(() => page.evaluate(() => Reflect.get(window, "__mockLockRequest"))).toBe("abc123");
   await page.locator(".skydome-container").screenshot({ path: test.info().outputPath("aircraft-category-icons.png") });
+  await page.evaluate(() => {
+    window.__tauriMockEmit("sidecar-message", JSON.stringify({ event: "airscout_update", data: {
+      aircraft: [{ icao24: "unknown", callsign: "UNKNOWN", lat: 47, lon: -122, altitude_ft: 35000,
+        velocity_kts: null, heading_deg: null, az_a: 90, el_a: 25, range_a_km: 100,
+        off_path_deg: 0, scatter_score: 0.5 }],
+      total: 1, station_a: "CN87", station_b: "CN89",
+    } }));
+  });
+  await expect(page.locator('.skydome-container [data-aircraft-icon="generic"]')).toHaveCount(1);
+  await expect(page.locator(".skydome-container [data-aircraft-heading]")).toHaveCount(0);
 });
 
 test.describe("mobile metadata selection", () => {
