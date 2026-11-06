@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -42,6 +43,7 @@ class ReleaseSiteTests(unittest.TestCase):
         self.assertIn('if [[ ! "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', deploy)
         self.assertIn("upload AirWSJT-X/index.html site/index.html", deploy)
 
+    @unittest.skipUnless(sys.platform == "linux", "Website deployment runs on Ubuntu")
     def test_deploy_uploads_database_and_manifest_as_uncached_json(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:
