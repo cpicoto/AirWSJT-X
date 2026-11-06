@@ -89,6 +89,24 @@ The mobile app operates independently — enter your grid locator, select an air
 
 AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/DB](https://ad7np.us/RoverAIM/DB) to auto-resolve DX station grid squares. Entries use `callsign@location` format (e.g., `AD7NP@home`, `W7PUA@MarysPeak`). User-defined grid overrides in the Stations panel take priority over the remote database.
 
+The Stations panel's **DB Update** downloads a separate offline callsign database
+from [callsign-grid-db.json](https://ad7np.us/airwsjtx/callsign-grid-db.json).
+**DB Check** checks its version manifest without downloading the full database.
+Desktop and mobile share these endpoints. The initial database contains one
+default operating grid for each verified group callsign: AD7NP, K7MDL, KD7UO,
+VE7NX, W7GLF, and W7PUA. RoverAIM remains the source for named portable sites;
+because a callsign lookup has one automatic result, W7PUA defaults to its home
+grid while the Marys Peak site remains selectable in RoverAIM.
+
+The published files live in `site/airwsjtx/`. When changing entries, update the
+database version and keep the manifest's version and entry count in sync.
+`scripts/deploy_site.sh` publishes both files as JSON with caching disabled,
+alongside the website. To make changes live after merging, run the **Deploy
+website** workflow (`.github/workflows/deploy-site.yml`) on the updated branch
+with the currently published release version; the repository must have the
+`AZURE_STORAGE_KEY` secret configured. Release deployments also publish these
+files. Committing the files alone does not update the live endpoints.
+
 ## Quick Start
 
 ### WSJT-X Setup
