@@ -165,14 +165,15 @@ test.describe("mobile metadata selection", () => {
     const heavyMarker = compass.locator('[data-mobile-aircraft-id="z-heavy"]');
     await expect(heavyMarker.locator('[data-aircraft-icon="heavy"]')).toHaveCount(1);
     await expect(heavyMarker.locator('[data-aircraft-icon="heavy"] > path').first()).toHaveAttribute("transform", "rotate(90)");
-    await heavyMarker.getByRole("button", { name: "Track z-heavy" }).click();
+    await compass.getByRole("button", { name: "Track z-heavy" }).click();
     await expect(heavyMarker.locator('[data-mobile-aircraft-selected="z-heavy"]')).toHaveCount(1);
     await expect(page.getByText("z-heavy", { exact: true }).first()).toBeVisible();
     await compass.screenshot({ path: test.info().outputPath("mobile-skydome-aircraft-icons.png") });
     const outsideMarker = compass.locator('[data-mobile-aircraft-id="outside"]');
     await expect(outsideMarker).toHaveAttribute("data-candidate", "false");
     expect(Number(await outsideMarker.getAttribute("opacity"))).toBeLessThanOrEqual(0.5);
-    await outsideMarker.getByRole("button", { name: "Track outside" }).click();
+    const outsideTarget = compass.getByRole("button", { name: "Track outside" });
+    await expect(outsideTarget).toHaveAttribute("aria-disabled", "true");
     await expect(outsideMarker.locator('[data-mobile-aircraft-selected="outside"]')).toHaveCount(0);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("checkbox", { name: "Aircraft scatter preferences" }).uncheck();
@@ -180,5 +181,33 @@ test.describe("mobile metadata selection", () => {
     await expect(list.getByRole("listitem").first()).toContainText("a-light");
     await page.reload();
     await expect(list.getByRole("listitem").first()).toContainText("a-light");
+  });
+
+  test("overlapping targets prefer the best aircraft and a selected aircraft remains in the top-12 dome", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("airwsjtx.mobile.settings", JSON.stringify({
+        myCall: "TEST", myGrid: "JJ00", dxCall: "DX", dxGrid: "JJ10", speechEnabled: false,
+        aircraftSource: "adsbexchange",
+      }));
+      const ac = Array.from({ length: 12 }, (_, index) => ({
+        hex: `heavy-${index.toString().padStart(2, "0")}`, category: "A5",
+        flight: `H${index.toString().padStart(2, "0")}`, lat: 0.5, lon: 2,
+        alt_geom: 35000, gs: 400, track: 90, geom_rate: 0, seen_pos: 0,
+      }));
+      ac.push({ hex: "rank-13", category: "A1", flight: "RANK13", lat: 0.5, lon: 2,
+        alt_geom: 35000, gs: 400, track: 90, geom_rate: 0, seen_pos: 0 });
+      Object.assign(window, { __mockMobileResponse: { now: Date.now(), ac } });
+    });
+    await page.goto("/");
+    const list = page.getByRole("list", { name: "Aircraft list" });
+    await expect(list.getByRole("listitem")).toHaveCount(13);
+    const compass = page.getByRole("group", { name: "Tracking dials" });
+    await compass.getByRole("button", { name: "Track H00" }).click();
+    await expect(compass.locator('[data-mobile-aircraft-selected="heavy-00"]')).toHaveCount(1);
+
+    await list.getByRole("listitem").filter({ hasText: "RANK13" }).click();
+    await expect(compass.locator('[data-mobile-aircraft-id="rank-13"]')).toHaveCount(1);
+    await expect(compass.locator('[data-mobile-aircraft-selected="rank-13"]')).toHaveCount(1);
+    await expect(compass.locator("[data-mobile-aircraft-id]")).toHaveCount(12);
   });
 });

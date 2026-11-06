@@ -138,6 +138,26 @@ function CompassRose({
       ? normalizeDegrees(bearing)
       : normalizeDegrees(bearing - deviceHeading);
 
+  const displayAircraft = (aircraft ?? []).map(ac => {
+    const p = project(ac.az, ac.el);
+    const color = aircraftScoreColor(ac.scatter_score);
+    const glow = aircraftScoreGlow(ac.scatter_score);
+    const selected = ac.icao24 === selectedAircraftId;
+    const iconSize = selected ? 30 : 26;
+    const r = iconSize / 2;
+    const labelOnRight = p.x < cx;
+    const relativeHeading = ac.heading_deg == null || deviceHeading === null
+      ? ac.heading_deg
+      : normalizeDegrees(ac.heading_deg - deviceHeading);
+    const iconAircraft = relativeHeading === ac.heading_deg
+      ? ac
+      : { ...ac, heading_deg: relativeHeading };
+    const opacity = aircraftOpacity(ac, Date.now() / 1000) * (ac.qso_viable ? 1 : 0.5);
+    const tooltip = `${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}`
+      + (ac.qso_viable ? "" : " · Outside current mutual QSO window");
+    return { ac, p, color, glow, selected, iconSize, r, labelOnRight, iconAircraft, opacity, tooltip };
+  });
+
   return (
     <svg width={size} height={size} style={{ userSelect: "none" }}>
       <circle cx={cx} cy={cy} r={outerR} fill="#0d1117" stroke="#30363d" strokeWidth={1.5} />
@@ -148,34 +168,30 @@ function CompassRose({
           strokeWidth={el === 45 ? 1 : 0.7} strokeDasharray={el === 45 ? undefined : "3 4"} />
       ))}
       {ticks}
-      {aircraft?.map((ac) => {
-        const p = project(ac.az, ac.el);
-        const color = aircraftScoreColor(ac.scatter_score);
-        const glow = aircraftScoreGlow(ac.scatter_score);
-        const selected = ac.icao24 === selectedAircraftId;
-        const iconSize = selected ? 30 : 26;
-        const r = iconSize / 2;
-        const labelOnRight = p.x < cx;
-        const relativeHeading = ac.heading_deg == null || deviceHeading === null
-          ? ac.heading_deg
-          : normalizeDegrees(ac.heading_deg - deviceHeading);
-        const iconAircraft = relativeHeading === ac.heading_deg
-          ? ac
-          : { ...ac, heading_deg: relativeHeading };
-        const opacity = aircraftOpacity(ac, Date.now() / 1000) * (ac.qso_viable ? 1 : 0.5);
-        return (
+      {/* Expanded targets are behind every silhouette. Reverse ranking puts the
+          best aircraft on top when two 44 px targets overlap. */}
+      {[...displayAircraft].reverse().map(({ ac, p, r, tooltip }) => onSelectAircraft && (
+        <circle key={`target-${ac.icao24}`} data-mobile-aircraft-target={ac.icao24}
+          cx={p.x} cy={p.y} r={Math.max(22, r + 4)} className="mobile-aircraft-tap-target"
+          fill="transparent" role="button" tabIndex={0} aria-disabled={!ac.qso_viable}
+          aria-label={`Track ${ac.callsign || ac.icao24}`}
+          onClick={(event) => { event.stopPropagation(); onSelectAircraft(ac); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              onSelectAircraft(ac);
+            }
+          }}>
+          <title>{tooltip}</title>
+        </circle>
+      ))}
+      {displayAircraft.map(({ ac, p, color, glow, selected, iconSize, r, labelOnRight,
+        iconAircraft, opacity, tooltip }) => (
           <g key={ac.icao24} data-mobile-aircraft-id={ac.icao24}
             data-candidate={ac.qso_viable ? undefined : "false"} opacity={opacity}
-            style={{ cursor: onSelectAircraft ? "pointer" : "default" }}
-            onClick={(event) => { event.stopPropagation(); onSelectAircraft?.(ac); }}
-            onKeyDown={(event) => {
-              if (onSelectAircraft && (event.key === "Enter" || event.key === " ")) {
-                event.preventDefault();
-                event.stopPropagation();
-                onSelectAircraft(ac);
-              }
-            }}>
-            <title>{`${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}${ac.qso_viable ? "" : " · Outside current mutual QSO window"}`}</title>
+            pointerEvents="none">
+            <title>{tooltip}</title>
             {glow !== "none" && <circle cx={p.x} cy={p.y} r={r + 4} fill={glow} />}
             {selected && <circle data-mobile-aircraft-selected={ac.icao24}
               cx={p.x} cy={p.y} r={r + 3} fill="none" stroke="#f0883e" strokeWidth={2} />}
@@ -188,12 +204,8 @@ function CompassRose({
               stroke="#0d1117" strokeWidth={2.5} paintOrder="stroke">
               {ac.callsign || ac.icao24}
             </text>
-            {onSelectAircraft && <circle cx={p.x} cy={p.y} r={Math.max(22, r + 4)}
-              className="mobile-aircraft-tap-target" fill="transparent" role="button" tabIndex={0}
-              aria-label={`Track ${ac.callsign || ac.icao24}`} />}
           </g>
-        );
-      })}
+      ))}
       {displayBearing !== null && (
         <g pointerEvents="none">
           <line
@@ -708,7 +720,14 @@ export default function MobileApp() {
     setStatus(`DX station set to ${station.callsign} ${station.grid.toUpperCase()}`);
   }
 
-  const compassAircraft = aircraft.slice(0, 12);
+  const topCompassAircraft = aircraft.slice(0, 12);
+  const selectedCompassAircraft = selectedAc
+    ? aircraft.find(ac => ac.icao24 === selectedAc.icao24) ?? selectedAc
+    : null;
+  const compassAircraft = selectedCompassAircraft
+    && !topCompassAircraft.some(ac => ac.icao24 === selectedCompassAircraft.icao24)
+    ? [...topCompassAircraft.slice(0, 11), selectedCompassAircraft]
+    : topCompassAircraft;
   const compassSize = isLandscape
     ? Math.max(210, Math.min(viewport.width * 0.42, 320))
     : Math.max(220, Math.min(viewport.width - 12, 320));
