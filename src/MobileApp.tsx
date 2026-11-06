@@ -22,6 +22,7 @@ import { HeadingSmoother, headingFromOrientation, normalizeDegrees, signedHeadin
 import { RANKING_OPTIONS, isRankingMethod, rankGeometry, applyScatterPreferences, compareRanking, formatRanking, type AircraftRanking, type RankingMethod } from "./lib/aircraftRanking";
 import AircraftIcon from "./AircraftIcon";
 import { aircraftBadges, aircraftOpacity, aircraftSourceLabel, aircraftTooltip, scatterEligible, type AircraftMetadata } from "./lib/aircraftMetadata";
+import { aircraftScoreColor, aircraftScoreGlow } from "./lib/aircraftDisplay";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -80,11 +81,15 @@ function CompassRose({
   deviceHeading = null,
   size = 220,
   aircraft,
+  selectedAircraftId = null,
+  onSelectAircraft,
 }: {
   bearing: number | null;
   deviceHeading?: number | null;
   size?: number;
-  aircraft?: { az: number; el: number; callsign: string }[];
+  aircraft?: MobileAircraft[];
+  selectedAircraftId?: string | null;
+  onSelectAircraft?: (aircraft: MobileAircraft) => void;
 }) {
   const cx = size / 2, cy = size / 2;
   const outerR = size / 2 - 4;
@@ -94,6 +99,14 @@ function CompassRose({
   function azToXY(az: number, r: number) {
     const rad = ((az - 90) * Math.PI) / 180;
     return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  }
+
+  // Same polar projection as the desktop Sky Dome: horizon at the edge,
+  // zenith at the center. Device-heading mode rotates the entire sky view.
+  function project(az: number, el: number) {
+    const renderAz = deviceHeading === null ? az : normalizeDegrees(az - deviceHeading);
+    const radius = (innerR - 6) * (1 - Math.max(0, Math.min(90, el)) / 90);
+    return azToXY(renderAz, radius);
   }
 
   const ticks = [];
@@ -125,25 +138,76 @@ function CompassRose({
       ? normalizeDegrees(bearing)
       : normalizeDegrees(bearing - deviceHeading);
 
+  const displayAircraft = (aircraft ?? []).map(ac => {
+    const p = project(ac.az, ac.el);
+    const color = aircraftScoreColor(ac.scatter_score);
+    const glow = aircraftScoreGlow(ac.scatter_score);
+    const selected = ac.icao24 === selectedAircraftId;
+    const iconSize = selected ? 30 : 26;
+    const r = iconSize / 2;
+    const labelOnRight = p.x < cx;
+    const relativeHeading = ac.heading_deg == null || deviceHeading === null
+      ? ac.heading_deg
+      : normalizeDegrees(ac.heading_deg - deviceHeading);
+    const iconAircraft = relativeHeading === ac.heading_deg
+      ? ac
+      : { ...ac, heading_deg: relativeHeading };
+    const opacity = aircraftOpacity(ac, Date.now() / 1000) * (ac.qso_viable ? 1 : 0.5);
+    const tooltip = `${ac.callsign || ac.icao24} · ${aircraftTooltip(ac)}`
+      + (ac.qso_viable ? "" : " · Outside current mutual QSO window");
+    return { ac, p, color, glow, selected, iconSize, r, labelOnRight, iconAircraft, opacity, tooltip };
+  });
+
   return (
     <svg width={size} height={size} style={{ userSelect: "none" }}>
       <circle cx={cx} cy={cy} r={outerR} fill="#0d1117" stroke="#30363d" strokeWidth={1.5} />
       <circle cx={cx} cy={cy} r={innerR} fill="none" stroke="#1c2128" strokeWidth={1} />
+      {[22.5, 45, 67.5].map(el => (
+        <circle key={`el-${el}`} cx={cx} cy={cy} r={(innerR - 6) * (1 - el / 90)}
+          fill="none" stroke={el === 45 ? "#30363d" : "#21262d"}
+          strokeWidth={el === 45 ? 1 : 0.7} strokeDasharray={el === 45 ? undefined : "3 4"} />
+      ))}
       {ticks}
-      {aircraft?.map((ac, idx) => {
-        const renderAz = deviceHeading === null ? ac.az : normalizeDegrees(ac.az - deviceHeading);
-        const p = azToXY(renderAz, innerR * 0.7);
-        return (
-          <g key={idx}>
-            <circle cx={p.x} cy={p.y} r={4} fill="#d29922" opacity={0.8} />
-            <text x={p.x} y={p.y - 7} textAnchor="middle" fontSize={8} fill="#d29922">
-              {ac.callsign}
+      {/* Expanded targets are behind every silhouette. Reverse ranking puts the
+          best aircraft on top when two 44 px targets overlap. */}
+      {[...displayAircraft].reverse().map(({ ac, p, r, tooltip }) => onSelectAircraft && (
+        <circle key={`target-${ac.icao24}`} data-mobile-aircraft-target={ac.icao24}
+          cx={p.x} cy={p.y} r={Math.max(22, r + 4)} className="mobile-aircraft-tap-target"
+          fill="transparent" role="button" tabIndex={0} aria-disabled={!ac.qso_viable}
+          aria-label={`Track ${ac.callsign || ac.icao24}`}
+          onClick={(event) => { event.stopPropagation(); onSelectAircraft(ac); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              onSelectAircraft(ac);
+            }
+          }}>
+          <title>{tooltip}</title>
+        </circle>
+      ))}
+      {displayAircraft.map(({ ac, p, color, glow, selected, iconSize, r, labelOnRight,
+        iconAircraft, opacity, tooltip }) => (
+          <g key={ac.icao24} data-mobile-aircraft-id={ac.icao24}
+            data-candidate={ac.qso_viable ? undefined : "false"} opacity={opacity}
+            pointerEvents="none">
+            <title>{tooltip}</title>
+            {glow !== "none" && <circle cx={p.x} cy={p.y} r={r + 4} fill={glow} />}
+            {selected && <circle data-mobile-aircraft-selected={ac.icao24}
+              cx={p.x} cy={p.y} r={r + 3} fill="none" stroke="#f0883e" strokeWidth={2} />}
+            <g transform={`translate(${p.x - r}, ${p.y - r})`}>
+              <AircraftIcon aircraft={iconAircraft} size={iconSize} color={color} />
+            </g>
+            <text x={p.x + (labelOnRight ? r + 3 : -r - 3)} y={p.y - r + 1}
+              textAnchor={labelOnRight ? "start" : "end"}
+              fontSize={selected ? 9 : 8} fontWeight={selected ? 700 : 400} fill={color}
+              stroke="#0d1117" strokeWidth={2.5} paintOrder="stroke">
+              {ac.callsign || ac.icao24}
             </text>
           </g>
-        );
-      })}
+      ))}
       {displayBearing !== null && (
-        <g>
+        <g pointerEvents="none">
           <line
             x1={cx} y1={cy}
             x2={azToXY(displayBearing, innerR - 8).x}
@@ -158,12 +222,13 @@ function CompassRose({
         <polygon
           points={`${cx},${cy - innerR - 4} ${cx - 8},${cy - innerR + 12} ${cx + 8},${cy - innerR + 12}`}
           fill="#f85149"
+          pointerEvents="none"
         />
       )}
-      <circle cx={cx} cy={cy} r={6} fill="#161b22" stroke="#58a6ff" strokeWidth={2} />
+      <circle cx={cx} cy={cy} r={6} fill="#161b22" stroke="#58a6ff" strokeWidth={2} pointerEvents="none" />
       {displayBearing !== null && (
         <text x={cx} y={cy + innerR * 0.56} textAnchor="middle" fontSize={24} fontWeight={700}
-          fill="#c9d1d9" fontFamily="monospace">{displayBearing.toFixed(1)}°</text>
+          fill="#c9d1d9" fontFamily="monospace" pointerEvents="none">{displayBearing.toFixed(1)}°</text>
       )}
     </svg>
   );
@@ -655,9 +720,14 @@ export default function MobileApp() {
     setStatus(`DX station set to ${station.callsign} ${station.grid.toUpperCase()}`);
   }
 
-  const compassAircraft = aircraft.slice(0, 12).map((a) => ({
-    az: a.az, el: a.el, callsign: a.callsign,
-  }));
+  const topCompassAircraft = aircraft.slice(0, 12);
+  const selectedCompassAircraft = selectedAc
+    ? aircraft.find(ac => ac.icao24 === selectedAc.icao24) ?? selectedAc
+    : null;
+  const compassAircraft = selectedCompassAircraft
+    && !topCompassAircraft.some(ac => ac.icao24 === selectedCompassAircraft.icao24)
+    ? [...topCompassAircraft.slice(0, 11), selectedCompassAircraft]
+    : topCompassAircraft;
   const compassSize = isLandscape
     ? Math.max(210, Math.min(viewport.width * 0.42, 320))
     : Math.max(220, Math.min(viewport.width - 12, 320));
@@ -879,7 +949,12 @@ export default function MobileApp() {
             bearing={trackedAc?.az ?? null}
             deviceHeading={deviceHeading}
             size={compassSize}
-            aircraft={isLandscape ? undefined : compassAircraft}
+            aircraft={compassAircraft}
+            selectedAircraftId={selectedAc?.icao24 ?? null}
+            onSelectAircraft={ac => {
+              if (ac.qso_viable) setSelectedAc(ac);
+              else setStatus("Aircraft is outside the current mutual QSO window");
+            }}
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: isLandscape ? 0 : -6 }}>
