@@ -1,0 +1,19 @@
+{
+  "version": "2026-11-06",
+  "entries": {
+    "VE7NX": {
+      "name": "Neil Olson",
+      "grid": "CN89oh",
+      "lat": 49.3,
+      "lon": -122.81,
+      "country": "Canada"
+    },
+    "W7PUA": {
+      "name": "Bob Larkin",
+      "grid": "CN84jq",
+      "lat": 44.677,
+      "lon": -123.227,
+      "country": "USA"
+    }
+  }
+}
