@@ -293,6 +293,7 @@ export default function MobileApp() {
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [knownStations, setKnownStations] = useState<StationInfo[]>([]);
   const [currentGrid, setCurrentGrid] = useState<string | null>(null);
+  const [currentLocationError, setCurrentLocationError] = useState<string | null>(null);
   const [dbBusy, setDbBusy] = useState(false);
   const [accountRevision, setAccountRevision] = useState(0);
   const accountsChanged = useCallback(() => setAccountRevision(value => value + 1), []);
@@ -597,6 +598,7 @@ export default function MobileApp() {
       stationAltRef.current = position.altitudeM ?? 0;
       const grid = latlonToGrid(position.lat, position.lon).toUpperCase();
       setCurrentGrid(grid);
+      setCurrentLocationError(null);
       const current = settingsRef.current;
       if ((current.myGridSource ?? "gps") === "gps" && current.myGrid !== grid) {
         saveSettings({ ...current, myGrid: grid, myGridSource: "gps" });
@@ -605,7 +607,7 @@ export default function MobileApp() {
     error => {
       stationAltRef.current = 0;
       setCurrentGrid(null);
-      setStatus(`Current location unavailable: ${error.message}`);
+      setCurrentLocationError(`Current location unavailable: ${error.message}`);
     },
   ), [saveSettings]);
 
@@ -703,6 +705,11 @@ export default function MobileApp() {
           <div style={{ fontSize: 11, color: "#8b949e", marginTop: -10 }}>
             My Grid is {settings.myGridSource === "manual" ? "manually set" : "updated automatically from GPS"}.
           </div>
+          {currentLocationError && (
+            <div role="status" style={{ fontSize: 11, color: "#f85149", marginTop: -10 }}>
+              {currentLocationError}
+            </div>
+          )}
           <label style={{ color: "#c9d1d9" }}>DX Favorite
             <select
               aria-label="DX Favorite"
