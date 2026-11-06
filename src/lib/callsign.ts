@@ -41,15 +41,6 @@ async function getMeta(key: string): Promise<string | null> {
   });
 }
 
-async function setMeta(key: string, value: string): Promise<void> {
-  const db = await openIDB();
-  return new Promise((resolve) => {
-    const tx = db.transaction(DB_META_STORE, "readwrite");
-    tx.objectStore(DB_META_STORE).put(value, key);
-    tx.oncomplete = () => resolve();
-  });
-}
-
 export async function lookupCallsign(callsign: string): Promise<StationInfo | null> {
   const call = callsign.trim().toUpperCase();
   try {
@@ -62,6 +53,24 @@ export async function lookupCallsign(callsign: string): Promise<StationInfo | nu
     });
   } catch {
     return null;
+  }
+}
+
+export async function listCallsigns(): Promise<StationInfo[]> {
+  try {
+    const db = await openIDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE_NAME, "readonly");
+      const req = tx.objectStore(DB_STORE_NAME).getAll();
+      req.onsuccess = () => {
+        const stations = (req.result as StationInfo[]).slice()
+          .sort((a, b) => a.callsign.localeCompare(b.callsign));
+        resolve(stations);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
   }
 }
 
@@ -119,39 +128,39 @@ export async function downloadDb(
   const entries = payload.entries as Record<string, Record<string, unknown>> | undefined;
   if (!entries || typeof entries !== "object") throw new Error("Invalid DB format");
 
-  const db = await openIDB();
   const callsigns = Object.keys(entries);
-  const batchSize = 500;
-
-  for (let i = 0; i < callsigns.length; i += batchSize) {
-    const batch = callsigns.slice(i, i + batchSize);
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(DB_STORE_NAME, "readwrite");
-      const store = tx.objectStore(DB_STORE_NAME);
-      for (const call of batch) {
-        const raw = entries[call];
-        const info: StationInfo = {
-          callsign: call.toUpperCase(),
-          name: raw.name ? String(raw.name) : null,
-          grid: raw.grid ? String(raw.grid) : null,
-          lat: raw.lat != null ? Number(raw.lat) : null,
-          lon: raw.lon != null ? Number(raw.lon) : null,
-          country: raw.country ? String(raw.country) : null,
-          source: "local-db",
-        };
-        store.put(info);
-      }
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    onProgress?.(Math.min(i + batchSize, callsigns.length), callsigns.length);
-  }
-
   const version = payload.version ? String(payload.version) : new Date().toISOString();
   const now = new Date().toISOString();
-  await setMeta("version", version);
-  await setMeta("downloaded_at", now);
-  await setMeta("entries", String(callsigns.length));
+  // Validate and materialize the replacement before touching the usable cache.
+  const replacement = callsigns.map(call => {
+    const raw = entries[call];
+    if (!raw || typeof raw !== "object") throw new Error(`Invalid DB entry: ${call}`);
+    return {
+      callsign: call.toUpperCase(),
+      name: raw.name ? String(raw.name) : null,
+      grid: raw.grid ? String(raw.grid) : null,
+      lat: raw.lat != null ? Number(raw.lat) : null,
+      lon: raw.lon != null ? Number(raw.lon) : null,
+      country: raw.country ? String(raw.country) : null,
+      source: "local-db",
+    } satisfies StationInfo;
+  });
+
+  const db = await openIDB();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([DB_STORE_NAME, DB_META_STORE], "readwrite");
+    const store = tx.objectStore(DB_STORE_NAME);
+    const meta = tx.objectStore(DB_META_STORE);
+    store.clear();
+    for (const info of replacement) store.put(info);
+    meta.put(version, "version");
+    meta.put(now, "downloaded_at");
+    meta.put(String(replacement.length), "entries");
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error ?? new Error("Database refresh aborted"));
+    tx.onerror = () => reject(tx.error ?? new Error("Database refresh failed"));
+  });
+  onProgress?.(replacement.length, replacement.length);
 
   return { version, downloaded_at: now, entries: callsigns.length, fresh: true };
 }

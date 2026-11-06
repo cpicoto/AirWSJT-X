@@ -118,17 +118,16 @@ class CallsignDatabaseTests(unittest.TestCase):
         self.assertGreater(manifest["entries"], 0)
         parsed = self.callsign._parse_db_entries(payload["entries"])
         self.assertEqual(len(parsed), manifest["entries"])
+        self.assertEqual(
+            set(payload["entries"]),
+            {"AD7NP", "K7MDL", "KD7UO", "VE7NX", "W7GLF", "W7PUA"},
+        )
         for call, raw in payload["entries"].items():
             with self.subTest(callsign=call):
                 self.assertEqual(call, call.upper())
-                self.assertEqual(set(raw), {"name", "grid", "lat", "lon", "country"})
+                self.assertEqual(set(raw), {"grid"})
                 self.assertIsInstance(raw["grid"], str)
-                self.assertIsInstance(raw["lat"], (int, float))
-                self.assertIsInstance(raw["lon"], (int, float))
-                self.assertGreaterEqual(raw["lat"], -90)
-                self.assertLessEqual(raw["lat"], 90)
-                self.assertGreaterEqual(raw["lon"], -180)
-                self.assertLessEqual(raw["lon"], 180)
+                self.assertRegex(raw["grid"], r"^[A-R]{2}[0-9]{2}[A-X]{2}$")
 
     def test_download_and_check_served_site_database(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -155,7 +154,7 @@ class CallsignDatabaseTests(unittest.TestCase):
                 self.assertFalse(after["update_available"])
                 info = self.callsign.lookup("ve7nx")
                 self.assertEqual(info.source, "local-db")
-                self.assertEqual(info.grid, "CN89oh")
+                self.assertEqual(info.grid, "CN89JI")
         finally:
             server.shutdown()
             thread.join()

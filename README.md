@@ -83,7 +83,14 @@ unchanged.
 
 ### Mobile Mode
 
-The mobile app operates independently — enter your grid locator, select an aircraft data source (OpenSky, ADS-B Exchange, or a dump1090 receiver on your network), and aircraft in your area appear on the compass rose with azimuth, elevation, and distance. Speech callouts guide antenna pointing hands-free.
+The mobile app operates independently. With location permission, it derives the
+six-character **My Grid** locator from GPS and keeps it current; typing a grid
+switches to an explicit manual override, and **Use Current Location** returns to
+GPS tracking. The downloaded callsign database populates the **DX Favorite**
+selector so a known station's callsign and grid can be applied together. Select
+an aircraft data source (OpenSky, ADS-B Exchange, or a dump1090 receiver on your
+network), and aircraft in your area appear on the compass rose with azimuth,
+elevation, and distance. Speech callouts guide antenna pointing hands-free.
 
 ### Remote Station Database
 
@@ -92,8 +99,11 @@ AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/D
 The Stations panel's **DB Update** downloads a separate offline callsign database
 from [callsign-grid-db.json](https://ad7np.us/airwsjtx/callsign-grid-db.json).
 **DB Check** checks its version manifest without downloading the full database.
-Desktop and mobile share these endpoints. The starter database contains the two
-existing built-in stations (VE7NX and W7PUA), not a complete callbook.
+Desktop and mobile share these endpoints. The initial database contains one
+default operating grid for each verified group callsign: AD7NP, K7MDL, KD7UO,
+VE7NX, W7GLF, and W7PUA. RoverAIM remains the source for named portable sites;
+because a callsign lookup has one automatic result, W7PUA defaults to its home
+grid while the Marys Peak site remains selectable in RoverAIM.
 
 The published files live in `site/airwsjtx/`. When changing entries, update the
 database version and keep the manifest's version and entry count in sync.

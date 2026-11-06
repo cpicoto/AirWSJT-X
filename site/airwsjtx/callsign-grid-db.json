@@ -1,19 +1,23 @@
 {
-  "version": "2026-11-06",
+  "version": "2026-11-06.1",
   "entries": {
+    "AD7NP": {
+      "grid": "CN87VP"
+    },
+    "K7MDL": {
+      "grid": "CN87XS"
+    },
+    "KD7UO": {
+      "grid": "CN88QK"
+    },
     "VE7NX": {
-      "name": "Neil Olson",
-      "grid": "CN89oh",
-      "lat": 49.3,
-      "lon": -122.81,
-      "country": "Canada"
+      "grid": "CN89JI"
+    },
+    "W7GLF": {
+      "grid": "CN87VR"
     },
     "W7PUA": {
-      "name": "Bob Larkin",
-      "grid": "CN84jq",
-      "lat": 44.677,
-      "lon": -123.227,
-      "country": "USA"
+      "grid": "CN84JQ"
     }
   }
 }
