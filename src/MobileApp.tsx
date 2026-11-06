@@ -706,7 +706,7 @@ export default function MobileApp() {
             My Grid is {settings.myGridSource === "manual" ? "manually set" : "updated automatically from GPS"}.
           </div>
           {currentLocationError && (
-            <div role="status" style={{ fontSize: 11, color: "#f85149", marginTop: -10 }}>
+            <div role="alert" style={{ fontSize: 11, color: "#f85149", marginTop: -10 }}>
               {currentLocationError}
             </div>
           )}

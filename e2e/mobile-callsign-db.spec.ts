@@ -121,5 +121,5 @@ test("GPS errors invalidate the current-location shortcut", async ({ page }) => 
   await page.goto("/");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("button", { name: "Waiting for Current Location…" })).toBeDisabled();
-  await expect(page.getByRole("status")).toHaveText("Current location unavailable: Position unavailable");
+  await expect(page.getByRole("alert")).toHaveText("Current location unavailable: Position unavailable");
 });
