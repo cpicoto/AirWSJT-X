@@ -31,6 +31,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 _TAURI_CONF = _REPO_ROOT / "src-tauri" / "tauri.conf.json"
 _PACKAGE_JSON = _REPO_ROOT / "package.json"
 _MOBILE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "mobile.yml"
+_WEB_SOURCE_DIR = _REPO_ROOT / "src"
 
 # iOS / Apple bundle identifier rules (reverse-DNS):
 #   - two or more dot-separated segments
@@ -173,6 +174,28 @@ class IOSProductNameTests(unittest.TestCase):
 
     def test_product_name_is_not_empty(self) -> None:
         self.assertTrue(self.product_name.strip(), "productName must not be empty")
+
+
+class IOSWebRequestTests(unittest.TestCase):
+    """WebKit must be able to issue cross-origin API requests without preflight.
+
+    WKWebView honors an explicitly supplied User-Agent header by sending an
+    OPTIONS preflight. Our static Azure website only supports GET/HEAD, so the
+    preflight fails before the callsign database can be downloaded.
+    """
+
+    def test_browser_code_does_not_override_user_agent(self) -> None:
+        offenders: list[str] = []
+        for pattern in ("*.ts", "*.tsx"):
+            for path in _WEB_SOURCE_DIR.rglob(pattern):
+                if '"User-Agent"' in path.read_text(encoding="utf-8"):
+                    offenders.append(str(path.relative_to(_REPO_ROOT)))
+        self.assertEqual(
+            offenders,
+            [],
+            "browser fetch code must not set User-Agent because it triggers "
+            f"CORS preflight in iOS WKWebView: {offenders}",
+        )
 
 
 class IOSIconsTests(unittest.TestCase):

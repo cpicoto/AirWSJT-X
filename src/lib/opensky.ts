@@ -43,10 +43,10 @@ export async function fetchOpenSky(
   signal?: AbortSignal,
 ): Promise<Aircraft[]> {
   const url = `${OPENSKY_URL}?lamin=${latMin}&lomin=${lonMin}&lamax=${latMax}&lomax=${lonMax}`;
-  const resp = await fetch(url, {
-    headers: { "User-Agent": "AirWSJT-X/0.2 (ham radio scatter tool)" },
-    signal,
-  });
+  // Browser runtimes supply their own User-Agent. Overriding it in WKWebView
+  // turns this into a preflighted request and can make otherwise valid APIs
+  // fail before the GET is issued.
+  const resp = await fetch(url, { signal });
   if (!resp.ok) {
     if (resp.status === 429) throw new Error("RATE_LIMITED");
     throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
