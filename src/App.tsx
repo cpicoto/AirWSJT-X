@@ -140,6 +140,7 @@ interface CallsignDbStatus {
   online?: boolean;
   remote_version?: string | null;
   update_available?: boolean;
+  error?: string;
 }
 
 interface AircraftFilterSettings {
@@ -1947,7 +1948,7 @@ export default function App() {
                         ? (s.update_available
                           ? `Callsign DB update available (${s.remote_version ?? "new version"})`
                           : "Callsign DB is up to date")
-                        : "Callsign DB update check failed (offline)",
+                        : `Callsign DB update check failed: ${s.error ?? "server unavailable"}`,
                     );
                   } catch (e) {
                     addLog(`Callsign DB check failed: ${e}`);
