@@ -3,6 +3,7 @@ import { isValidLocator, locatorToLatlon } from "./lib/geo";
 import { predictSkyCourse, type SkyCourseAircraft } from "./lib/skyCourse";
 import AircraftIcon from "./AircraftIcon";
 import { aircraftOpacity, aircraftTooltip, type AircraftMetadata } from "./lib/aircraftMetadata";
+import { aircraftScoreColor, aircraftScoreGlow } from "./lib/aircraftDisplay";
 
 export interface SkyDomeAircraft extends SkyCourseAircraft, AircraftMetadata {
   icao24: string;
@@ -31,19 +32,6 @@ interface SkyDomeProps {
   size?: number;
   onClickAircraft?: (icao24: string) => void;
   onClickSky?: (az: number, el: number) => void;
-}
-
-function scoreColor(score: number): string {
-  if (score >= 0.7) return "#3fb950";
-  if (score >= 0.4) return "#d29922";
-  if (score >= 0.15) return "#db6d28";
-  return "#484f58";
-}
-
-function scoreGlow(score: number): string {
-  if (score >= 0.7) return "rgba(63,185,80,0.4)";
-  if (score >= 0.4) return "rgba(210,153,34,0.3)";
-  return "none";
 }
 
 export default function SkyDome({
@@ -371,8 +359,8 @@ export default function SkyDome({
         {/* Aircraft silhouettes and reported ground-track direction */}
         {aircraft.map((ac) => {
           const pos = project(ac.az_a, ac.el_a);
-          const color = scoreColor(ac.scatter_score);
-          const glow = scoreGlow(ac.scatter_score);
+          const color = aircraftScoreColor(ac.scatter_score);
+          const glow = aircraftScoreGlow(ac.scatter_score);
           const locked = ac.icao24 === selectedAircraftId;
           const iconSize = locked ? 36 : 32;
           const r = iconSize / 2;

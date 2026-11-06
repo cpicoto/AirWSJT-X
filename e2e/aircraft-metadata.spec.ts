@@ -5,10 +5,11 @@ import { aircraftBadges, aircraftEmergency, aircraftIconClass, aircraftOpacity, 
 import { applyScatterPreferences, compareRanking, type AircraftRanking, type RankingMethod } from "../src/lib/aircraftRanking";
 import { predictUsableTime } from "../src/lib/usableTime";
 import { scatterGeometry } from "../src/lib/geo";
+import { aircraftScoreColor, aircraftScoreGlow } from "../src/lib/aircraftDisplay";
 
 test("metadata scoring agrees between Python and TS for all methods, boundaries and unknown data", () => {
   const cases: { metadata: AircraftMetadata; rank: AircraftRanking; now: number; method: RankingMethod;
-    enabled: boolean; expected: AircraftRanking }[] = JSON.parse(execFileSync("python", ["-c",
+    enabled: boolean; expected: AircraftRanking }[] = JSON.parse(execFileSync("python3", ["-c",
     "import json; from tests.test_aircraft_metadata import preference_parity_cases; print(json.dumps(preference_parity_cases()))",
   ], { encoding: "utf8" }));
   for (const item of cases) {
@@ -51,6 +52,8 @@ test("icon categories, widebody refinement, flags, emergencies and age are indep
   expect(networkMetadata({ category: " a5 ", t: "B77W", dbFlags: 1 }).category).toBe("A5");
   expect(() => networkMetadata({ dbFlags: -1 })).toThrow();
   expect(() => networkMetadata({ t: 123 })).toThrow();
+  expect([0, 0.15, 0.4, 0.7].map(aircraftScoreColor)).toEqual(["#484f58", "#db6d28", "#d29922", "#3fb950"]);
+  expect([0.39, 0.4, 0.7].map(aircraftScoreGlow)).toEqual(["none", "rgba(210,153,34,0.3)", "rgba(63,185,80,0.4)"]);
 });
 
 test("mutual geometry eligibility is computed before display elevation rounding", () => {
@@ -142,21 +145,35 @@ test.describe("mobile metadata selection", () => {
           aircraftSource: "adsbexchange",
         }));
       }
-      const ac = (hex: string, category: string) => ({
-        hex, category, flight: hex, lat: 0.5, lon: 2, alt_geom: 35000, gs: 400, track: 90,
+      const ac = (hex: string, category: string, altitudeFt = 35000, lat = 0.5) => ({
+        hex, category, flight: hex, lat, lon: 2, alt_geom: altitudeFt, gs: 400, track: 90,
         geom_rate: 0, seen_pos: 0, t: "B77W", r: "N123", desc: "Test aircraft", dbFlags: 1,
       });
       Object.assign(window, { __mockMobileResponse: {
-        now: Date.now(), ac: [ac("a-light", "A1"), ac("z-heavy", "A5"), ac("surface", "C1")],
+        now: Date.now(), ac: [ac("a-light", "A1", 35000, 0.25), ac("z-heavy", "A5", 35000, 0.75),
+          ac("outside", "A3", 1000, 0.1), ac("surface", "C1")],
       } });
     });
     await page.goto("/");
     const list = page.getByRole("list", { name: "Aircraft list" });
-    await expect(list.getByRole("listitem")).toHaveCount(2);
+    await expect(list.getByRole("listitem")).toHaveCount(3);
     await expect(list.getByRole("listitem").first()).toContainText("z-heavy");
     await expect(list.getByRole("listitem").first().locator('[data-aircraft-icon="heavy"]')).toHaveCount(1);
     await expect(list).toContainText("ADSBExchange");
     await expect(list).toContainText("MIL");
+    const compass = page.getByRole("group", { name: "Tracking dials" });
+    const heavyMarker = compass.locator('[data-mobile-aircraft-id="z-heavy"]');
+    await expect(heavyMarker.locator('[data-aircraft-icon="heavy"]')).toHaveCount(1);
+    await expect(heavyMarker.locator('[data-aircraft-icon="heavy"] > path').first()).toHaveAttribute("transform", "rotate(90)");
+    await heavyMarker.getByRole("button", { name: "Track z-heavy" }).click();
+    await expect(heavyMarker.locator('[data-mobile-aircraft-selected="z-heavy"]')).toHaveCount(1);
+    await expect(page.getByText("z-heavy", { exact: true }).first()).toBeVisible();
+    await compass.screenshot({ path: test.info().outputPath("mobile-skydome-aircraft-icons.png") });
+    const outsideMarker = compass.locator('[data-mobile-aircraft-id="outside"]');
+    await expect(outsideMarker).toHaveAttribute("data-candidate", "false");
+    expect(Number(await outsideMarker.getAttribute("opacity"))).toBeLessThanOrEqual(0.5);
+    await outsideMarker.getByRole("button", { name: "Track outside" }).click();
+    await expect(outsideMarker.locator('[data-mobile-aircraft-selected="outside"]')).toHaveCount(0);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("checkbox", { name: "Aircraft scatter preferences" }).uncheck();
     await page.getByRole("button", { name: "Done", exact: true }).click();
