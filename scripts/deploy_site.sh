@@ -20,16 +20,20 @@ upload() {
     --container-name '$web' \
     --name "$1" \
     --file "$2" \
-    --content-type "text/html; charset=utf-8" \
-    --content-cache-control "$3" \
+    --content-type "$3" \
+    --content-cache-control "$4" \
     --overwrite
 }
 
 no_cache="no-store, no-cache, must-revalidate, max-age=0"
 public_cache="public, max-age=3600"
-upload AirWSJT-X/index.html site/index.html "$no_cache"
-upload AirWSJT-X site/index.html "$no_cache"
-upload Privacy/AirWSJT-X/index.html site/privacy.html "$public_cache"
-upload Privacy/AirWSJT-X site/privacy.html "$public_cache"
-upload Support/AirWSJT-X/index.html site/support.html "$public_cache"
-upload Support/AirWSJT-X site/support.html "$public_cache"
+html_type="text/html; charset=utf-8"
+json_type="application/json; charset=utf-8"
+upload AirWSJT-X/index.html site/index.html "$html_type" "$no_cache"
+upload AirWSJT-X site/index.html "$html_type" "$no_cache"
+upload Privacy/AirWSJT-X/index.html site/privacy.html "$html_type" "$public_cache"
+upload Privacy/AirWSJT-X site/privacy.html "$html_type" "$public_cache"
+upload Support/AirWSJT-X/index.html site/support.html "$html_type" "$public_cache"
+upload Support/AirWSJT-X site/support.html "$html_type" "$public_cache"
+upload airwsjtx/callsign-grid-db.json site/callsign-grid-db.json "$json_type" "$public_cache"
+upload airwsjtx/callsign-grid-db-version.json site/callsign-grid-db-version.json "$json_type" "$no_cache"

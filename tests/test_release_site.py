@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import unittest
 
@@ -37,6 +38,34 @@ class ReleaseSiteTests(unittest.TestCase):
         self.assertIn('scripts/deploy_site.sh "${{ inputs.version }}"', manual)
         self.assertIn('if [[ ! "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', deploy)
         self.assertIn("upload AirWSJT-X/index.html site/index.html", deploy)
+        self.assertIn(
+            "upload airwsjtx/callsign-grid-db.json site/callsign-grid-db.json",
+            deploy,
+        )
+        self.assertIn(
+            "upload airwsjtx/callsign-grid-db-version.json site/callsign-grid-db-version.json",
+            deploy,
+        )
+        self.assertIn('json_type="application/json; charset=utf-8"', deploy)
+
+    def test_callsign_database_and_manifest_are_consistent(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        database = json.loads(
+            (root / "site" / "callsign-grid-db.json").read_text(encoding="utf-8")
+        )
+        manifest = json.loads(
+            (root / "site" / "callsign-grid-db-version.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(database["version"], manifest["version"])
+        self.assertEqual(len(database["entries"]), manifest["entries"])
+        self.assertEqual(
+            set(database["entries"]),
+            {"AD7NP", "K7MDL", "KD7UO", "VE7NX", "W7GLF", "W7PUA"},
+        )
+        for callsign, station in database["entries"].items():
+            with self.subTest(callsign=callsign):
+                self.assertRegex(station["grid"], r"^[A-R]{2}[0-9]{2}[A-X]{2}$")
 
 
 if __name__ == "__main__":
