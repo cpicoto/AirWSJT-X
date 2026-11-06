@@ -77,9 +77,9 @@ export async function listCallsigns(): Promise<StationInfo[]> {
 export async function lookupCallsignOnline(callsign: string): Promise<StationInfo | null> {
   const call = callsign.trim().toUpperCase();
   try {
-    const resp = await fetch(`https://callook.info/${call}/json`, {
-      headers: { "User-Agent": "AirWSJT-X/0.2" },
-    });
+    // Keep browser requests "simple". Setting User-Agent from WebKit triggers
+    // a CORS preflight, and static Azure websites reject OPTIONS with 405.
+    const resp = await fetch(`https://callook.info/${call}/json`);
     if (!resp.ok) return null;
     const d = await resp.json();
     if (d.status !== "VALID") return null;
@@ -120,9 +120,7 @@ export async function getDbStatus(): Promise<DbStatus> {
 export async function downloadDb(
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<DbStatus> {
-  const resp = await fetch(DB_URL, {
-    headers: { "User-Agent": "AirWSJT-X/0.2" },
-  });
+  const resp = await fetch(DB_URL);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const payload = await resp.json();
   const entries = payload.entries as Record<string, Record<string, unknown>> | undefined;
@@ -171,9 +169,7 @@ export async function checkForUpdate(): Promise<{
   remoteEntries: number | null;
 }> {
   try {
-    const resp = await fetch(DB_MANIFEST_URL, {
-      headers: { "User-Agent": "AirWSJT-X/0.2" },
-    });
+    const resp = await fetch(DB_MANIFEST_URL);
     if (!resp.ok) return { updateAvailable: false, remoteVersion: null, remoteEntries: null };
     const manifest = await resp.json();
     const remoteVersion = manifest.version ? String(manifest.version) : null;
