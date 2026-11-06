@@ -17,7 +17,8 @@ import {
   nativeFloatSupported, syncFloatWindow,
   type FloatAction, type FloatKind, type FloatState,
 } from "./lib/floatWindow";
-import { bearingDeg, haversineKm, isValidLocator, locatorToLatlon } from "./lib/geo";
+import { bearingDeg, haversineKm, isValidLocator, latlonToGrid, locatorToLatlon } from "./lib/geo";
+import type { StationInfo } from "./lib/callsign";
 import SkyDome from "./SkyDome";
 import { isSpeechSupported, speak, cancelSpeech } from "./lib/speech";
 import { formatUsableTime, predictUsableTime } from "./lib/usableTime";
@@ -267,6 +268,17 @@ type FavoriteDx = { call: string; grid: string | null; alt?: string };
 const favAlt = (f: FavoriteDx) => (f.alt?.trim() ? f.alt.trim() : "0");
 const favGrid = (f: FavoriteDx) => (f.grid ?? "").trim().toUpperCase();
 const DEFAULT_FAVORITE_DX: FavoriteDx[] = [{ call: "VE7NX", grid: "CN89oh" }, { call: "W7PUA", grid: "CN84jq" }];
+type CallsignDbEntry = Omit<StationInfo, "source">;
+function databaseStationGrid(station: CallsignDbEntry): string | null {
+  const grid = normalizeGrid(station.grid);
+  if (isValidLocator(grid)) return grid;
+  if (station.lat !== null && station.lon !== null
+    && Number.isFinite(station.lat) && Number.isFinite(station.lon)
+    && station.lat > -90 && station.lat < 90 && station.lon >= -180 && station.lon < 180) {
+    return latlonToGrid(station.lat, station.lon).toUpperCase();
+  }
+  return null;
+}
 function loadFavoriteDx(): FavoriteDx[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(FAVORITE_DX_KEY) ?? localStorage.getItem("airwsjtx.recentDx") ?? "null") as FavoriteDx[] | null;
@@ -559,6 +571,30 @@ export default function App() {
   const activeFlightRef = useRef({ priority_flight: "", priority_flight_exclusive: false });
   const [callsignDbStatus, setCallsignDbStatus] = useState<CallsignDbStatus | null>(null);
   const [callsignDbBusy, setCallsignDbBusy] = useState(false);
+  const [callsignDbEntries, setCallsignDbEntries] = useState<Record<string, CallsignDbEntry>>({});
+  const [callsignDbSearch, setCallsignDbSearch] = useState("");
+  const callsignDbGrids = useMemo(() => Object.fromEntries(
+    Object.values(callsignDbEntries).map(station => [station.callsign, databaseStationGrid(station)]),
+  ), [callsignDbEntries]);
+  const dxChoices = useMemo(() => {
+    const savedCalls = new Set(favoriteDx.map(station => station.call));
+    const databaseChoices = Object.values(callsignDbEntries)
+      .filter(station => !savedCalls.has(station.callsign))
+      .map(station => ({
+        call: station.callsign,
+        grid: stationGridOverrides[station.callsign] ?? stationGridOverrides[baseCall(station.callsign)]
+          ?? callsignDbGrids[station.callsign] ?? null,
+        alt: "0",
+        name: station.name,
+      }));
+    const query = callsignDbSearch.trim().toUpperCase();
+    return [...favoriteDx.map(station => ({ ...station, name: null })), ...databaseChoices]
+      .filter(station => `${station.call} ${station.name ?? ""} ${station.grid ?? ""}`.toUpperCase().includes(query));
+  }, [favoriteDx, callsignDbEntries, callsignDbSearch, callsignDbGrids, stationGridOverrides]);
+  const refreshCallsignDbEntries = useCallback(async () => {
+    const entries = await rpc("callsign_db_entries") as CallsignDbEntry[];
+    setCallsignDbEntries(Object.fromEntries(entries.map(entry => [entry.callsign, entry])));
+  }, []);
   const [lockedPlane, setLockedPlane] = useState<LockState | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const rotatorSpeechLastAnnouncedRef = useRef<{ az: number; el: number; at: number; source: "rotator" | "manual" } | null>(null);
@@ -604,7 +640,8 @@ export default function App() {
     const call = callsign.trim().toUpperCase();
     const base = baseCall(call);
     return stationGridOverrides[call] ?? remoteStationGrids[call]
-      ?? stationGridOverrides[base] ?? remoteStationGrids[base] ?? null;
+      ?? stationGridOverrides[base] ?? remoteStationGrids[base]
+      ?? callsignDbGrids[call] ?? callsignDbGrids[base] ?? null;
   }
 
   // Wire sidecar messages — handles both RPC responses and push events
@@ -854,10 +891,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (status === null) return;
     rpc("callsign_db_status")
       .then((s) => setCallsignDbStatus(s as CallsignDbStatus))
-      .catch(() => {});
-  }, []);
+      .catch(error => addLog(`Cannot read callsign DB status: ${error}`));
+    refreshCallsignDbEntries()
+      .catch(error => addLog(`Cannot load callsign DB choices: ${error}`));
+  }, [status === null, addLog, refreshCallsignDbEntries]);
 
   // Newest log entries are rendered first.
   useEffect(() => {
@@ -1902,7 +1942,14 @@ export default function App() {
               </div>
             </div>
             {/* DX favorites */}
-            <div id="dx-favorites-label" style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites</div>
+            <div id="dx-favorites-label" style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 6 }}>DX favorites / callsign database</div>
+            <input
+              aria-label="Search callsign database"
+              placeholder="Search callsign / grid"
+              value={callsignDbSearch}
+              onChange={event => setCallsignDbSearch(event.target.value)}
+              style={{ ...STATION_INPUT_STYLE, marginTop: 3, marginLeft: 20, width: 180 }}
+            />
             <div style={{ display: "flex", gap: 3, marginTop: 2, flexWrap: "wrap", paddingLeft: 20 }}>
               <DarkSelect
                 ariaLabel="DX favorites"
@@ -1912,17 +1959,18 @@ export default function App() {
                 popupWidth={240}
                 textColor="var(--text)"
                 columnTemplate="10ch 8ch minmax(0, 1fr)"
-                options={favoriteDx.map((f, i) => ({
+                options={dxChoices.map((f, i) => ({
                   value: String(i),
                   label: `${f.call} ${f.grid ?? "—"} ${favAlt(f)} m`,
                   columns: [f.call, f.grid ?? "—", `${favAlt(f)} m`],
                 }))}
                 onChange={(value) => {
-                  const f = favoriteDx[Number(value)];
+                  const f = dxChoices[Number(value)];
                   if (!f) return;
                   setDxCallInput(f.call);
                   setDxGridInput(f.grid ?? "");
-                  selectDx(f.call, f.grid, true, null, f.alt ?? "");
+                  if (!f.grid) addLog(`No location for ${f.call}; enter a DX grid manually`);
+                  selectDx(f.call, f.grid, true, f.name, f.alt ?? "");
                 }}
               />
               <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px" }}
@@ -1937,6 +1985,9 @@ export default function App() {
                 + Other
               </button>
             </div>
+            {callsignDbSearch && dxChoices.length === 0 && (
+              <div style={{ marginLeft: 20, fontSize: 10, color: "var(--text-muted)" }}>No matching callsigns</div>
+            )}
             <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "nowrap" }}>              <button className="btn-secondary" style={{ fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }}
                 onClick={async () => {
                   setCallsignDbBusy(true);
@@ -1966,6 +2017,11 @@ export default function App() {
                     const s = await rpc("callsign_db_download") as CallsignDbStatus;
                     setCallsignDbStatus(s);
                     addLog(`Callsign DB downloaded (${s.entries} entries, ${s.version ?? "no version"})`);
+                    try {
+                      await refreshCallsignDbEntries();
+                    } catch (error) {
+                      addLog(`Callsign DB downloaded, but choices could not be refreshed: ${error}`);
+                    }
                   } catch (e) {
                     addLog(`Callsign DB download failed: ${e}`);
                   } finally {

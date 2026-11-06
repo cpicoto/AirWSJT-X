@@ -1,4 +1,44 @@
+import type { StationInfo } from "../../src/lib/callsign";
+
+type MockCallsignEntry = Omit<StationInfo, "source">;
+type MockCallsignPayload = { version: string; entries: Record<string, Omit<MockCallsignEntry, "callsign">> };
+const BUILTIN_CALLSIGN_ENTRIES: MockCallsignEntry[] = [
+  { callsign: "VE7NX", name: "Neil Olson", grid: "CN89oh", lat: 49.3, lon: -122.81, country: "Canada" },
+  { callsign: "W7PUA", name: "Bob Larkin", grid: "CN84jq", lat: 44.677, lon: -123.227, country: "USA" },
+];
+function callsignDbPayload(): MockCallsignPayload | null {
+  return JSON.parse(localStorage.getItem("__mock.callsignDb") ?? "null");
+}
+function callsignDbEntries(): MockCallsignEntry[] {
+  const entries = new Map(BUILTIN_CALLSIGN_ENTRIES.map(entry => [entry.callsign, entry]));
+  for (const [call, entry] of Object.entries(callsignDbPayload()?.entries ?? {})) {
+    entries.set(call, { ...entry, callsign: call });
+  }
+  return [...entries.values()].sort((a, b) => a.callsign.localeCompare(b.callsign));
+}
+function callsignDbStatus() {
+  const payload = callsignDbPayload();
+  return {
+    db_url: "https://ad7np.us/airwsjtx/callsign-grid-db.json",
+    version: payload?.version ?? null,
+    entries: Object.keys(payload?.entries ?? {}).length,
+    downloaded_at: payload ? new Date().toISOString() : null,
+    fresh: !!payload, freshness_days: 30,
+  };
+}
+
 const RPC_RESPONSES: Record<string, (params: Record<string, unknown>) => unknown> = {
+  callsign_db_status: callsignDbStatus,
+  callsign_db_entries: callsignDbEntries,
+  callsign_db_download: () => {
+    const payload = (window as unknown as { __mockCallsignDbDownload?: MockCallsignPayload }).__mockCallsignDbDownload;
+    if (!payload) throw new Error("Missing callsign DB download fixture");
+    localStorage.setItem("__mock.callsignDb", JSON.stringify(payload));
+    return callsignDbStatus();
+  },
+  callsign_db_check_update: () => ({
+    ...callsignDbStatus(), online: true, update_available: false,
+  }),
   rotator_output_status: () => {
     const mock = window as unknown as { __mockOutputMode?: string; __mockOutputStatusRequests?: number; __mockDDEStatus?: unknown };
     mock.__mockOutputStatusRequests = Number(mock.__mockOutputStatusRequests ?? 0) + 1;

@@ -73,6 +73,53 @@ class CallsignDatabaseTests(unittest.TestCase):
         self.assertEqual(info.grid, "FN20")
         self.assertEqual(info.source, "local-db")
 
+    def test_list_entries_includes_builtins_without_network(self) -> None:
+        with patch.object(self.callsign.urllib.request, "urlopen") as request:
+            entries = self.callsign.list_db_entries()
+        request.assert_not_called()
+        self.assertEqual([entry["callsign"] for entry in entries], ["VE7NX", "W7PUA"])
+        self.assertEqual(
+            set(entries[0]), {"callsign", "name", "grid", "lat", "lon", "country"},
+        )
+
+    def test_download_refreshes_entries_and_persists_beyond_reload(self) -> None:
+        # Prime the empty cache before downloading, as a running desktop would.
+        self.assertEqual(len(self.callsign.list_db_entries()), 2)
+        payload = {
+            "version": "test",
+            "entries": {
+                "k7mdl": {"grid": "CN87XS", "lat": 47.77, "lon": -122.04},
+                "VE7NX": {"grid": "CN89JI"},
+            },
+        }
+        with patch.object(self.callsign, "_download_json", return_value=payload):
+            self.callsign.download_db()
+        for reloaded in (False, True):
+            with self.subTest(reloaded=reloaded):
+                if reloaded:
+                    self.callsign = importlib.reload(callsign_module)
+                entries = self.callsign.list_db_entries()
+                self.assertEqual([entry["callsign"] for entry in entries], ["K7MDL", "VE7NX", "W7PUA"])
+                self.assertEqual(entries[0]["grid"], "CN87XS")
+                self.assertEqual(entries[0]["lat"], 47.77)
+                self.assertEqual(entries[0]["lon"], -122.04)
+                self.assertEqual(entries[1]["grid"], "CN89JI")
+                # UI consumers cannot mutate the backend cache through a returned record.
+                entries[0]["grid"] = "FN20"
+                self.assertEqual(self.callsign.lookup("K7MDL").grid, "CN87XS")
+
+    def test_entries_rpc_returns_downloaded_stations(self) -> None:
+        from sidecar import airwsjtx_bridge
+
+        self._write_local_db(version="test", downloaded_at=_iso(datetime.now(timezone.utc)))
+        with patch.object(airwsjtx_bridge, "_emit") as emit:
+            airwsjtx_bridge.handle({"id": "entries", "method": "callsign_db_entries"})
+        response = emit.call_args.args[0]
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["id"], "entries")
+        self.assertEqual(response["result"][0]["callsign"], "K1ABC")
+        self.assertEqual(response["result"][0]["grid"], "FN20")
+
     def test_db_status_reports_freshness(self) -> None:
         now = datetime.now(timezone.utc)
         self._write_local_db(version="2026-10-10", downloaded_at=_iso(now))

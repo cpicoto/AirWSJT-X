@@ -99,6 +99,12 @@ AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/D
 The Stations panel's **DB Update** downloads a separate offline callsign database
 from [callsign-grid-db.json](https://ad7np.us/airwsjtx/callsign-grid-db.json).
 **DB Check** checks its version manifest without downloading the full database.
+On desktop, **Search callsign database** filters the **DX favorites** picker,
+which lists saved favorites first, followed by database callsigns not already saved;
+selecting a record applies its grid (or a grid derived from its coordinates)
+through the normal local DX station flow. Saved grid overrides still take
+priority. Choices reload after **DB Update** and on startup, include built-in
+stations when offline, without changing the saved **DX favorites** list or its limit.
 Desktop and mobile share these endpoints. The initial database contains one
 default operating grid for each verified group callsign: AD7NP, K7MDL, KD7UO,
 VE7NX, W7GLF, and W7PUA. RoverAIM remains the source for named portable sites;
