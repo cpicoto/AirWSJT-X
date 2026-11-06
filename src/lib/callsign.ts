@@ -65,6 +65,24 @@ export async function lookupCallsign(callsign: string): Promise<StationInfo | nu
   }
 }
 
+export async function listCallsigns(): Promise<StationInfo[]> {
+  try {
+    const db = await openIDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE_NAME, "readonly");
+      const req = tx.objectStore(DB_STORE_NAME).getAll();
+      req.onsuccess = () => {
+        const stations = (req.result as StationInfo[]).slice()
+          .sort((a, b) => a.callsign.localeCompare(b.callsign));
+        resolve(stations);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function lookupCallsignOnline(callsign: string): Promise<StationInfo | null> {
   const call = callsign.trim().toUpperCase();
   try {
@@ -122,6 +140,13 @@ export async function downloadDb(
   const db = await openIDB();
   const callsigns = Object.keys(entries);
   const batchSize = 500;
+
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(DB_STORE_NAME, "readwrite");
+    tx.objectStore(DB_STORE_NAME).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 
   for (let i = 0; i < callsigns.length; i += batchSize) {
     const batch = callsigns.slice(i, i + batchSize);

@@ -1,7 +1,8 @@
-import { watchGpsAltitude } from "./lib/gps";
+import { watchGpsPosition } from "./lib/gps";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   locatorToLatlon,
+  latlonToGrid,
   bearingDeg,
   elevationDeg,
   haversineKm,
@@ -15,7 +16,7 @@ import AircraftAccounts from "./AircraftAccounts";
 import Dump1090Source, { Dump1090Host } from "./Dump1090Source";
 import { version as appVersion } from "../package.json";
 import { AndroidRtlSdrSource, isAndroidRtlSdrSupported } from "./lib/androidRtlSdr";
-import { downloadDb, getDbStatus, DbStatus } from "./lib/callsign";
+import { downloadDb, getDbStatus, listCallsigns, type DbStatus, type StationInfo } from "./lib/callsign";
 import { isSpeechSupported, speak } from "./lib/speech";
 import { HeadingSmoother, headingFromOrientation, normalizeDegrees, signedHeadingDelta } from "./lib/compass";
 import { RANKING_OPTIONS, isRankingMethod, rankGeometry, applyScatterPreferences, compareRanking, formatRanking, type AircraftRanking, type RankingMethod } from "./lib/aircraftRanking";
@@ -253,6 +254,7 @@ interface MobileSettings {
   scatterMetadata?: boolean;
   myCall: string;
   myGrid: string;
+  myGridSource?: "gps" | "manual";
   dxCall: string;
   dxGrid: string;
   speechEnabled: boolean;
@@ -265,10 +267,14 @@ function loadSettings(): MobileSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw) {
       const parsed: MobileSettings = JSON.parse(raw);
-      return { ...parsed, rankingMethod: isRankingMethod(parsed.rankingMethod) ? parsed.rankingMethod : "legacy" };
+      return {
+        ...parsed,
+        myGridSource: parsed.myGridSource ?? "gps",
+        rankingMethod: isRankingMethod(parsed.rankingMethod) ? parsed.rankingMethod : "legacy",
+      };
     }
   } catch { /* ignore */ }
-  return { myCall: "", myGrid: "", dxCall: "", dxGrid: "", speechEnabled: false };
+  return { myCall: "", myGrid: "", myGridSource: "gps", dxCall: "", dxGrid: "", speechEnabled: false };
 }
 
 export default function MobileApp() {
@@ -285,6 +291,8 @@ export default function MobileApp() {
   const [status, setStatus] = useState("Configure your station");
   const [lastUpdate, setLastUpdate] = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
+  const [knownStations, setKnownStations] = useState<StationInfo[]>([]);
+  const [currentGrid, setCurrentGrid] = useState<string | null>(null);
   const [dbBusy, setDbBusy] = useState(false);
   const [accountRevision, setAccountRevision] = useState(0);
   const accountsChanged = useCallback(() => setAccountRevision(value => value + 1), []);
@@ -294,13 +302,14 @@ export default function MobileApp() {
   const compassHeadingRef = useRef<number | null>(null);
   const stationAltRef = useRef(0);
 
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
   const saveSettings = useCallback((next: MobileSettings) => {
+    settingsRef.current = next;
     setSettings(next);
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
   }, []);
-
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
   const loadDump1090Host = useCallback(async (): Promise<Dump1090Host> =>
     ({ host: settingsRef.current.dump1090Host ?? "", port: 30003 }), []);
   // Saving a host selects dump1090; disabling it falls back to OpenSky.
@@ -405,7 +414,25 @@ export default function MobileApp() {
   }, []);
 
   useEffect(() => {
-    getDbStatus().then(setDbStatus).catch(() => {});
+    let cancelled = false;
+    const loadStations = async () => {
+      let nextStatus = await getDbStatus();
+      let stations = await listCallsigns();
+      if (!nextStatus.fresh || nextStatus.entries === 0) {
+        try {
+          nextStatus = await downloadDb();
+          stations = await listCallsigns();
+        } catch {
+          // The saved favorites remain usable when the device is offline.
+        }
+      }
+      if (!cancelled) {
+        setDbStatus(nextStatus);
+        setKnownStations(stations);
+      }
+    };
+    void loadStations();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -560,8 +587,16 @@ export default function MobileApp() {
     return () => { disposed = true; poller.stop(); };
   }, [hasStation, path, settings.aircraftSource, settings.dump1090Host, accountRevision]);
 
-  // GPS altitude feeds the station height used for elevation/range
-  useEffect(() => watchGpsAltitude((alt) => { stationAltRef.current = alt ?? 0; }), []);
+  // GPS supplies the mobile station grid and height. A manual grid remains an explicit override.
+  useEffect(() => watchGpsPosition(position => {
+    stationAltRef.current = position.altitudeM ?? 0;
+    const grid = latlonToGrid(position.lat, position.lon).toUpperCase();
+    setCurrentGrid(grid);
+    const current = settingsRef.current;
+    if ((current.myGridSource ?? "gps") === "gps" && current.myGrid !== grid) {
+      saveSettings({ ...current, myGrid: grid, myGridSource: "gps" });
+    }
+  }), [saveSettings]);
 
   // Speech
   useEffect(() => {
@@ -592,10 +627,19 @@ export default function MobileApp() {
     try {
       const result = await downloadDb();
       setDbStatus(result);
+      const stations = await listCallsigns();
+      setKnownStations(stations);
+      setStatus(`Downloaded ${stations.length} known DX stations`);
     } catch (e) {
       setStatus(`DB download failed: ${e}`);
     }
     setDbBusy(false);
+  }
+
+  function selectKnownDxStation(station: StationInfo) {
+    if (!station.grid) return;
+    saveSettings({ ...settings, dxCall: station.callsign, dxGrid: station.grid.toUpperCase() });
+    setStatus(`DX station set to ${station.callsign} ${station.grid.toUpperCase()}`);
   }
 
   const compassAircraft = aircraft.slice(0, 12).map((a) => ({
@@ -637,7 +681,39 @@ export default function MobileApp() {
           <SettingsField label="My Callsign" value={settings.myCall}
             onChange={(v) => saveSettings({ ...settings, myCall: v.toUpperCase() })} placeholder="AD7NP" />
           <SettingsField label="My Grid" value={settings.myGrid}
-            onChange={(v) => saveSettings({ ...settings, myGrid: v.toUpperCase() })} placeholder="CN87" />
+            onChange={(v) => saveSettings({ ...settings, myGrid: v.toUpperCase(), myGridSource: "manual" })} placeholder="CN87" />
+          <button
+            style={actionBtnStyle}
+            disabled={!currentGrid}
+            onClick={() => currentGrid && saveSettings({ ...settings, myGrid: currentGrid, myGridSource: "gps" })}
+          >
+            {currentGrid ? `Use Current Location (${currentGrid})` : "Waiting for Current Location…"}
+          </button>
+          <div style={{ fontSize: 11, color: "#8b949e", marginTop: -10 }}>
+            My Grid is {settings.myGridSource === "manual" ? "manually set" : "updated automatically from GPS"}.
+          </div>
+          <label style={{ color: "#c9d1d9" }}>DX Favorite
+            <select
+              aria-label="DX Favorite"
+              value={knownStations.some(station => station.callsign === settings.dxCall) ? settings.dxCall : ""}
+              onChange={event => {
+                const station = knownStations.find(item => item.callsign === event.target.value);
+                if (station) selectKnownDxStation(station);
+              }}
+            >
+              <option value="">Select a known station…</option>
+              {knownStations.map(station => (
+                <option key={station.callsign} value={station.callsign} disabled={!station.grid}>
+                  {station.callsign}{station.grid ? ` — ${station.grid}` : " — Grid unknown"}
+                </option>
+              ))}
+            </select>
+          </label>
+          {knownStations.length === 0 && (
+            <div style={{ fontSize: 11, color: "#8b949e", marginTop: -10 }}>
+              Download the callsign database below to load DX favorites.
+            </div>
+          )}
           <SettingsField label="DX Callsign" value={settings.dxCall}
             onChange={(v) => saveSettings({ ...settings, dxCall: v.toUpperCase() })} placeholder="VE7NX" />
           <SettingsField label="DX Grid" value={settings.dxGrid}

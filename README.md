@@ -83,7 +83,14 @@ unchanged.
 
 ### Mobile Mode
 
-The mobile app operates independently — enter your grid locator, select an aircraft data source (OpenSky, ADS-B Exchange, or a dump1090 receiver on your network), and aircraft in your area appear on the compass rose with azimuth, elevation, and distance. Speech callouts guide antenna pointing hands-free.
+The mobile app operates independently. With location permission, it derives the
+six-character **My Grid** locator from GPS and keeps it current; typing a grid
+switches to an explicit manual override, and **Use Current Location** returns to
+GPS tracking. The downloaded callsign database populates the **DX Favorite**
+selector so a known station's callsign and grid can be applied together. Select
+an aircraft data source (OpenSky, ADS-B Exchange, or a dump1090 receiver on your
+network), and aircraft in your area appear on the compass rose with azimuth,
+elevation, and distance. Speech callouts guide antenna pointing hands-free.
 
 ### Remote Station Database
 
