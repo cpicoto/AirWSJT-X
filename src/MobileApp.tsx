@@ -418,6 +418,10 @@ export default function MobileApp() {
     const loadStations = async () => {
       let nextStatus = await getDbStatus();
       let stations = await listCallsigns();
+      if (!cancelled) {
+        setDbStatus(nextStatus);
+        setKnownStations(stations);
+      }
       if (!nextStatus.fresh || nextStatus.entries === 0) {
         try {
           nextStatus = await downloadDb();
@@ -588,15 +592,22 @@ export default function MobileApp() {
   }, [hasStation, path, settings.aircraftSource, settings.dump1090Host, accountRevision]);
 
   // GPS supplies the mobile station grid and height. A manual grid remains an explicit override.
-  useEffect(() => watchGpsPosition(position => {
-    stationAltRef.current = position.altitudeM ?? 0;
-    const grid = latlonToGrid(position.lat, position.lon).toUpperCase();
-    setCurrentGrid(grid);
-    const current = settingsRef.current;
-    if ((current.myGridSource ?? "gps") === "gps" && current.myGrid !== grid) {
-      saveSettings({ ...current, myGrid: grid, myGridSource: "gps" });
-    }
-  }), [saveSettings]);
+  useEffect(() => watchGpsPosition(
+    position => {
+      stationAltRef.current = position.altitudeM ?? 0;
+      const grid = latlonToGrid(position.lat, position.lon).toUpperCase();
+      setCurrentGrid(grid);
+      const current = settingsRef.current;
+      if ((current.myGridSource ?? "gps") === "gps" && current.myGrid !== grid) {
+        saveSettings({ ...current, myGrid: grid, myGridSource: "gps" });
+      }
+    },
+    error => {
+      stationAltRef.current = 0;
+      setCurrentGrid(null);
+      setStatus(`Current location unavailable: ${error.message}`);
+    },
+  ), [saveSettings]);
 
   // Speech
   useEffect(() => {
@@ -695,7 +706,10 @@ export default function MobileApp() {
           <label style={{ color: "#c9d1d9" }}>DX Favorite
             <select
               aria-label="DX Favorite"
-              value={knownStations.some(station => station.callsign === settings.dxCall) ? settings.dxCall : ""}
+              value={knownStations.some(station =>
+                station.callsign === settings.dxCall &&
+                station.grid?.toUpperCase() === settings.dxGrid.toUpperCase()
+              ) ? settings.dxCall : ""}
               onChange={event => {
                 const station = knownStations.find(item => item.callsign === event.target.value);
                 if (station) selectKnownDxStation(station);
