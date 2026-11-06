@@ -16,7 +16,7 @@ import tempfile
 import threading
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -169,6 +169,17 @@ def _current_db_status() -> dict[str, Any]:
 
 def get_db_status() -> dict[str, Any]:
     return _current_db_status()
+
+
+def list_db_entries() -> list[dict[str, Any]]:
+    """List offline choices, with downloaded records taking precedence over built-ins."""
+    _load_local_db()
+    with _LOCAL_DB_LOCK:
+        stations = {**_KNOWN, **_LOCAL_DB_CACHE}
+    return [
+        {key: value for key, value in asdict(stations[call]).items() if key != "source"}
+        for call in sorted(stations)
+    ]
 
 
 def _fetch_json(url: str, timeout_s: int, label: str) -> dict[str, Any]:
