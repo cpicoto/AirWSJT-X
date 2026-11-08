@@ -8,7 +8,7 @@ test("Python and TypeScript ranking agree for geometry, symmetry, windows and mi
     aircraft: SkyCourseAircraft & { position_updated_epoch_s: number | null };
     a: SkyCourseStation; b: SkyCourseStation; method: RankingMethod; score: number; now: number;
     expected: AircraftRanking;
-  }[] = JSON.parse(execFileSync("python", ["-c",
+  }[] = JSON.parse(execFileSync("python3", ["-c",
     "import json; from tests.test_aircraft_ranking import parity_cases; print(json.dumps(parity_cases()))",
   ], { encoding: "utf8" }));
   for (const item of cases) {

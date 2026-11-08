@@ -83,11 +83,42 @@ unchanged.
 
 ### Mobile Mode
 
-The mobile app operates independently — enter your grid locator, select an aircraft data source (OpenSky, ADS-B Exchange, or a dump1090 receiver on your network), and aircraft in your area appear on the compass rose with azimuth, elevation, and distance. Speech callouts guide antenna pointing hands-free.
+The mobile app operates independently. With location permission, it derives the
+six-character **My Grid** locator from GPS and keeps it current; typing a grid
+switches to an explicit manual override, and **Use Current Location** returns to
+GPS tracking. The downloaded callsign database populates the **DX Favorite**
+selector so a known station's callsign and grid can be applied together. Select
+an aircraft data source (OpenSky, ADS-B Exchange, or a dump1090 receiver on your
+network), and aircraft in your area appear on the compass rose with azimuth,
+elevation, and distance. Speech callouts guide antenna pointing hands-free.
 
 ### Remote Station Database
 
 AirWSJT-X fetches a shared station database at startup from [ad7np.us/RoverAIM/DB](https://ad7np.us/RoverAIM/DB) to auto-resolve DX station grid squares. Entries use `callsign@location` format (e.g., `AD7NP@home`, `W7PUA@MarysPeak`). User-defined grid overrides in the Stations panel take priority over the remote database.
+
+The Stations panel's **DB Update** downloads a separate offline callsign database
+from [callsign-grid-db.json](https://ad7np.us/airwsjtx/callsign-grid-db.json).
+**DB Check** checks its version manifest without downloading the full database.
+On desktop, **Search callsign database** filters the **DX favorites** picker,
+which lists saved favorites first, followed by database callsigns not already saved;
+selecting a record applies its grid (or a grid derived from its coordinates)
+through the normal local DX station flow. Saved grid overrides still take
+priority. Choices reload after **DB Update** and on startup, include built-in
+stations when offline, without changing the saved **DX favorites** list or its limit.
+Desktop and mobile share these endpoints. The initial database contains one
+default operating grid for each verified group callsign: AD7NP, K7MDL, KD7UO,
+VE7NX, W7GLF, and W7PUA. RoverAIM remains the source for named portable sites;
+because a callsign lookup has one automatic result, W7PUA defaults to its home
+grid while the Marys Peak site remains selectable in RoverAIM.
+
+The published files live in `site/airwsjtx/`. When changing entries, update the
+database version and keep the manifest's version and entry count in sync.
+`scripts/deploy_site.sh` publishes both files as JSON with caching disabled,
+alongside the website. To make changes live after merging, run the **Deploy
+website** workflow (`.github/workflows/deploy-site.yml`) on the updated branch
+with the currently published release version; the repository must have the
+`AZURE_STORAGE_KEY` secret configured. Release deployments also publish these
+files. Committing the files alone does not update the live endpoints.
 
 ## Quick Start
 

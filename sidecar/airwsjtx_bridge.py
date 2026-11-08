@@ -29,6 +29,7 @@ from airwsjtx.callsign import (
     check_db_update as callsign_check_db_update,
     download_db as callsign_download_db,
     get_db_status as callsign_get_db_status,
+    list_db_entries as callsign_list_db_entries,
     lookup as lookup_callsign,
     submit_grid_contribution as callsign_submit_grid_contribution,
 )
@@ -1017,6 +1018,9 @@ def handle(msg: dict) -> None:
 
         elif method == "callsign_db_status":
             _ok(id_, callsign_get_db_status())
+
+        elif method == "callsign_db_entries":
+            _ok(id_, callsign_list_db_entries())
 
         elif method == "callsign_db_check_update":
             db_url = str(params.get("url") or "")

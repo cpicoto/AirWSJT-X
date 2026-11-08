@@ -7,7 +7,10 @@ import tempfile
 import unittest
 import urllib.error
 from datetime import datetime, timedelta, timezone
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import MagicMock, patch
 
 import airwsjtx.callsign as callsign_module
@@ -70,6 +73,53 @@ class CallsignDatabaseTests(unittest.TestCase):
         self.assertEqual(info.grid, "FN20")
         self.assertEqual(info.source, "local-db")
 
+    def test_list_entries_includes_builtins_without_network(self) -> None:
+        with patch.object(self.callsign.urllib.request, "urlopen") as request:
+            entries = self.callsign.list_db_entries()
+        request.assert_not_called()
+        self.assertEqual([entry["callsign"] for entry in entries], ["VE7NX", "W7PUA"])
+        self.assertEqual(
+            set(entries[0]), {"callsign", "name", "grid", "lat", "lon", "country"},
+        )
+
+    def test_download_refreshes_entries_and_persists_beyond_reload(self) -> None:
+        # Prime the empty cache before downloading, as a running desktop would.
+        self.assertEqual(len(self.callsign.list_db_entries()), 2)
+        payload = {
+            "version": "test",
+            "entries": {
+                "k7mdl": {"grid": "CN87XS", "lat": 47.77, "lon": -122.04},
+                "VE7NX": {"grid": "CN89JI"},
+            },
+        }
+        with patch.object(self.callsign, "_download_json", return_value=payload):
+            self.callsign.download_db()
+        for reloaded in (False, True):
+            with self.subTest(reloaded=reloaded):
+                if reloaded:
+                    self.callsign = importlib.reload(callsign_module)
+                entries = self.callsign.list_db_entries()
+                self.assertEqual([entry["callsign"] for entry in entries], ["K7MDL", "VE7NX", "W7PUA"])
+                self.assertEqual(entries[0]["grid"], "CN87XS")
+                self.assertEqual(entries[0]["lat"], 47.77)
+                self.assertEqual(entries[0]["lon"], -122.04)
+                self.assertEqual(entries[1]["grid"], "CN89JI")
+                # UI consumers cannot mutate the backend cache through a returned record.
+                entries[0]["grid"] = "FN20"
+                self.assertEqual(self.callsign.lookup("K7MDL").grid, "CN87XS")
+
+    def test_entries_rpc_returns_downloaded_stations(self) -> None:
+        from sidecar import airwsjtx_bridge
+
+        self._write_local_db(version="test", downloaded_at=_iso(datetime.now(timezone.utc)))
+        with patch.object(airwsjtx_bridge, "_emit") as emit:
+            airwsjtx_bridge.handle({"id": "entries", "method": "callsign_db_entries"})
+        response = emit.call_args.args[0]
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["id"], "entries")
+        self.assertEqual(response["result"][0]["callsign"], "K1ABC")
+        self.assertEqual(response["result"][0]["grid"], "FN20")
+
     def test_db_status_reports_freshness(self) -> None:
         now = datetime.now(timezone.utc)
         self._write_local_db(version="2026-10-10", downloaded_at=_iso(now))
@@ -102,6 +152,97 @@ class CallsignDatabaseTests(unittest.TestCase):
         self.assertTrue(status["online"])
         self.assertTrue(status["update_available"])
         self.assertEqual(status["remote_version"], "2026-11-01")
+
+    def test_published_database_and_manifest_are_compatible(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        payload = json.loads((root / "site/airwsjtx/callsign-grid-db.json").read_text(encoding="utf-8"))
+        manifest = json.loads((root / "site/airwsjtx/callsign-grid-db-version.json").read_text(encoding="utf-8"))
+
+        self.assertIsInstance(payload["version"], str)
+        self.assertTrue(payload["version"])
+        self.assertEqual(manifest["version"], payload["version"])
+        self.assertEqual(manifest["entries"], len(payload["entries"]))
+        self.assertGreater(manifest["entries"], 0)
+        parsed = self.callsign._parse_db_entries(payload["entries"])
+        self.assertEqual(len(parsed), manifest["entries"])
+        self.assertEqual(
+            set(payload["entries"]),
+            {"AD7NP", "K7MDL", "KD7UO", "VE7NX", "W7GLF", "W7PUA"},
+        )
+        for call, raw in payload["entries"].items():
+            with self.subTest(callsign=call):
+                self.assertEqual(call, call.upper())
+                self.assertEqual(set(raw), {"grid"})
+                self.assertIsInstance(raw["grid"], str)
+                self.assertRegex(raw["grid"], r"^[A-R]{2}[0-9]{2}[A-X]{2}$")
+
+    def test_download_and_check_served_site_database(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        handler = partial(SimpleHTTPRequestHandler, directory=str(root / "site"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        base_url = f"http://127.0.0.1:{server.server_port}/airwsjtx"
+        db_url = f"{base_url}/callsign-grid-db.json"
+        manifest_url = f"{base_url}/callsign-grid-db-version.json"
+        thread.start()
+        try:
+            with patch.object(SimpleHTTPRequestHandler, "log_message"):
+                before = self.callsign.check_db_update(db_url, manifest_url=manifest_url)
+                self.assertTrue(before["online"])
+                self.assertTrue(before["update_available"])
+                status = self.callsign.download_db(db_url)
+                self.assertTrue(status["fresh"])
+                self.assertEqual(status["entries"], before["remote_entries"])
+                self.assertEqual(status["version"], before["remote_version"])
+                self.assertEqual(status["db_url"], db_url)
+                self.callsign = importlib.reload(callsign_module)
+                after = self.callsign.check_db_update(db_url, manifest_url=manifest_url)
+                self.assertTrue(after["online"])
+                self.assertFalse(after["update_available"])
+                info = self.callsign.lookup("ve7nx")
+                self.assertEqual(info.source, "local-db")
+                self.assertEqual(info.grid, "CN89JI")
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+    def test_download_http_error_preserves_existing_database(self) -> None:
+        self._write_local_db(version="old", downloaded_at=_iso(datetime.now(timezone.utc)))
+        db_path = Path(self._tmp.name) / "callsign_grid_db.json"
+        meta_path = Path(self._tmp.name) / "callsign_grid_db_meta.json"
+        original_db = db_path.read_bytes()
+        original_meta = meta_path.read_bytes()
+        with patch.object(
+            self.callsign.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.HTTPError(self.callsign.DEFAULT_DB_URL, 404, "Not Found", {}, None),
+        ):
+            with self.assertRaisesRegex(ValueError, "Callsign database request failed: HTTP 404"):
+                self.callsign.download_db()
+        self.assertEqual(db_path.read_bytes(), original_db)
+        self.assertEqual(meta_path.read_bytes(), original_meta)
+
+    def test_check_http_error_reports_status_and_url(self) -> None:
+        with patch.object(
+            self.callsign.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.HTTPError(self.callsign.DEFAULT_DB_MANIFEST_URL, 404, "Not Found", {}, None),
+        ):
+            status = self.callsign.check_db_update()
+        self.assertFalse(status["online"])
+        self.assertFalse(status["update_available"])
+        self.assertIn("HTTP 404", status["error"])
+        self.assertIn(self.callsign.DEFAULT_DB_MANIFEST_URL, status["error"])
+
+    def test_download_rejects_html_response_without_saving_it(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b"<html>Not a database</html>"
+        with patch.object(self.callsign.urllib.request, "urlopen", return_value=response):
+            with self.assertRaisesRegex(ValueError, "did not return valid JSON"):
+                self.callsign.download_db()
+        self.assertFalse((Path(self._tmp.name) / "callsign_grid_db.json").exists())
 
     def test_contribution_is_queued_when_submit_fails(self) -> None:
         self.callsign = importlib.reload(callsign_module)

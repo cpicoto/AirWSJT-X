@@ -201,6 +201,150 @@ test("favorites stay FIFO capped at 20 and deduplicate only exact station matche
   expect((await saved()).some(f => f.call === "K7T18")).toBe(false);
   await page.reload();
   await favorites.click();
-  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(20);
+  // The saved list is still capped; offline built-ins remain selectable after it.
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(22);
   await expect(page.getByRole("listbox").getByRole("option").first()).toContainText("250 m");
+});
+
+test("DB Update refreshes searchable DX choices, selects downloaded grids, and persists across reload", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __mockCallsignDbDownload: {
+        version: "test-db",
+        entries: {
+          K7MDL: { name: "Downloaded station", grid: "CN87XS", lat: 47.77, lon: -122.04, country: "USA" },
+          KD7UO: { name: null, grid: "CN88QK", lat: null, lon: null, country: null },
+          VE7NX: { name: null, grid: "CN89JI", lat: null, lon: null, country: null },
+        },
+      },
+    });
+  });
+  await ready(page);
+  await wsjtx(page, {});
+  const picker = page.getByRole("button", { name: "DX favorites", exact: true });
+  await picker.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(2);
+  await picker.press("Escape");
+  await page.getByRole("button", { name: "DB Update", exact: true }).click();
+  await expect(page.getByText("Callsign DB downloaded (3 entries, test-db)", { exact: false })).toBeVisible();
+  await picker.click();
+  const options = page.getByRole("listbox").getByRole("option");
+  await expect(options).toHaveCount(4);
+  await expect(options.first()).toContainText("VE7NX");
+  await expect(options.nth(1)).toContainText("W7PUA");
+  await expect(options.nth(2)).toContainText("K7MDL");
+  await picker.press("Escape");
+  const search = page.getByRole("textbox", { name: "Search callsign database" });
+  await search.fill("k7mdl");
+  await picker.click();
+  await expect(options).toHaveCount(1);
+  await options.first().click();
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7MDL");
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN87XS");
+  await expect(page.getByRole("textbox", { name: "DX altitude (m)", exact: true })).toHaveValue("0");
+  await expect(page.getByRole("button", { name: "DX station source" })).toHaveText("Local");
+  await expect.poll(() => lastRpc(page, "airscout_set_stations"))
+    .toMatchObject({ locator_a: "CN87", locator_b: "CN87XS", dx_local: true });
+  await expect.poll(() => lastRpc(page, "set_station_calls")).toEqual({ call_a: "W1AW", call_b: "K7MDL" });
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("airwsjtx.lastDx")))
+    .toContain('"grid":"CN87XS"');
+  // Selecting a database station does not silently store it as a favorite.
+  expect(await page.evaluate(() => localStorage.getItem("airwsjtx.favoriteDx"))).toBeNull();
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7MDL");
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN87XS");
+  await search.fill("KD7UO");
+  await picker.click();
+  await expect(options).toHaveCount(1);
+  await options.first().click();
+  await expect.poll(() => lastRpc(page, "airscout_set_stations")).toMatchObject({ locator_b: "CN88QK", dx_local: true });
+});
+
+test("downloaded choices honor user grid overrides and typing resolves the offline database", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("__mock.callsignDb", JSON.stringify({
+      version: "test-db",
+      entries: {
+        K7MDL: { name: null, grid: "CN87XS", lat: null, lon: null, country: null },
+        KD7UO: { name: null, grid: "CN88QK", lat: null, lon: null, country: null },
+      },
+    }));
+    localStorage.setItem("airwsjtx.portableGridOverrides", JSON.stringify({ K7MDL: "CN90AA" }));
+  });
+  await ready(page);
+  await wsjtx(page, {});
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("option", { name: /K7MDL/ }).click();
+  await expect.poll(() => lastRpc(page, "airscout_set_stations"))
+    .toMatchObject({ locator_b: "CN90AA", dx_local: true });
+  // A new call with no entered grid falls back to downloaded entries without a network lookup.
+  await page.getByRole("textbox", { name: "DX grid", exact: true }).fill("");
+  await page.getByRole("textbox", { name: "DX callsign", exact: true }).fill("KD7UO");
+  await page.getByRole("textbox", { name: "DX callsign", exact: true }).press("Tab");
+  await expect.poll(() => lastRpc(page, "airscout_set_stations"))
+    .toMatchObject({ locator_b: "CN88QK", dx_local: true });
+});
+
+test("coordinate-only records select a grid through the existing DX geometry flow", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("__mock.callsignDb", JSON.stringify({
+      version: "coordinates",
+      entries: { K7MDL: { name: null, grid: null, lat: 47.77, lon: -122.04, country: null } },
+    }));
+  });
+  await ready(page);
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await page.getByRole("option", { name: /K7MDL/ }).click();
+  await expect(page.getByRole("textbox", { name: "DX grid", exact: true })).toHaveValue("CN87XS");
+  await expect.poll(() => lastRpc(page, "airscout_set_stations")).toMatchObject({ locator_b: "CN87XS", dx_local: true });
+});
+
+test("database choices are not capped by favorites and refreshing replaces stale records", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("__mock.callsignDb", JSON.stringify({
+      version: "large",
+      entries: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [
+        `K7T${String(i).padStart(2, "0")}`,
+        { name: `Database ${i}`, grid: "CN88QK", lat: null, lon: null, country: null },
+      ])),
+    }));
+    Object.assign(window, {
+      __mockCallsignDbDownload: {
+        version: "replacement",
+        entries: { AD7NP: { name: null, grid: "CN87VP", lat: null, lon: null, country: null } },
+      },
+    });
+  });
+  await ready(page);
+  const picker = page.getByRole("button", { name: "DX favorites", exact: true });
+  await picker.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(32);
+  await picker.press("End");
+  await expect(page.getByRole("option", { name: /K7T29/ })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("K7T29");
+  await expect.poll(() => lastRpc(page, "airscout_set_stations")).toMatchObject({ locator_b: "CN88QK" });
+  await page.getByRole("button", { name: "DB Update", exact: true }).click();
+  await picker.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(3);
+  await expect(page.getByRole("option", { name: /K7T29/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /AD7NP/ }).click();
+  await expect.poll(() => lastRpc(page, "airscout_set_stations")).toMatchObject({ locator_b: "CN87VP" });
+});
+
+test("failed choice refresh reports the error and keeps existing choices usable", async ({ page }) => {
+  await ready(page);
+  await expect.poll(() => lastRpc(page, "callsign_db_entries")).toBeDefined();
+  await page.evaluate(() => {
+    Object.assign(window, {
+      __mockRpcErrors: { callsign_db_entries: "Cannot list stations" },
+      __mockCallsignDbDownload: { version: "test", entries: {} },
+    });
+  });
+  await page.getByRole("button", { name: "DB Update", exact: true }).click();
+  await expect(page.getByText(/choices could not be refreshed:.*Cannot list stations/)).toBeVisible();
+  await page.getByRole("button", { name: "DX favorites", exact: true }).click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(2);
+  await page.getByRole("option", { name: /W7PUA/ }).click();
+  await expect(page.getByRole("textbox", { name: "DX callsign", exact: true })).toHaveValue("W7PUA");
 });

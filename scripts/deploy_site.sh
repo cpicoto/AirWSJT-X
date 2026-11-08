@@ -20,7 +20,7 @@ upload() {
     --container-name '$web' \
     --name "$1" \
     --file "$2" \
-    --content-type "text/html; charset=utf-8" \
+    --content-type "${4:-text/html; charset=utf-8}" \
     --content-cache-control "$3" \
     --overwrite
 }
@@ -33,3 +33,5 @@ upload Privacy/AirWSJT-X/index.html site/privacy.html "$public_cache"
 upload Privacy/AirWSJT-X site/privacy.html "$public_cache"
 upload Support/AirWSJT-X/index.html site/support.html "$public_cache"
 upload Support/AirWSJT-X site/support.html "$public_cache"
+upload airwsjtx/callsign-grid-db.json site/airwsjtx/callsign-grid-db.json "$no_cache" "application/json; charset=utf-8"
+upload airwsjtx/callsign-grid-db-version.json site/airwsjtx/callsign-grid-db-version.json "$no_cache" "application/json; charset=utf-8"

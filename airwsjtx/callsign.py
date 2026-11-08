@@ -16,7 +16,7 @@ import tempfile
 import threading
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -171,12 +171,35 @@ def get_db_status() -> dict[str, Any]:
     return _current_db_status()
 
 
-def _download_json(url: str, timeout_s: int = 10) -> dict[str, Any]:
+def list_db_entries() -> list[dict[str, Any]]:
+    """List offline choices, with downloaded records taking precedence over built-ins."""
+    _load_local_db()
+    with _LOCAL_DB_LOCK:
+        stations = {**_KNOWN, **_LOCAL_DB_CACHE}
+    return [
+        {key: value for key, value in asdict(stations[call]).items() if key != "source"}
+        for call in sorted(stations)
+    ]
+
+
+def _fetch_json(url: str, timeout_s: int, label: str) -> dict[str, Any]:
     req = urllib.request.Request(url, headers={"User-Agent": "AirWSJT-X/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        payload = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            payload = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"{label} request failed: HTTP {exc.code} ({exc.reason}) at {url}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"{label} request failed at {url}: {exc.reason}") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"{label} at {url} did not return valid JSON") from exc
     if not isinstance(payload, dict):
-        raise ValueError("Database payload must be a JSON object")
+        raise ValueError(f"{label} payload must be a JSON object")
+    return payload
+
+
+def _download_json(url: str, timeout_s: int = 10) -> dict[str, Any]:
+    payload = _fetch_json(url, timeout_s, "Callsign database")
     entries = payload.get("entries")
     if not isinstance(entries, dict):
         raise ValueError("Database payload missing entries")
@@ -184,12 +207,7 @@ def _download_json(url: str, timeout_s: int = 10) -> dict[str, Any]:
 
 
 def _download_manifest(url: str, timeout_s: int = 8) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "AirWSJT-X/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        payload = json.loads(resp.read())
-    if not isinstance(payload, dict):
-        raise ValueError("Manifest payload must be a JSON object")
-    return payload
+    return _fetch_json(url, timeout_s, "Callsign database manifest")
 
 
 def download_db(url: str = DEFAULT_DB_URL, timeout_s: int = 10) -> dict[str, Any]:
