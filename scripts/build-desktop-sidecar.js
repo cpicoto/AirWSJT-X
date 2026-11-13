@@ -28,7 +28,14 @@ if (rtlRuntime) {
     { cwd: root, stdio: "inherit" });
 }
 if (linux) {
-  execFileSync(python, ["-c", "import piper"], { cwd: root, stdio: "inherit" });
+  try {
+    execFileSync(python, ["-c", "import piper"], { cwd: root, stdio: "pipe" });
+  } catch {
+    throw new Error(
+      `Linux sidecar packaging bundles the Piper voice but ${python} cannot import piper. ` +
+      "Install it first: pip install piper-tts==1.8.0 (see README prerequisites).",
+    );
+  }
   execFileSync(python, [path.join(root, "scripts", "install_piper_voice.py")],
     { cwd: root, stdio: "inherit" });
 }
