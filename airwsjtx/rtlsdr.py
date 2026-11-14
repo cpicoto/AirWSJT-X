@@ -134,7 +134,8 @@ def _list_devices(library: ctypes.CDLL) -> list[dict[str, object]]:
             message = (
                 f"Cannot open RTL-SDR receiver ({open_code}). Close other SDR apps and check USB"
                 + ("/WinUSB." if sys.platform == "win32" else
-                   " permissions (udev rule) or another SDR app/kernel DVB driver owning it."
+                   " permissions (udev rule) or another SDR app owning it; the kernel"
+                   " DVB driver is detached automatically."
                    if sys.platform.startswith("linux") else " (another SDR app may own it).")
             )
         else:

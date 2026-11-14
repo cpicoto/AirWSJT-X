@@ -178,15 +178,12 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", GROUP="plugde
 Run `sudo udevadm control --reload-rules`, unplug/replug the receiver, then retry
 discovery. Check that its `/dev/bus/usb/BBB/DDD` node is writable by your group.
 
-If `dvb_usb_rtl28xxu` has claimed the dongle, a permission rule alone will not
-release it. Close any DVB-TV/SDR application first. An administrator can
-temporarily unbind just the dongle's interface from that driver; do not unbind
-unrelated USB interfaces. For a dedicated ADS-B dongle, an alternative is to add
-`blacklist dvb_usb_rtl28xxu` to a file in `/etc/modprobe.d/` and **reboot before
-retrying**. Blacklisting alone does not unload an already-loaded driver.
-Blacklisting affects other receivers using that driver and prevents normal DVB-TV
-use; only do it if that tradeoff is intended. AirWSJT-X makes none of these host
-permission or driver changes itself.
+If `dvb_usb_rtl28xxu` has claimed the dongle, the bundled librtlsdr detaches it
+from the dongle automatically when the receiver is opened (standard librtlsdr
+behavior, as in distribution packages) and reattaches it when the receiver is
+released. No blacklisting or manual unbinding is required, but another SDR or
+DVB-TV **application** holding the dongle still blocks access; close it first.
+AirWSJT-X makes no persistent host permission or driver changes itself.
 
 If a USB error leaves the receiver helper blocked, the app reports the failure
 instead of claiming the device was released. Reconnect the dongle, stop the
@@ -473,7 +470,9 @@ On macOS and Linux:
 ```bash
 npm ci
 pip install pyinstaller certifi
+pip install piper-tts==1.8.0       # Linux only: required to bundle the Piper voice
 python scripts/install_rtlsdr.py   # macOS/Linux: builds the local RTL-SDR runtime (needs a C compiler and make)
+python scripts/install_piper_voice.py   # Linux only: stages the pinned Piper voice model
 python -m PyInstaller --noconfirm --clean --distpath src-tauri/binaries sidecar/airwsjtx_bridge.spec
 npx tauri build --config src-tauri/tauri.desktop.conf.json
 ```

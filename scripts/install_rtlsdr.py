@@ -105,6 +105,9 @@ def _build_linux_librtlsdr(source_zip: bytes, libusb_tar: bytes, output: Path) -
         exports.write_text("{ global: rtlsdr_*; local: *; };\n", encoding="ascii")
         subprocess.run([
             cc, "-O2", "-shared", "-fPIC", "-fvisibility=hidden", "-Drtlsdr_EXPORTS",
+            # Detach the kernel DVB driver (dvb_usb_rtl28xxu) on open, as distro builds do;
+            # without this, opening a dongle the kernel has claimed fails with LIBUSB_ERROR_BUSY.
+            "-DDETACH_KERNEL_DRIVER",
             "-I", str(rtl / "include"), "-I", str(prefix / "include" / "libusb-1.0"),
             *(str(rtl / "src" / name) for name in LIBRTLSDR_SOURCES),
             str(prefix / "lib" / "libusb-1.0.a"),

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Enable kernel-driver detach in the bundled Linux librtlsdr so a dongle claimed by `dvb_usb_rtl28xxu` is opened automatically (and the driver reattached on release) instead of reporting the receiver as unavailable/busy; no blacklisting or manual unbinding is needed.
+
 ### Changed
 - Replace the robotic Linux Speech Dispatcher/eSpeak default with a bundled Piper US-English neural voice. Keep the model loaded in an app-owned worker for responsive Az/El callouts and isolated cancellation; retain the old native engines only as fallback.
 - Bundle the pinned voice model, model card, Piper license and corresponding source archive in Linux packages, with SHA-256 verification during staging.
