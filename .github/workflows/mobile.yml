@@ -10,6 +10,14 @@ on:
         description: "Also build a signed iOS app and upload it to TestFlight"
         type: boolean
         default: false
+      release_version:
+        description: "iOS marketing version for manual TestFlight builds (for example, 0.3.42)"
+        type: string
+        default: ""
+      source_ref:
+        description: "Git ref to build for manual TestFlight builds (for example, v0.3.42)"
+        type: string
+        default: ""
       macos_testflight:
         description: "Build a Mac App Store package and upload it to TestFlight"
         type: boolean
@@ -142,6 +150,13 @@ jobs:
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+
+      - name: Sync app version for TestFlight
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version || github.ref_name }}
+        run: python scripts/sync_release_version.py
 
       - name: Verify TestFlight secrets
         env:

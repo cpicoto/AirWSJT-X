@@ -315,6 +315,28 @@ class IOSCIWorkflowTests(unittest.TestCase):
             "to catch config errors early without spending build time",
         )
 
+    def test_testflight_job_syncs_marketing_version_before_init(self) -> None:
+        testflight_section = self.workflow_text.split("ios-testflight:", 1)[1].split(
+            "macos-testflight:", 1
+        )[0]
+        sync_index = testflight_section.index("scripts/sync_release_version.py")
+        init_index = testflight_section.index("npx tauri ios init")
+        self.assertLess(
+            sync_index,
+            init_index,
+            "the TestFlight marketing version must be synced before Tauri generates the Xcode project",
+        )
+        self.assertIn(
+            "RELEASE_VERSION: ${{ inputs.release_version || github.ref_name }}",
+            testflight_section,
+        )
+
+    def test_manual_testflight_can_build_an_exact_release_ref(self) -> None:
+        testflight_section = self.workflow_text.split("ios-testflight:", 1)[1].split(
+            "macos-testflight:", 1
+        )[0]
+        self.assertIn("ref: ${{ inputs.source_ref || github.ref }}", testflight_section)
+
 
 if __name__ == "__main__":
     unittest.main()
